@@ -28,7 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import PERMISSION_FIELDS, deprecation_signals
-from .schema import enumerate_operations, load_schema
+from .schema import HTTP_METHODS, enumerate_operations, load_schema
+
+SUPPORTED_METHODS = tuple(method.upper() for method in HTTP_METHODS)
 
 REVIEW_FORMAT = "flarego.cloudflare-audit.review/1"
 CATALOG_PATH = "docs/cloudflare-audit/endpoints.csv"
@@ -941,14 +943,92 @@ TAG_INDEX = _package_index()
 PACKAGE_BY_ID = {package["product_id"]: package for package in PRODUCT_PACKAGES}
 
 
-def _permissions_present_from_raw(raw: Any, operation_id: str) -> bool:
-    """Parse token-permission metadata; malformed or non-dict values grant nothing."""
+def _describe_value(value: Any) -> str:
+    if isinstance(value, list):
+        inner = ", ".join(type(item).__name__ for item in value) or "empty"
+        return f"list[{inner}]"
+    if isinstance(value, dict):
+        return "object{" + ", ".join(sorted(value)) + "}" if value else "empty object"
+    return f"{type(value).__name__} {value!r}"
+
+
+def permission_reference_valid(field: str, value: Any) -> bool:
+    """Validate the documented fixed-schema shape of one permission field.
+
+    ``x-api-token-group`` is a non-empty list of permission-name strings and
+    ``x-cfPermissionsRequired`` is an object with a non-empty ``enum`` list of
+    scope strings. Booleans, numbers, nested lists and empty enums never count.
+    """
+    if field == "x-api-token-group":
+        return (
+            isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, str) and item.strip() for item in value)
+        )
+    if field == "x-cfPermissionsRequired":
+        if not isinstance(value, dict) or not value:
+            return False
+        enum = value.get("enum")
+        return (
+            isinstance(enum, list)
+            and bool(enum)
+            and all(isinstance(item, str) and item.strip() for item in enum)
+        )
+    return False
+
+
+def permission_evidence(metadata: dict) -> tuple[bool, list[str]]:
+    """Return ``(permissions_present, shape_errors)`` for permission metadata.
+
+    A key that is absent or explicitly ``null`` in the pinned schema is simply
+    absent (no error). A key with an invalid inner shape is an explicit, readable
+    failure that can never become positive permission evidence.
+    """
+    present = False
+    errors: list[str] = []
+    for field in PERMISSION_FIELDS:
+        if field not in metadata:
+            continue
+        value = metadata[field]
+        if value is None:
+            continue
+        if permission_reference_valid(field, value):
+            present = True
+        else:
+            errors.append(
+                f"{field} has an invalid shape ({_describe_value(value)}); permission metadata "
+                "must not be derived from it"
+            )
+    return present, errors
+
+
+def _identity_problems(operation: dict) -> list[str]:
+    """Validate identity fields without coercing invalid values into valid ones."""
+    problems: list[str] = []
+    operation_id = operation.get("operation_id")
+    if not isinstance(operation_id, str) or not operation_id.strip():
+        problems.append(f"operationId must be a non-empty string, got {operation_id!r}")
+    method = operation.get("method")
+    if not isinstance(method, str) or not method.strip():
+        problems.append(f"method must be a non-empty string, got {method!r}")
+    elif method.strip().upper() not in SUPPORTED_METHODS:
+        problems.append(f"method {method!r} is not a supported HTTP method")
+    path = operation.get("path")
+    if not isinstance(path, str) or not path.strip():
+        problems.append(f"path must be a non-empty string, got {path!r}")
+    elif not path.startswith("/"):
+        problems.append(f"path {path!r} must be an absolute OpenAPI route starting with '/'")
+    return problems
+
+
+def _raw_permission_evidence(raw: Any, operation_id: str) -> tuple[bool, list[str]]:
+    """Parse CSV permission metadata; malformed JSON is a readable failure."""
     if raw in (None, ""):
-        return False
+        return False, []
     parsed = _json_column(raw, "token_permissions_raw", operation_id)
     if not isinstance(parsed, dict):
-        return False
-    return any(parsed.get(field) for field in PERMISSION_FIELDS)
+        return False, []
+    return permission_evidence(parsed)
 
 
 def _json_column(value: Any, field: str, operation_id: str) -> Any:
@@ -974,17 +1054,18 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
     for operation in operations:
         if not isinstance(operation, dict):
             raise ValueError(f"operation must be a mapping, got {type(operation).__name__}")
-        operation_id = operation.get("operation_id")
-        if not isinstance(operation_id, str) or not operation_id:
-            raise ValueError(f"operation is missing a usable operationId: {operation!r}")
+        problems = _identity_problems(operation)
+        if problems:
+            raise ValueError("invalid operation identity: " + "; ".join(problems))
+        operation_id = operation["operation_id"]
+        method = operation["method"].strip().upper()
+        path = operation["path"]
         metadata = operation.get("metadata")
         if isinstance(metadata, dict):
             tags = operation.get("tags") or []
             availability = metadata.get("x-fern-availability", "unspecified")
             stability = metadata.get("x-stability", "unspecified")
-            permissions_present = any(
-                metadata.get(field) for field in PERMISSION_FIELDS
-            )
+            permissions_present, permission_shape_errors = permission_evidence(metadata)
             plan_availability = metadata.get("x-cfPlanAvailability") or {}
             forge_hidden = metadata.get("x-forge-hidden")
             fern_ignore = metadata.get("x-fern-ignore")
@@ -998,7 +1079,7 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
             tags = raw_tags.split(" | ") if isinstance(raw_tags, str) else list(raw_tags or [])
             availability = operation.get("official_availability", "unspecified")
             stability = operation.get("official_stability", "unspecified")
-            permissions_present = _permissions_present_from_raw(
+            permissions_present, permission_shape_errors = _raw_permission_evidence(
                 operation.get("token_permissions_raw"), operation_id
             )
             plan_availability = _json_column(
@@ -1017,12 +1098,13 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
         normalized.append(
             {
                 "operation_id": operation_id,
-                "method": str(operation.get("method", "")).upper(),
-                "path": operation.get("path", ""),
+                "method": method,
+                "path": path,
                 "tags": [tag for tag in tags if tag],
                 "availability": availability,
                 "stability": stability,
                 "permissions_present": bool(permissions_present),
+                "permission_shape_errors": list(permission_shape_errors),
                 "plan_availability": plan_availability,
                 "forge_hidden": forge_hidden,
                 "fern_ignore": fern_ignore,
@@ -1215,23 +1297,61 @@ def effective_blockers(operation: dict, entry: dict) -> list[str]:
     return sorted(blockers)
 
 
+def _account_blocker_matches(review: dict) -> list[dict]:
+    blockers = review.get("blockers") if isinstance(review, dict) else None
+    if not isinstance(blockers, list):
+        return []
+    return [
+        blocker
+        for blocker in blockers
+        if isinstance(blocker, dict) and blocker.get("code") == GLOBAL_ACCOUNT_BLOCKER
+    ]
+
+
+def _clearance_complete(blocker: dict) -> bool:
+    cleared_by = blocker.get("cleared_by")
+    record = blocker.get("clearance_record")
+    has_reference = isinstance(cleared_by, str) and bool(cleared_by.strip())
+    has_record = isinstance(record, dict) and bool(record)
+    return has_reference and has_record
+
+
 def account_blocker_active(review: dict) -> bool:
     """True while authorized-account evidence is missing, empty or uncleared.
 
-    Absence or omission of the global blocker is unknown/blocked, never clearance;
-    clearance needs an explicit positive reference plus a clearance record.
+    Absence, omission and malformed records are unknown/blocked, never clearance.
+    Clearance needs exactly one record with an explicit reference plus a clearance
+    record; duplicate or conflicting records can never clear the gate.
     """
-    blockers = review.get("blockers") if isinstance(review, dict) else None
-    if not isinstance(blockers, list) or not blockers:
+    matches = _account_blocker_matches(review)
+    if len(matches) != 1:
         return True
+    return not _clearance_complete(matches[0])
+
+
+def global_blocker_errors(review: dict) -> list[str]:
+    """Readable structure errors for the global account-blocker records."""
+    errors: list[str] = []
+    blockers = review.get("blockers") if isinstance(review, dict) else None
+    if not isinstance(blockers, list):
+        return ["review.blockers must be a list of global blocker records"]
     for blocker in blockers:
-        if isinstance(blocker, dict) and blocker.get("code") == GLOBAL_ACCOUNT_BLOCKER:
-            cleared_by = blocker.get("cleared_by")
-            record = blocker.get("clearance_record")
-            has_reference = isinstance(cleared_by, str) and bool(cleared_by.strip())
-            has_record = isinstance(record, dict) and bool(record)
-            return not (has_reference and has_record)
-    return True
+        if not isinstance(blocker, dict) or not isinstance(blocker.get("code"), str):
+            errors.append("review.blockers items must be objects with a string code")
+    matches = _account_blocker_matches(review)
+    if len(matches) > 1:
+        errors.append(
+            f"review.blockers has {len(matches)} duplicate {GLOBAL_ACCOUNT_BLOCKER!r} records; "
+            "duplicate or conflicting account-blocker records cannot clear the gate"
+        )
+    for match in matches:
+        attempted = "cleared_by" in match or "clearance_record" in match
+        if attempted and not _clearance_complete(match):
+            errors.append(
+                f"review.blockers {GLOBAL_ACCOUNT_BLOCKER!r} has an incomplete clearance record "
+                "(needs cleared_by plus a non-empty clearance_record); it cannot clear the gate"
+            )
+    return errors
 
 
 def _pending_qualification(entry: dict) -> bool:
@@ -1680,6 +1800,8 @@ def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]
         for approval in approvals:
             if approval not in IMPLEMENTATION_APPROVALS:
                 errors.append(f"{operation_id}: unknown implementation approval {approval!r}")
+    for problem in operation.get("permission_shape_errors", []):
+        errors.append(f"{operation_id}: {problem}")
     support = evidence.get("source_support")
     if support not in SOURCE_SUPPORT_VALUES:
         errors.append(
@@ -1725,6 +1847,7 @@ def validate_review(
     known = {operation["operation_id"] for operation in normalized}
 
     errors: list[str] = []
+    errors.extend(global_blocker_errors(review))
     if selected_ids is not None:
         for operation_id in sorted(set(selected_ids) - known):
             errors.append(f"selected_ids references unknown operationId: {operation_id}")

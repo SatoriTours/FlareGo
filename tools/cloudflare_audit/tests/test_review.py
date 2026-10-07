@@ -24,6 +24,7 @@ from tools.cloudflare_audit.review import (
     TARGET_LEVELS,
     account_blocker_active,
     cross_check_schema,
+    identity_errors,
     load_catalog_operations,
     load_p2_candidates,
     load_review,
@@ -555,6 +556,50 @@ class BlockerIntegrityTest(unittest.TestCase):
         self.assertEqual(1, report["capability_verified"])
         self.assertEqual([], validate_review(operations, complete))
 
+    def test_duplicate_account_blocker_records_never_clear(self):
+        operations = [self.permitted_operation()]
+        cleared = {
+            "code": "authorized_account_absent",
+            "detail": "synthetic clearance",
+            "cleared_by": "synthetic-fixture",
+            "clearance_record": {"environment": "synthetic-fixture", "date": "2026-10-08"},
+        }
+        uncleared = {"code": "authorized_account_absent", "detail": "synthetic uncleared duplicate"}
+        for records in ([cleared, uncleared], [uncleared, cleared]):
+            document = review_document({"permitted": self.passing_entry()}, blockers=records)
+            self.assertTrue(account_blocker_active(document), records)
+            report = summarize_review(operations, document)
+            self.assertEqual(0, report["verified"], records)
+            self.assertEqual(0, report["capability_verified"], records)
+            errors = validate_review(operations, document)
+            self.assertTrue(
+                any("authorized_account_absent" in error and "duplicate" in error for error in errors),
+                (records, errors),
+            )
+
+    def test_malformed_account_blocker_record_cannot_clear(self):
+        operations = [self.permitted_operation()]
+        malformed = (
+            {},
+            {"cleared_by": "synthetic-fixture"},
+            {"clearance_record": {"environment": "synthetic-fixture"}},
+            {"cleared_by": 42, "clearance_record": {"environment": "synthetic-fixture"}},
+            {"cleared_by": "synthetic-fixture", "clearance_record": []},
+            {"cleared_by": "synthetic-fixture", "clearance_record": {}},
+            {"cleared_by": "  ", "clearance_record": {"environment": "synthetic-fixture"}},
+        )
+        for record in malformed:
+            document = review_document(
+                {"permitted": self.passing_entry()},
+                blockers=[{"code": "authorized_account_absent", **record}],
+            )
+            self.assertTrue(account_blocker_active(document), record)
+            self.assertEqual(0, summarize_review(operations, document)["verified"], record)
+        self.assertEqual(
+            1,
+            summarize_review(operations, self.cleared_review({"permitted": self.passing_entry()}))["verified"],
+        )
+
     def test_blocked_entry_cannot_claim_capability_verified(self):
         operations = [self.permitted_operation()]
         entry = self.passing_entry()
@@ -1075,6 +1120,174 @@ class MalformedInputTest(unittest.TestCase):
         errors = validate_review([self.operation], review_document({"permitted": {}}))
         self.assertTrue(any("missing required field" in error for error in errors), errors)
 
+    # --- R3: known permission keys must use their documented shape ---
+
+    def test_known_permission_key_internal_shape_is_enforced(self):
+        invalid = (
+            '{"x-api-token-group": true}',
+            '{"x-api-token-group": 42}',
+            '{"x-api-token-group": "Zone Settings Read"}',
+            '{"x-api-token-group": []}',
+            '{"x-api-token-group": [null]}',
+            '{"x-api-token-group": [""]}',
+            '{"x-api-token-group": [["nested"]]}',
+            '{"x-cfPermissionsRequired": {"unexpected": true}}',
+            '{"x-cfPermissionsRequired": {"enum": []}}',
+            '{"x-cfPermissionsRequired": {"enum": "x"}}',
+            '{"x-cfPermissionsRequired": {"enum": [1]}}',
+            '{"x-cfPermissionsRequired": []}',
+        )
+        for raw in invalid:
+            rows = [
+                catalog_row(
+                    "permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"],
+                    token_permissions_raw=raw,
+                )
+            ]
+            normalized = normalize_operations(rows)[0]
+            self.assertFalse(normalized["permissions_present"], raw)
+            self.assertTrue(normalized["permission_shape_errors"], raw)
+            errors = validate_review(rows, review_document({"permitted": review_entry()}))
+            self.assertTrue(
+                any("x-api-token-group" in error or "x-cfPermissionsRequired" in error for error in errors),
+                (raw, errors),
+            )
+        valid = (
+            '{"x-api-token-group": ["Zone Settings Read"]}',
+            '{"x-cfPermissionsRequired": {"enum": ["#organization:edit"]}}',
+            '{"x-api-token-group": ["A"], "x-cfPermissionsRequired": {"enum": ["#x:edit"], "type": "edit"}}',
+        )
+        for raw in valid:
+            rows = [
+                catalog_row(
+                    "permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"],
+                    token_permissions_raw=raw,
+                )
+            ]
+            normalized = normalize_operations(rows)[0]
+            self.assertTrue(normalized["permissions_present"], raw)
+            self.assertEqual([], normalized["permission_shape_errors"], raw)
+
+    def test_null_permission_values_are_absent_not_errors(self):
+        for raw in (
+            '{"x-api-token-group": null}',
+            '{"x-cfPermissionsRequired": null}',
+            "null",
+            "{}",
+        ):
+            rows = [
+                catalog_row(
+                    "permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"],
+                    token_permissions_raw=raw,
+                )
+            ]
+            normalized = normalize_operations(rows)[0]
+            self.assertFalse(normalized["permissions_present"], raw)
+            self.assertEqual([], normalized["permission_shape_errors"], raw)
+
+    def test_raw_and_csv_permission_semantics_match(self):
+        variants = (
+            {"x-api-token-group": ["Zone Settings Read"]},
+            {"x-api-token-group": True},
+            {"x-api-token-group": []},
+            {"x-api-token-group": [None]},
+            {"x-cfPermissionsRequired": {"enum": ["#organization:edit"]}},
+            {"x-cfPermissionsRequired": {"unexpected": True}},
+            {"x-api-token-group": None},
+            {},
+        )
+        for metadata in variants:
+            raw_operation = operation(
+                "permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"], dict(metadata)
+            )
+            rows = [
+                catalog_row(
+                    "permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"],
+                    token_permissions_raw=json.dumps(metadata),
+                )
+            ]
+            from_raw = normalize_operations([raw_operation])[0]
+            from_csv = normalize_operations(rows)[0]
+            self.assertEqual(from_raw["permissions_present"], from_csv["permissions_present"], metadata)
+            self.assertEqual(from_raw["permission_shape_errors"], from_csv["permission_shape_errors"], metadata)
+
+
+class IdentityShapeTest(unittest.TestCase):
+    """R1: identity fields must be validated before hashing or derivation."""
+
+    def op(self, **overrides):
+        base = {
+            "operation_id": "fixture-read",
+            "method": "GET",
+            "path": "/zones/{zone_id}/settings",
+            "tags": ["Zone Settings"],
+            "metadata": {"x-api-token-group": ["Zone Settings Read"]},
+        }
+        base.update(overrides)
+        return base
+
+    def test_valid_identity_is_accepted(self):
+        self.assertEqual([], identity_errors([self.op()]))
+
+    def test_method_case_is_normalized_not_rejected(self):
+        normalized = normalize_operations([self.op(method="get")])
+        self.assertEqual("GET", normalized[0]["method"])
+
+    def test_invalid_identity_values_are_reported_readably(self):
+        cases = (
+            {"operation_id": None},
+            {"operation_id": ""},
+            {"operation_id": []},
+            {"method": None},
+            {"method": ""},
+            {"method": []},
+            {"method": "BOGUS"},
+            {"path": None},
+            {"path": []},
+            {"path": ""},
+            {"path": "zones/{zone_id}/settings"},
+        )
+        for overrides in cases:
+            operation_value = self.op(**overrides)
+            errors = identity_errors([operation_value])
+            self.assertTrue(errors, overrides)
+            self.assertTrue(all(isinstance(error, str) and error for error in errors), overrides)
+            self.assertTrue(validate_review([operation_value], review_document({})), overrides)
+            with self.assertRaises(ValueError):
+                propose_review([operation_value], {"operations": {}})
+            with self.assertRaises(ValueError):
+                summarize_review([operation_value], review_document({}))
+
+    def test_invalid_identity_never_reaches_positive_facts(self):
+        for value in (None, [], ""):
+            with self.assertRaises(ValueError) as caught:
+                propose_review([self.op(path=value)], {"operations": {}})
+            self.assertIn("path", str(caught.exception))
+        for value in (None, [], ""):
+            with self.assertRaises(ValueError):
+                propose_review([self.op(method=value)], {"operations": {}})
+
+    def test_cli_check_fails_readably_on_invalid_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            row = catalog_row(
+                "permitted", "GET", "", ["Zone Settings"],
+                token_permissions_raw='{"x-api-token-group": ["Zone Settings Read"]}',
+            )
+            catalog_path = directory / "endpoints.csv"
+            review_path = directory / "review.json"
+            with catalog_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerow(row)
+            review_path.write_text(json.dumps(review_document({})), encoding="utf-8")
+            result = cli.check_ledger(review_path, catalog_path)
+            self.assertTrue(result["errors"])
+            self.assertIsNone(result["summary"])
+            self.assertNotEqual(
+                0, cli.main(["check", "--review", str(review_path), "--catalog", str(catalog_path)])
+            )
+
 
 class RealLedgerTest(unittest.TestCase):
     """Checks the committed ledger against the committed catalog (offline)."""
@@ -1200,6 +1413,14 @@ class RealLedgerTest(unittest.TestCase):
             self.assertIn(entry["phase"], PHASES, operation_id)
             self.assertTrue(entry["evidence"]["spec_reference"], operation_id)
             self.assertTrue(entry["evidence"]["scope_basis"], operation_id)
+
+    def test_real_catalog_permission_shapes_are_valid(self):
+        normalized = normalize_operations(self.operations)
+        shape_problems = [op["operation_id"] for op in normalized if op["permission_shape_errors"]]
+        self.assertEqual([], shape_problems)
+        absent = sum(1 for op in normalized if not op["permissions_present"])
+        report = summarize_review(self.operations, self.review)
+        self.assertEqual(report["blockers"]["permission_metadata_absent"], absent)
 
     def test_p2_candidate_file_matches_the_ledger(self):
         candidates = load_p2_candidates(P2_CANDIDATES)
