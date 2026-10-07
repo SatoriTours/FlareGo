@@ -21,6 +21,8 @@ Design rules enforced by this module:
 from __future__ import annotations
 
 import csv
+import datetime
+import hashlib
 import json
 import re
 from collections import Counter
@@ -2048,14 +2050,13 @@ def cross_check_schema(schema: dict, catalog_operations: list[dict], review: dic
     for operation_id in sorted(set(enumerated) - set(entries)):
         errors.append(f"schema operation has no review entry: {operation_id}")
     return errors
-
 # --------------------------------------------------------------------------- #
 # Independent protocol ledger (Task 4)
 # --------------------------------------------------------------------------- #
 
 PROTOCOLS_FORMAT = "flarego.cloudflare-audit.protocols/1"
 S3_VERIFICATION_STATUSES = ("awaiting_authorized_environment", "provider_unsupported")
-GRAPHQL_REVIEW_STATUSES = ("awaiting_authorized_schema", "verified")
+GRAPHQL_REVIEW_STATUSES = ("awaiting_authorized_schema", "awaiting_query_acceptance", "verified")
 ENVIRONMENT_STATUSES = ("awaiting_authorized_environment", "available", "blocked")
 ADMISSION_RISKS = ("low", "medium", "high", "unknown")
 FORBIDDEN_COMBINED_KEYS = (
@@ -2066,7 +2067,9 @@ FORBIDDEN_COMBINED_KEYS = (
 )
 FORBIDDEN_DENOMINATOR_NAMES = ("total", "combined", "overall", "all")
 REQUIRED_DENOMINATOR_NAMES = ("rest", "s3", "graphql", "realtime")
-UNKNOWN_DENOMINATOR_NAMES = ("graphql", "realtime")
+NON_REST_DENOMINATORS = ("s3", "graphql", "realtime")
+UNKNOWN_DENOMINATOR_STATUSES = ("awaiting_authorized_schema", "awaiting_protocol_evidence")
+GRAPHQL_SINGLE_UNITS = ("datasets", "fields")
 REQUIRED_GLOBAL_BLOCKER_CODES = (
     "authorized_account_absent",
     "authorized_schema_capture_absent",
@@ -2075,8 +2078,19 @@ REQUIRED_GLOBAL_BLOCKER_CODES = (
 S3_SOURCE_NAME = "s3-compat"
 S3_SOURCE_COMMIT = "e3a9cf758c28273178d56918399068c6d2eb8a1d"
 S3_SOURCE_SHA256 = "a3a9f5b86efc022ae7cbe813e49b682f0dbb3dfc7ff1eac5498d3af62c9e75d8"
+S3_SOURCE_URL = (
+    "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/"
+    "e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/r2/api/s3/api.mdx"
+)
 S3_COMPAT_PAGE_URL = "https://developers.cloudflare.com/r2/api/s3/api/"
-GRAPHQL_CAPTURE_FIELDS = ("environment", "captured_at", "artifact_sha256", "authorized_by")
+GRAPHQL_CAPTURE_FIELDS = (
+    "environment",
+    "captured_at",
+    "artifact_sha256",
+    "authorized_by",
+    "datasets",
+    "query_kinds",
+)
 CAPABILITY_RECORD_FIELDS = (
     "record_id",
     "environment",
@@ -2105,6 +2119,7 @@ ENVIRONMENT_FIELDS = (
     "notes",
 )
 BLOCKER_FIELDS = ("code", "detail")
+CLEARANCE_RECORD_FIELDS = ("reference", "date")
 ADMISSION_FIELDS = (
     "operation_id",
     "method",
@@ -2139,7 +2154,107 @@ S3_FEATURE_COLUMNS = (
     "feature_groups_reviewed",
 )
 ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+# Frozen, independently reviewed inventory of the pinned S3 compatibility table:
+# operation -> (vendor supported, sha256 of the canonical feature vectors). It is
+# committed here so the source gate runs in a clean checkout without the ignored
+# markdown copy; the markdown is still checksum-verified when it is present.
+S3_SOURCE_INVENTORY: dict[str, tuple[bool, str]] = {
+        "AbortMultipartUpload": (True, "55c1a95cc53fae34959da73c9b0eb5a4e654bf526e948664c04453b7f6276eca"),
+        "CompleteMultipartUpload": (True, "15ebcd03ba4f2e79ec7142f4612ceebf9c69d27a2049c5b445d97a1a3d38255f"),
+        "CopyObject": (True, "e3daf278f66887a4a3907f2013f4b74ef94170e64241a900a9ceabad50d38755"),
+        "CreateBucket": (True, "c5928e247fa9df709ee26bee8d8ba3d899a87ee866b77a1f60655619643eaa79"),
+        "CreateMultipartUpload": (True, "ec7b16b7d06d26caa0210668a3703b8b218f8ec99d61f0c123315e5da6d30e6d"),
+        "DeleteBucket": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "DeleteBucketCors": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "DeleteObject": (True, "6c1e601a574cef2fc8dd52412b00851059cc5e4a445f17270c8c3982002b2ce5"),
+        "DeleteObjectTagging": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "DeleteObjects": (True, "6c1e601a574cef2fc8dd52412b00851059cc5e4a445f17270c8c3982002b2ce5"),
+        "GetBucketAccelerateConfiguration": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketAcl": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketAnalyticsConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "GetBucketCors": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketEncryption": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketIntelligentTieringConfiguration": (False, "5fd12720949fa6635bc1d4fc24bc5a9935ca95d852d58dd66220f4c509df6251"),
+        "GetBucketInventoryConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "GetBucketLifecycle": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketLifecycleConfiguration": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketLocation": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketLogging": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketMetricsConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "GetBucketNotification": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketNotificationConfiguration": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketOwnershipControls": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketPolicy": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketPolicyStatus": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketReplication": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketRequestPayment": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketTagging": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketVersioning": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetBucketWebsite": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetObject": (True, "eb5d4a0659cba37808894e293f304eb58edebf92b0c435f95c2d847db50f8353"),
+        "GetObjectLockConfiguration": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "GetObjectTagging": (False, "15ebcd03ba4f2e79ec7142f4612ceebf9c69d27a2049c5b445d97a1a3d38255f"),
+        "GetPublicAccessBlock": (False, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "HeadBucket": (True, "240f055157623f955db6f688cc3e8f6f4612f32501596d361e5f616fd85db6d5"),
+        "HeadObject": (True, "56d024c858d93b07886f15a503011d6cfa85d85a5ae57f4a8c2ac154e3bcb5ab"),
+        "ListBucketAnalyticsConfigurations": (False, "5b22df6f7e035e7afe04edd9012287a43d421ea9bdb8e159401d1cdaa7561b79"),
+        "ListBucketIntelligentTieringConfigurations": (False, "5b22df6f7e035e7afe04edd9012287a43d421ea9bdb8e159401d1cdaa7561b79"),
+        "ListBucketInventoryConfigurations": (False, "5b22df6f7e035e7afe04edd9012287a43d421ea9bdb8e159401d1cdaa7561b79"),
+        "ListBucketMetricsConfigurations": (False, "5b22df6f7e035e7afe04edd9012287a43d421ea9bdb8e159401d1cdaa7561b79"),
+        "ListBuckets": (True, "565d240f5343e625ae579a4d45a770f1f02c6368b5ed4d06da4fbe6f47c28866"),
+        "ListMultipartUploads": (True, "49f4f0d4a71a9565e67ea237389c0f79248ca22a0861c221406433f23352f483"),
+        "ListObjects": (True, "8093f210cd6509bf3c93696e903bac2d27c7ec467ab94125e6dd08deffc24d00"),
+        "ListObjectsV2": (True, "2a7ffa0613163acd1afd48e3eb52323167871c03d9002a92e49569331bcc0159"),
+        "ListParts": (True, "0ed2d39a35f8ac6028dae246c1d33895fbacf11e8473223c39c6de893b2fac4a"),
+        "PutBucketAccelerateConfiguration": (False, "8dd39bbf3f880fd53596f1d90743b8cc82d38c7c0902a9dfd837d8004fffde01"),
+        "PutBucketAcl": (False, "f103c6488ae4c36bf7aedbe04144eb162f84b27c741bc56f8cdc6a29fe59dd15"),
+        "PutBucketAnalyticsConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "PutBucketCors": (True, "d3df5e25df17a326eeb2e55c736925ee9059385e02d6152873933cb3897a381e"),
+        "PutBucketEncryption": (False, "d3df5e25df17a326eeb2e55c736925ee9059385e02d6152873933cb3897a381e"),
+        "PutBucketIntelligentTieringConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "PutBucketInventoryConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "PutBucketLifecycle": (False, "d3df5e25df17a326eeb2e55c736925ee9059385e02d6152873933cb3897a381e"),
+        "PutBucketLifecycleConfiguration": (True, "d3df5e25df17a326eeb2e55c736925ee9059385e02d6152873933cb3897a381e"),
+        "PutBucketLogging": (False, "263fa6261e7f232199ad2ad2da2c226c25f4c26c40978665c5e7fc0a1f6714a7"),
+        "PutBucketMetricsConfiguration": (False, "53fd2ba884ab23c870df8fc0efd1c53762103116b64deef663d0e0e428dc162a"),
+        "PutBucketNotification": (False, "263fa6261e7f232199ad2ad2da2c226c25f4c26c40978665c5e7fc0a1f6714a7"),
+        "PutBucketNotificationConfiguration": (False, "be061ad7f9e8ca7505ce099afde9bd7a29e9b487a98a3d8270f54c5d5141b102"),
+        "PutBucketOwnershipControls": (False, "872ca7587e45c941176510b8fc3efedfac0390657b31f298f00005268584bcba"),
+        "PutBucketPolicy": (False, "482b0b085c704f475980496cda7984c0c4b79d39ef54b4a0d408e0b9ab52481a"),
+        "PutBucketReplication": (False, "48fdcdf1d61cdf1f46ed5e9d170a05171bc096e1e2828e0f8169a049ab859618"),
+        "PutBucketRequestPayment": (False, "263fa6261e7f232199ad2ad2da2c226c25f4c26c40978665c5e7fc0a1f6714a7"),
+        "PutBucketTagging": (False, "263fa6261e7f232199ad2ad2da2c226c25f4c26c40978665c5e7fc0a1f6714a7"),
+        "PutBucketVersioning": (False, "ed23df21910a9f18f0b8bc09c546ef68e90c99a879926d3b637c971b8b3c2226"),
+        "PutBucketWebsite": (False, "872ca7587e45c941176510b8fc3efedfac0390657b31f298f00005268584bcba"),
+        "PutObject": (True, "a58ac42ce0e5905c30cc03b8fa3cc912814e85f0020482f6f77e79e1b50ef502"),
+        "PutObjectLockConfiguration": (False, "cce33219bb451e93408265d9c9b33714ef2d55eb1b5dbc14ee5ad456fa404b7a"),
+        "PutObjectTagging": (False, "4a49f80b98d81a4ebb7a522aaf99584bfd360a793b87e65e14e00377d84cb6aa"),
+        "PutPublicAccessBlock": (False, "263fa6261e7f232199ad2ad2da2c226c25f4c26c40978665c5e7fc0a1f6714a7"),
+        "UploadPart": (True, "e6554490485293bcb4ae0ce931d7b1a61b1c45aa82e8c791b025f7f530affb0e"),
+        "UploadPartCopy": (True, "750b50c351625106f6f2852fffa352f0273c75e06eabbcc9b6e433054c249c61"),
+}
+
+
+def s3_feature_items(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    return [item.strip() for item in value.split(" | ") if item.strip()]
+
+
+def s3_feature_digest(row: dict) -> str:
+    """Digest of one row's canonical feature vectors (supported|unsupported|experimental)."""
+    canonical = "|".join(
+        ",".join(s3_feature_items(row.get(field, "")))
+        for field in (
+            "vendor_supported_features",
+            "vendor_unsupported_features",
+            "vendor_experimental_features",
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _normalize_key(key: Any) -> str:
@@ -2190,10 +2305,12 @@ NORMALIZED_SENSITIVE_SUBSTRINGS = (
     "accesstoken",
     "sessiontoken",
 )
-CREDENTIAL_VALUE_SEARCH_PATTERNS = (
+SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\bBearer\s+\S{8,}", re.IGNORECASE),
     re.compile(
-        r"(?:^|\s)(?:/|~)[^\s]*(?:credential|secret|token|\.ssh|\.config|\.cloudflare)",
+        r"(?:^|[\s:=])(?:/(?!/)|~)[^\s]*"
+        r"(?:\.aws|\.ssh|\.config|\.cloudflare|\.netrc|credential|secret|token)",
         re.IGNORECASE,
     ),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -2201,6 +2318,18 @@ CREDENTIAL_VALUE_SEARCH_PATTERNS = (
     re.compile(r"\b[0-9a-f]{32}\b"),
     re.compile(r"\b(?:\d[ -]?){13,19}\b"),
 )
+
+
+def _safe_value(value: Any) -> str:
+    """Describe a rejected value without echoing untrusted payloads."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        text = str(value)
+        if len(text) <= 40:
+            return repr(value)
+        return f"{type(value).__name__} of length {len(text)}"
+    if isinstance(value, (list, dict, tuple, set)):
+        return f"{type(value).__name__} with {len(value)} entr{'y' if len(value) == 1 else 'ies'}"
+    return type(value).__name__
 
 
 def _protocol_dict(value: Any, label: str, errors: list[str]) -> dict:
@@ -2220,8 +2349,47 @@ def _protocol_list(value: Any, label: str, errors: list[str]) -> list:
 def _protocol_text(value: Any, label: str, errors: list[str]) -> str:
     if isinstance(value, str) and value.strip():
         return value
-    errors.append(f"{label} must be a non-empty string, got {value!r}")
+    errors.append(f"{label} must be a non-empty string, got {_safe_value(value)}")
     return ""
+
+
+def _protocol_date(value: Any, label: str, errors: list[str]) -> str:
+    if not isinstance(value, str) or not ISO_UTC.match(value):
+        errors.append(f"{label} must be an ISO-8601 UTC timestamp, got {_safe_value(value)}")
+        return ""
+    try:
+        datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        errors.append(f"{label} must be a real calendar date, got {_safe_value(value)}")
+        return ""
+    return value
+
+
+def _protocol_calendar_date(value: Any, label: str, errors: list[str]) -> str:
+    """Accept a plain YYYY-MM-DD date or a full UTC timestamp."""
+    if isinstance(value, str) and ISO_DATE.match(value):
+        try:
+            datetime.datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            errors.append(f"{label} must be a real calendar date, got {_safe_value(value)}")
+            return ""
+        return value
+    return _protocol_date(value, label, errors)
+
+
+def _protocol_hex64(value: Any, label: str, errors: list[str]) -> str:
+    if isinstance(value, str) and HEX64.match(value):
+        return value
+    errors.append(f"{label} must be a 64-character lowercase hex digest, got {_safe_value(value)}")
+    return ""
+
+
+def _protocol_count(value: Any, label: str, errors: list[str]) -> int | None:
+    """Non-negative integer counts only; booleans are never counts."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        errors.append(f"{label} must be a non-negative integer, got {_safe_value(value)}")
+        return None
+    return value
 
 
 def _csv_flag(value: Any) -> bool | None:
@@ -2251,22 +2419,18 @@ def _sensitive_findings(label: str, node: Any) -> list[str]:
         for index, value in enumerate(node):
             findings.extend(_sensitive_findings(f"{label}[{index}]", value))
     elif isinstance(node, str):
-        for pattern in CREDENTIAL_VALUE_SEARCH_PATTERNS:
+        for pattern in SENSITIVE_VALUE_PATTERNS:
             if pattern.search(node):
                 findings.append(
-                    f"{label}: value looks like credential material or a local path and must not be recorded"
+                    f"{label}: value looks like credential material or a local credential path and "
+                    "must not be recorded"
                 )
                 break
     return findings
 
 
 def _pinned_context(errors: list[str]) -> dict:
-    """Read-only pinned context: the committed catalog plus the pinned REST count.
-
-    The two-argument ``validate_protocols`` form must not silently skip reference
-    checking, so it loads this pinned context instead of treating every reference
-    as unknown.
-    """
+    """Read-only pinned context: committed catalog, REST count and S3 source facts."""
     root = Path(__file__).resolve().parents[2]
     catalog_path = root / "docs/cloudflare-audit/endpoints.csv"
     snapshot_path = root / "docs/cloudflare-audit/snapshot.json"
@@ -2278,10 +2442,38 @@ def _pinned_context(errors: list[str]) -> dict:
                 for row in csv.DictReader(handle)
             ]
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        context["rest_operations"] = (snapshot.get("counts") or {}).get("operations")
+        if not isinstance(snapshot, dict):
+            raise ValueError("snapshot must be an object")
+        counts = snapshot.get("counts")
+        if not isinstance(counts, dict):
+            raise ValueError("snapshot.counts must be an object")
+        context["rest_operations"] = counts.get("operations")
+        docs = snapshot.get("supplementary_docs")
+        if isinstance(docs, dict):
+            commit = docs.get("commit")
+            for source in docs.get("sources") or []:
+                if isinstance(source, dict) and source.get("name") == S3_SOURCE_NAME:
+                    context["s3_source"] = {**source, "commit": commit}
     except (OSError, ValueError, KeyError, TypeError) as error:
-        errors.append(f"pinned protocol context is unavailable: {error}")
+        errors.append(f"pinned protocol context is unavailable: {type(error).__name__}: {error}")
     return context
+
+
+def _validate_context(context: Any, errors: list[str]) -> tuple[list | None, int | None, dict]:
+    """Validate the context facts; missing or malformed facts fail closed."""
+    if not isinstance(context, dict):
+        errors.append(f"protocol context must be an object, got {type(context).__name__}")
+        return None, None, {}
+    operations = context.get("operations")
+    if not isinstance(operations, list) or not operations:
+        errors.append("protocol context must provide a non-empty operations list for reference checks")
+        operations = None
+    rest_operations = context.get("rest_operations")
+    if isinstance(rest_operations, bool) or not isinstance(rest_operations, int) or rest_operations <= 0:
+        errors.append("protocol context must provide the pinned REST operation count")
+        rest_operations = None
+    s3_source = context.get("s3_source")
+    return operations, rest_operations, s3_source if isinstance(s3_source, dict) else {}
 
 
 def _catalog_index(catalog_operations: list[dict] | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
@@ -2309,6 +2501,9 @@ def _check_operation_reference(
         errors.append(f"{label}.operation_id must be a non-empty string")
         return ""
     if catalog is None:
+        errors.append(
+            f"{label}: cannot verify operationId {operation_id!r} without a validated catalog context"
+        )
         return operation_id
     known = catalog.get(operation_id)
     if known is None:
@@ -2323,11 +2518,9 @@ def _check_operation_reference(
     return operation_id
 
 
-def _environment_index(
-    environments: list, errors: list[str]
-) -> dict[str, dict]:
-    """Index environments, rejecting duplicates, bad shapes and missing authorization."""
-    index: dict[str, dict] = {}
+def _environment_facts(environments: list, errors: list[str]) -> dict[str, dict]:
+    """Validate the environment registry and derive per-environment authorization facts."""
+    facts: dict[str, dict] = {}
     for position, entry in enumerate(environments):
         label = f"protocols.environments[{position}]"
         item = _protocol_dict(entry, label, errors)
@@ -2339,10 +2532,6 @@ def _environment_index(
                     "an authorization reference may be recorded"
                 )
         environment_id = _protocol_text(item.get("environment_id"), f"{label}.environment_id", errors)
-        if environment_id:
-            if environment_id in index:
-                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
-            index[environment_id] = item
         _protocol_text(item.get("label"), f"{label}.label", errors)
         _protocol_text(item.get("plan"), f"{label}.plan", errors)
         _protocol_text(item.get("owner_role"), f"{label}.owner_role", errors)
@@ -2350,7 +2539,8 @@ def _environment_index(
         status = item.get("status")
         if status not in ENVIRONMENT_STATUSES:
             errors.append(
-                f"{label}.status={status!r} must be one of {', '.join(ENVIRONMENT_STATUSES)}"
+                f"{label}.status must be one of {', '.join(ENVIRONMENT_STATUSES)}, got "
+                f"{_safe_value(status)}"
             )
         for field in ("allowed_action_categories", "permission_categories"):
             values = _protocol_list(item.get(field), f"{label}.{field}", errors)
@@ -2358,11 +2548,13 @@ def _environment_index(
                 errors.append(f"{label}.{field} must list at least one category")
             for value in values:
                 if not isinstance(value, str) or not value.strip():
-                    errors.append(f"{label}.{field} items must be non-empty strings, got {value!r}")
+                    errors.append(f"{label}.{field} items must be non-empty strings")
         if "notes" in item and not isinstance(item.get("notes"), str):
             errors.append(f"{label}.notes must be a plain string, got {type(item.get('notes')).__name__}")
-        blockers = _protocol_list(item.get("blockers"), f"{label}.blockers", errors)
-        for blocker_index, blocker in enumerate(blockers):
+        blocker_codes: list[str] = []
+        for blocker_index, blocker in enumerate(
+            _protocol_list(item.get("blockers"), f"{label}.blockers", errors)
+        ):
             blocker_label = f"{label}.blockers[{blocker_index}]"
             if not isinstance(blocker, dict):
                 errors.append(f"{blocker_label} must be an object, got {type(blocker).__name__}")
@@ -2373,7 +2565,9 @@ def _environment_index(
                         f"{blocker_label}.{key} is not an allowed blocker field; only code and detail "
                         "may be recorded"
                     )
-            _protocol_text(blocker.get("code"), f"{blocker_label}.code", errors)
+            code = _protocol_text(blocker.get("code"), f"{blocker_label}.code", errors)
+            if code:
+                blocker_codes.append(code)
             _protocol_text(blocker.get("detail"), f"{blocker_label}.detail", errors)
         reference = item.get("authorization_reference")
         if status == "available":
@@ -2382,28 +2576,267 @@ def _environment_index(
                     f"{label}.authorization_reference is required before an environment can be "
                     "available; a status change alone is not authorization"
                 )
-            if blockers:
-                errors.append(
-                    f"{label}: an available environment must not keep unresolved blockers"
-                )
+            if blocker_codes:
+                errors.append(f"{label}: an available environment must not keep unresolved blockers")
         elif reference not in (None, ""):
             errors.append(
                 f"{label}.authorization_reference must stay empty while the environment is not available"
             )
         errors.extend(_sensitive_findings(label, item))
-    return index
+        if environment_id:
+            if environment_id in facts:
+                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
+            facts[environment_id] = {
+                "status": status,
+                "authorization_reference": reference if isinstance(reference, str) else "",
+                "blocker_codes": blocker_codes,
+                "authorized": status == "available"
+                and isinstance(reference, str)
+                and bool(reference.strip())
+                and not blocker_codes,
+            }
+    return facts
 
 
-def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
+def _schema_matrix(capture: dict, label: str, errors: list[str]) -> dict[str, set[str]]:
+    """Validate the captured dataset/field matrix used to qualify query scopes."""
+    matrix: dict[str, set[str]] = {}
+    entries = _protocol_list(capture.get("datasets"), f"{label}.datasets", errors)
+    if not entries:
+        errors.append(f"{label}.datasets must list the captured datasets and fields")
+    for index, entry in enumerate(entries):
+        entry_label = f"{label}.datasets[{index}]"
+        item = _protocol_dict(entry, entry_label, errors)
+        dataset = _protocol_text(item.get("dataset"), f"{entry_label}.dataset", errors)
+        fields = _protocol_list(item.get("fields"), f"{entry_label}.fields", errors)
+        if not fields:
+            errors.append(f"{entry_label}.fields must list at least one field")
+        clean_fields: set[str] = set()
+        for field in fields:
+            if not isinstance(field, str) or not field.strip():
+                errors.append(f"{entry_label}.fields items must be non-empty strings")
+                continue
+            clean_fields.add(field)
+        if dataset:
+            if dataset in matrix:
+                errors.append(f"{entry_label}.dataset duplicate {dataset!r}")
+            matrix[dataset] = clean_fields
+    return matrix
+
+
+def _capture_facts(
+    graphql: dict, environments: dict[str, dict], clearances: dict[str, str], errors: list[str]
+) -> dict | None:
+    """Validate the schema capture and return the authorization-linked fact record."""
+    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
+    capture = evidence.get("authorized_introspection")
+    if capture is None:
+        return None
+    label = "protocols.graphql schema_evidence.authorized_introspection"
+    if not isinstance(capture, dict):
+        errors.append(f"{label} must be an object or null, got {type(capture).__name__}")
+        return None
+    valid = True
+    environment = _protocol_text(capture.get("environment"), f"{label}.environment", errors)
+    linked = environments.get(environment) if environment else None
+    if environment and linked is None:
+        errors.append(f"{label}.environment {environment!r} is not a registered environment")
+        valid = False
+    elif linked is not None and not linked["authorized"]:
+        errors.append(
+            f"{label}.environment {environment!r} is not available (status/blockers); an awaiting or "
+            "blocked environment cannot authorize a capture"
+        )
+        valid = False
+    authorized_by = _protocol_text(capture.get("authorized_by"), f"{label}.authorized_by", errors)
+    if authorized_by and linked is not None:
+        accepted = {linked["authorization_reference"]} | set(clearances.values())
+        if authorized_by not in accepted:
+            errors.append(
+                f"{label}.authorized_by must match the linked environment authorization reference or "
+                "a cleared global blocker reference"
+            )
+            valid = False
+    captured_at = _protocol_date(capture.get("captured_at"), f"{label}.captured_at", errors)
+    artifact = _protocol_hex64(capture.get("artifact_sha256"), f"{label}.artifact_sha256", errors)
+    matrix = _schema_matrix(capture, label, errors)
+    query_kinds: set[str] = set()
+    raw_kinds = _protocol_list(capture.get("query_kinds"), f"{label}.query_kinds", errors)
+    if not raw_kinds:
+        errors.append(f"{label}.query_kinds must list the captured query kinds")
+    for kind in raw_kinds:
+        if not isinstance(kind, str) or not kind.strip():
+            errors.append(f"{label}.query_kinds items must be non-empty strings")
+            continue
+        query_kinds.add(kind)
+    if not (environment and authorized_by and captured_at and artifact and matrix and query_kinds):
+        valid = False
+    if not valid:
+        return None
+    return {
+        "environment": environment,
+        "authorized_by": authorized_by,
+        "captured_at": captured_at,
+        "artifact_sha256": artifact,
+        "matrix": matrix,
+        "query_kinds": query_kinds,
+        "dataset_count": len(matrix),
+        "field_count": sum(len(fields) for fields in matrix.values()),
+    }
+
+
+def _capability_facts(
+    graphql: dict,
+    environments: dict[str, dict],
+    capture: dict | None,
+    errors: list[str],
+) -> list[dict]:
+    """Validate capability records against the captured matrix; return valid records."""
+    records: list[dict] = []
+    seen_ids: list[str] = []
+    for index, record in enumerate(
+        _protocol_list(graphql.get("capability_acceptance"), "protocols.graphql.capability_acceptance", errors)
+    ):
+        label = f"protocols.graphql.capability_acceptance[{index}]"
+        item = _protocol_dict(record, label, errors)
+        valid = True
+        for field in CAPABILITY_RECORD_FIELDS:
+            if field not in item:
+                errors.append(f"{label}.{field} is required")
+                valid = False
+        record_id = _protocol_text(item.get("record_id"), f"{label}.record_id", errors)
+        if record_id:
+            if record_id in seen_ids:
+                errors.append(f"{label}.record_id duplicate {record_id!r}")
+                valid = False
+            seen_ids.append(record_id)
+        captured_at = _protocol_date(item.get("captured_at"), f"{label}.captured_at", errors)
+        artifact = _protocol_hex64(item.get("evidence_artifact"), f"{label}.evidence_artifact", errors)
+        if item.get("result") != "verified":
+            errors.append(f"{label}.result must be 'verified', got {_safe_value(item.get('result'))}")
+            valid = False
+        environment = item.get("environment")
+        linked = environments.get(environment) if isinstance(environment, str) else None
+        if linked is None:
+            errors.append(f"{label}.environment must link a registered environment")
+            valid = False
+        elif not linked["authorized"]:
+            errors.append(f"{label}.environment {environment!r} is not available (status/blockers)")
+            valid = False
+        scope = item.get("query_scope")
+        scope_ok = False
+        if capture is None:
+            errors.append(
+                f"{label}.query_scope cannot be qualified without a validated schema capture"
+            )
+        elif not isinstance(scope, dict):
+            errors.append(f"{label}.query_scope must be an object, got {type(scope).__name__}")
+        else:
+            dataset = scope.get("dataset")
+            fields = scope.get("fields")
+            kinds = scope.get("query_kinds")
+            if not isinstance(dataset, str) or dataset not in capture["matrix"]:
+                errors.append(
+                    f"{label}.query_scope.dataset must reference a captured dataset, got "
+                    f"{_safe_value(dataset)}"
+                )
+            elif not isinstance(fields, list) or not fields:
+                errors.append(f"{label}.query_scope.fields must list at least one captured field")
+            else:
+                unknown_fields = [
+                    field
+                    for field in fields
+                    if not isinstance(field, str) or field not in capture["matrix"][dataset]
+                ]
+                if unknown_fields:
+                    errors.append(
+                        f"{label}.query_scope.fields must reference captured fields of {dataset!r}"
+                    )
+                elif not isinstance(kinds, list) or not kinds or any(
+                    not isinstance(kind, str) or kind not in capture["query_kinds"] for kind in kinds
+                ):
+                    errors.append(
+                        f"{label}.query_scope.query_kinds must reference captured query kinds"
+                    )
+                else:
+                    scope_ok = True
+        if not (record_id and captured_at and artifact and scope_ok and valid):
+            valid = False
+        if valid:
+            records.append(
+                {
+                    "record_id": record_id,
+                    "environment": environment,
+                    "captured_at": captured_at,
+                    "evidence_artifact": artifact,
+                    "query_scope": item["query_scope"],
+                }
+            )
+    return records
+
+
+def _blocker_facts(protocols: dict, errors: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Validate global blockers; return cleared references and still-active codes."""
+    clearances: dict[str, str] = {}
+    active: list[str] = []
+    seen: list[str] = []
+    for index, blocker in enumerate(_protocol_list(protocols.get("blockers"), "protocols.blockers", errors)):
+        label = f"protocols.blockers[{index}]"
+        item = _protocol_dict(blocker, label, errors)
+        code = _protocol_text(item.get("code"), f"{label}.code", errors)
+        _protocol_text(item.get("detail"), f"{label}.detail", errors)
+        if not code:
+            continue
+        if code in seen:
+            errors.append(f"{label}.code duplicate global blocker {code!r}")
+            continue
+        seen.append(code)
+        cleared_by = item.get("cleared_by")
+        record = item.get("clearance_record")
+        if cleared_by in (None, "") and record in (None, ""):
+            active.append(code)
+            continue
+        record_label = f"{label}.clearance_record"
+        if not isinstance(record, dict):
+            errors.append(f"{record_label} must be an object to clear the blocker")
+            active.append(code)
+            continue
+        for key in record:
+            if key not in CLEARANCE_RECORD_FIELDS + ("environment",):
+                errors.append(
+                    f"{record_label}.{key} is not an allowed clearance field; only reference, date "
+                    "and environment may be recorded"
+                )
+        reference = _protocol_text(record.get("reference"), f"{record_label}.reference", errors)
+        _protocol_calendar_date(record.get("date"), f"{record_label}.date", errors)
+        if not isinstance(cleared_by, str) or not cleared_by.strip() or reference != cleared_by:
+            errors.append(
+                f"{label}: cleared_by must be a non-empty reference matching clearance_record.reference"
+            )
+            active.append(code)
+            continue
+        clearances[code] = cleared_by
+    for code in REQUIRED_GLOBAL_BLOCKER_CODES:
+        if code not in seen:
+            errors.append(
+                f"protocols.blockers must record {code!r} unless it is explicitly cleared with a "
+                "clearance record; removing the blocker is not clearance"
+            )
+    return clearances, active
+
+
+def _s3_facts(s3_rows: Any, errors: list[str]) -> dict:
+    """Validate S3 rows against the frozen inventory and derive the source facts."""
     facts: dict[str, Any] = {
         "documented": 0,
         "vendor_supported": 0,
         "provider_unsupported": 0,
         "names": [],
         "verified": 0,
+        "rows": {},
     }
     seen: dict[str, int] = {}
-    for index, row in enumerate(_protocol_list(rows, "s3_rows", errors)):
+    for index, row in enumerate(_protocol_list(s3_rows, "s3_rows", errors)):
         label = f"s3_rows[{index}]"
         if not isinstance(row, dict):
             errors.append(f"{label} must be an object, got {type(row).__name__}")
@@ -2418,13 +2851,26 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
             )
             continue
         seen[name] = index
+        inventory_entry = S3_SOURCE_INVENTORY.get(name)
+        if inventory_entry is None:
+            errors.append(
+                f"{label}: operation {name!r} is not part of the pinned S3 source inventory"
+            )
+            continue
+        expected_supported, expected_digest = inventory_entry
         facts["documented"] += 1
         facts["names"].append(name)
         supported = _csv_flag(row.get("cloudflare_supports_operation"))
         if supported is None:
             errors.append(
                 f"{label} {name}: cloudflare_supports_operation must be exactly 'true' or 'false', "
-                f"got {row.get('cloudflare_supports_operation')!r}"
+                f"got {_safe_value(row.get('cloudflare_supports_operation'))}"
+            )
+            continue
+        if supported != expected_supported:
+            errors.append(
+                f"{label} {name}: vendor support flag contradicts the pinned source inventory "
+                f"(expected {'true' if expected_supported else 'false'})"
             )
             continue
         if supported:
@@ -2442,25 +2888,26 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
                 )
         groups = row.get("feature_groups_reviewed")
         if isinstance(groups, str):
-            for group in [item.strip() for item in groups.split(" | ") if item.strip()]:
+            for group in s3_feature_items(groups):
                 if not group.endswith(":"):
                     errors.append(
                         f"{label} {name}: feature_groups_reviewed items must be group headers ending "
                         f"with ':' (wire parameters and enum values belong in the feature columns), "
-                        f"got {group!r}"
+                        f"got {_safe_value(group)}"
                     )
+        if s3_feature_digest(row) != expected_digest:
+            errors.append(
+                f"{label} {name}: feature vectors do not match the pinned source inventory"
+            )
         if row.get("source_name") != S3_SOURCE_NAME:
             errors.append(
-                f"{label} {name}: source_name must be {S3_SOURCE_NAME!r}, got {row.get('source_name')!r}"
+                f"{label} {name}: source_name must be {S3_SOURCE_NAME!r}, got "
+                f"{_safe_value(row.get('source_name'))}"
             )
         if row.get("source_commit") != S3_SOURCE_COMMIT:
-            errors.append(
-                f"{label} {name}: source_commit must be the pinned {S3_SOURCE_COMMIT!r}"
-            )
+            errors.append(f"{label} {name}: source_commit must be the pinned {S3_SOURCE_COMMIT!r}")
         if row.get("source_sha256") != S3_SOURCE_SHA256:
-            errors.append(
-                f"{label} {name}: source_sha256 must be the pinned {S3_SOURCE_SHA256!r}"
-            )
+            errors.append(f"{label} {name}: source_sha256 must be the pinned {S3_SOURCE_SHA256!r}")
         quote_ref = row.get("source_quote_ref")
         if isinstance(quote_ref, str) and (
             name not in quote_ref or "Feature column" not in quote_ref
@@ -2481,8 +2928,8 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
         status = row.get("verification_status")
         if status not in S3_VERIFICATION_STATUSES:
             errors.append(
-                f"{label} {name}: verification_status={status!r} must be one of "
-                f"{', '.join(S3_VERIFICATION_STATUSES)}"
+                f"{label} {name}: verification_status must be one of "
+                f"{', '.join(S3_VERIFICATION_STATUSES)}, got {_safe_value(status)}"
             )
         if not supported:
             if status != "provider_unsupported":
@@ -2513,7 +2960,10 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
         for field in ("flarego_implemented", "verified"):
             flag = _csv_flag(row.get(field))
             if flag is None:
-                errors.append(f"{label} {name}: {field} must be exactly 'true' or 'false'")
+                errors.append(
+                    f"{label} {name}: {field} must be exactly 'true' or 'false', got "
+                    f"{_safe_value(row.get(field))}"
+                )
             elif flag:
                 errors.append(f"{label} {name}: {field}=true is not supported by any pinned evidence")
         if row.get("feature_table_status") == "not_listed_in_pinned_table" and (
@@ -2532,6 +2982,7 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
                 )
             else:
                 facts["verified"] += 1
+        facts["rows"][name] = row
     return facts
 
 
@@ -2544,18 +2995,19 @@ def validate_protocols(
 ) -> list[str]:
     """Validate the independent protocol ledger. Read-only; returns readable errors.
 
-    REST, S3, GraphQL and realtime keep separate denominators and can never be
-    summed into a combined coverage claim. Qualification fails closed: a
-    structured, environment-linked and authorized capture is required before any
-    schema claim, an independent capability acceptance record is required before
-    any query capability claim, and an active global qualification blocker keeps
-    every verified count at zero.
+    One fact chain drives every derived status and count: trusted source and
+    context facts → unique typed identities → mutually linked authorization,
+    capture and schema matrix → in-scope independent acceptance → qualification,
+    status and counts. REST, S3, GraphQL and realtime keep separate denominators
+    and can never be summed into a combined coverage claim.
     """
     if not isinstance(protocols, dict):
         return [f"protocols ledger must be an object, got {type(protocols).__name__}"]
     errors: list[str] = []
     if protocols.get("format") != PROTOCOLS_FORMAT:
-        errors.append(f"protocols.format must be {PROTOCOLS_FORMAT!r}, got {protocols.get('format')!r}")
+        errors.append(
+            f"protocols.format must be {PROTOCOLS_FORMAT!r}, got {_safe_value(protocols.get('format'))}"
+        )
     for key in FORBIDDEN_COMBINED_KEYS:
         if key in protocols:
             errors.append(
@@ -2563,15 +3015,15 @@ def validate_protocols(
                 "realtime stay separate and must not be summed"
             )
 
-    pinned = dict(context) if isinstance(context, dict) else _pinned_context(errors)
-    operations = catalog_operations if catalog_operations is not None else pinned.get("operations")
-    if catalog_operations is not None and not isinstance(catalog_operations, list):
-        errors.append(
-            f"catalog_operations must be a list of operations, got {type(catalog_operations).__name__}"
-        )
-        operations = None
+    if context is not None:
+        raw_context = context
+    elif catalog_operations is not None:
+        raw_context = dict(_pinned_context(errors))
+        raw_context["operations"] = catalog_operations
+    else:
+        raw_context = _pinned_context(errors)
+    operations, rest_operations, s3_source = _validate_context(raw_context, errors)
     catalog = _catalog_index(operations, errors)
-    rest_operations = pinned.get("rest_operations")
 
     # --- denominators -------------------------------------------------------
     denominators = _protocol_list(protocols.get("denominators"), "protocols.denominators", errors)
@@ -2596,22 +3048,21 @@ def validate_protocols(
             errors.append(f"{label}.independent must be true for every protocol denominator")
         count = entry.get("count")
         if count is None:
-            if entry.get("status") not in ("awaiting_authorized_schema", "awaiting_protocol_evidence"):
+            if entry.get("status") not in UNKNOWN_DENOMINATOR_STATUSES:
                 errors.append(
                     f"{label}.count may only be null when the denominator status declares the "
                     "universe unknown"
                 )
-        elif isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            errors.append(
-                f"{label}.count must be a non-negative integer or null, got {count!r}"
-            )
-        if name != "rest" and name in UNKNOWN_DENOMINATOR_NAMES and entry.get("operation_ids"):
+        else:
+            _protocol_count(count, f"{label}.count", errors)
+        if name in NON_REST_DENOMINATORS and entry.get("operation_ids"):
             for operation_id in _protocol_list(
                 entry.get("operation_ids"), f"{label}.operation_ids", errors
             ):
                 if not isinstance(operation_id, str) or not operation_id:
                     errors.append(
-                        f"{label}.operation_ids items must be non-empty strings, got {operation_id!r}"
+                        f"{label}.operation_ids items must be non-empty strings, got "
+                        f"{_safe_value(operation_id)}"
                     )
                 elif catalog is None or operation_id in catalog:
                     errors.append(
@@ -2623,13 +3074,13 @@ def validate_protocols(
             errors.append(f"protocols.denominators must include the {name!r} denominator exactly once")
 
     # --- S3 ---------------------------------------------------------------
-    facts = _s3_row_facts(s3_rows, errors)
+    facts = _s3_facts(s3_rows, errors)
     s3 = _protocol_dict(protocols.get("s3"), "protocols.s3", errors)
     for field in ("documented", "vendor_supported", "provider_unsupported"):
         if s3.get(field) != facts[field]:
             errors.append(
-                f"protocols.s3.{field}={s3.get(field)!r} does not match the {facts[field]} derived "
-                "from the S3 rows"
+                f"protocols.s3.{field}={_safe_value(s3.get(field))} does not match the "
+                f"{facts[field]} derived from the S3 rows"
             )
     if facts["provider_unsupported"] and not s3.get("provider_unsupported"):
         errors.append(
@@ -2638,8 +3089,8 @@ def validate_protocols(
         )
     if s3.get("verified") != facts["verified"]:
         errors.append(
-            f"protocols.s3.verified={s3.get('verified')!r} does not match the {facts['verified']} rows "
-            "with structured verification evidence"
+            f"protocols.s3.verified={_safe_value(s3.get('verified'))} does not match the "
+            f"{facts['verified']} rows with structured verification evidence"
         )
     s3_denominator = by_name.get("s3") or {}
     for field, derived in (
@@ -2649,19 +3100,38 @@ def validate_protocols(
     ):
         if s3_denominator.get(field) != derived:
             errors.append(
-                f"protocols.denominators s3.{field}={s3_denominator.get(field)!r} must match the "
-                f"{derived} derived from the S3 rows"
+                f"protocols.denominators s3.{field}={_safe_value(s3_denominator.get(field))} must "
+                f"match the {derived} derived from the S3 rows"
             )
     rest_denominator = by_name.get("rest") or {}
     rest_count = rest_denominator.get("count")
-    if rest_operations is not None and rest_count != rest_operations:
+    if rest_operations is None or rest_count != rest_operations:
         errors.append(
-            f"protocols.denominators rest.count={rest_count!r} must match the pinned REST fact "
-            f"{rest_operations!r}"
+            f"protocols.denominators rest.count={_safe_value(rest_count)} must match the pinned REST "
+            f"fact {rest_operations!r}"
         )
     source = _protocol_dict(s3.get("source"), "protocols.s3.source", errors)
-    for field in ("name", "commit", "sha256", "url"):
-        _protocol_text(source.get(field), f"protocols.s3.source.{field}", errors)
+    expected_source = {
+        "name": S3_SOURCE_NAME,
+        "commit": S3_SOURCE_COMMIT,
+        "sha256": S3_SOURCE_SHA256,
+        "url": S3_SOURCE_URL,
+    }
+    for field, expected in expected_source.items():
+        if source.get(field) != expected:
+            errors.append(
+                f"protocols.s3.source.{field} must be the pinned {_safe_value(expected)}, got "
+                f"{_safe_value(source.get(field))}"
+            )
+    if s3_source:
+        for field, expected in (
+            ("sha256", S3_SOURCE_SHA256),
+            ("commit", S3_SOURCE_COMMIT),
+        ):
+            if s3_source.get(field) != expected:
+                errors.append(
+                    f"pinned snapshot s3 source {field} does not match the frozen source contract"
+                )
     _protocol_text(s3.get("operations_file"), "protocols.s3.operations_file", errors)
     if not _protocol_list(s3.get("limitations"), "protocols.s3.limitations", errors):
         errors.append("protocols.s3.limitations must list the preserved vendor limitations")
@@ -2670,7 +3140,7 @@ def validate_protocols(
     if host and host != K2_STREAM_HOST:
         errors.append(
             f"protocols.s3.k2_stream_host.host must be exactly the pinned stream host "
-            f"{K2_STREAM_HOST!r}, got {host!r}"
+            f"{K2_STREAM_HOST!r}, got {_safe_value(host)}"
         )
     if k2.get("rest_denominator") is not True:
         errors.append("protocols.s3.k2_stream_host.rest_denominator must be true; those operations are REST")
@@ -2684,20 +3154,20 @@ def validate_protocols(
             errors.append(f"{label}.rest_denominator must be true")
     _protocol_text(k2.get("acceptance"), "protocols.s3.k2_stream_host.acceptance", errors)
 
-    # --- environments (indexed before GraphQL so authorization can be linked) ---
-    environments_index = _environment_index(
+    # --- authorization, capture and acceptance facts ----------------------
+    environments = _environment_facts(
         _protocol_list(protocols.get("environments"), "protocols.environments", errors), errors
     )
+    clearances, active_blockers = _blocker_facts(protocols, errors)
 
-    # --- GraphQL ----------------------------------------------------------
     graphql = _protocol_dict(protocols.get("graphql"), "protocols.graphql", errors)
     _protocol_text(graphql.get("endpoint"), "protocols.graphql.endpoint", errors)
     _protocol_text(graphql.get("transport"), "protocols.graphql.transport", errors)
     status = graphql.get("review_status")
     if status not in GRAPHQL_REVIEW_STATUSES:
         errors.append(
-            f"protocols.graphql.review_status={status!r} must be one of "
-            f"{', '.join(GRAPHQL_REVIEW_STATUSES)}"
+            f"protocols.graphql.review_status must be one of {', '.join(GRAPHQL_REVIEW_STATUSES)}, "
+            f"got {_safe_value(status)}"
         )
     account_scope = graphql.get("account_scope")
     if account_scope not in ("unknown", "account", "user", "organization"):
@@ -2710,134 +3180,38 @@ def validate_protocols(
             "protocols.graphql.plan_limits must record the plan-limit verification state "
             "(unverified/verified/unknown)"
         )
-    if not _protocol_list(
+    scope_blockers = _protocol_list(
         graphql.get("account_scope_blockers"), "protocols.graphql.account_scope_blockers", errors
-    ):
-        errors.append(
-            "protocols.graphql.account_scope_blockers must record the concrete account-scope gap"
-        )
-    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
-    capture = evidence.get("authorized_introspection")
-    capture_ok = False
-    if capture is not None:
-        if not isinstance(capture, dict):
-            errors.append(
-                "protocols.graphql schema_evidence.authorized_introspection must be an object or null"
-            )
-        else:
-            capture_ok = True
-            for field in GRAPHQL_CAPTURE_FIELDS:
-                if not isinstance(capture.get(field), str) or not capture.get(field, "").strip():
-                    errors.append(
-                        f"protocols.graphql schema_evidence.authorized_introspection.{field} must be "
-                        "a non-empty string"
-                    )
-                    capture_ok = False
-            captured_at = capture.get("captured_at")
-            if isinstance(captured_at, str) and not ISO_UTC.match(captured_at):
-                errors.append(
-                    "protocols.graphql schema_evidence.authorized_introspection.captured_at must be an "
-                    "ISO-8601 UTC timestamp"
-                )
-                capture_ok = False
-            artifact = capture.get("artifact_sha256")
-            if isinstance(artifact, str) and not HEX64.match(artifact):
-                errors.append(
-                    "protocols.graphql schema_evidence.authorized_introspection.artifact_sha256 must be "
-                    "a 64-character lowercase hex digest"
-                )
-                capture_ok = False
-            environment = capture.get("environment")
-            if isinstance(environment, str) and environment:
-                linked = environments_index.get(environment)
-                if linked is None:
-                    errors.append(
-                        f"protocols.graphql authorized_introspection.environment {environment!r} is not "
-                        "a registered environment"
-                    )
-                    capture_ok = False
-                elif linked.get("status") != "available" or linked.get("blockers"):
-                    errors.append(
-                        f"protocols.graphql environment {environment!r} is not available "
-                        "(status/blockers); an awaiting or blocked environment cannot authorize a capture"
-                    )
-                    capture_ok = False
-    capability_records = _protocol_list(
-        graphql.get("capability_acceptance"), "protocols.graphql.capability_acceptance", errors
     )
-    valid_records = 0
-    seen_records: list[str] = []
-    for index, record in enumerate(capability_records):
-        label = f"protocols.graphql.capability_acceptance[{index}]"
-        item = _protocol_dict(record, label, errors)
-        record_ok = True
-        for field in CAPABILITY_RECORD_FIELDS:
-            if field not in item:
-                errors.append(f"{label}.{field} is required")
-                record_ok = False
-        record_id = item.get("record_id")
-        if isinstance(record_id, str) and record_id:
-            if record_id in seen_records:
-                errors.append(f"{label}.record_id duplicate {record_id!r}")
-                record_ok = False
-            seen_records.append(record_id)
-        query_scope = item.get("query_scope")
-        if (
-            not isinstance(query_scope, dict)
-            or not query_scope.get("dataset")
-            or not query_scope.get("fields")
-            or not query_scope.get("query_kinds")
-        ):
-            errors.append(f"{label}.query_scope must record dataset, fields and query_kinds")
-            record_ok = False
-        if item.get("result") != "verified":
-            errors.append(f"{label}.result must be 'verified'")
-            record_ok = False
-        artifact = item.get("evidence_artifact")
-        if not isinstance(artifact, str) or not HEX64.match(artifact):
-            errors.append(f"{label}.evidence_artifact must be a 64-character lowercase hex digest")
-            record_ok = False
-        captured_at = item.get("captured_at")
-        if not isinstance(captured_at, str) or not ISO_UTC.match(captured_at):
-            errors.append(f"{label}.captured_at must be an ISO-8601 UTC timestamp")
-            record_ok = False
-        environment = item.get("environment")
-        linked = environments_index.get(environment) if isinstance(environment, str) else None
-        if linked is None:
-            errors.append(f"{label}.environment must link a registered environment")
-            record_ok = False
-        elif linked.get("status") != "available" or linked.get("blockers"):
-            errors.append(
-                f"{label}.environment {environment!r} is not available (status/blockers)"
-            )
-            record_ok = False
-        if record_ok:
-            valid_records += 1
+    for blocker in scope_blockers:
+        if not isinstance(blocker, str) or not blocker.strip():
+            errors.append("protocols.graphql.account_scope_blockers items must be non-empty strings")
+    capture = _capture_facts(graphql, environments, clearances, errors)
+    records = _capability_facts(graphql, environments, capture, errors)
     verified = graphql.get("verified")
     if isinstance(verified, bool) or not isinstance(verified, int) or verified < 0:
         errors.append("protocols.graphql.verified must be a non-negative integer, not a boolean")
-    elif verified != valid_records:
-        errors.append(
-            f"protocols.graphql.verified={verified} must equal the {valid_records} independently valid "
-            "capability acceptance records"
-        )
+        verified_count = None
+    else:
+        verified_count = verified
+        if verified != len(records):
+            errors.append(
+                f"protocols.graphql.verified={verified} must equal the {len(records)} independently "
+                "valid capability acceptance records"
+            )
     if status == "verified":
-        if not capture_ok:
+        if capture is None:
             errors.append(
                 "protocols.graphql review_status=verified requires a valid structured "
                 "schema_evidence.authorized_introspection capture"
             )
-        if valid_records == 0:
+        if not records:
             errors.append(
                 "protocols.graphql review_status=verified requires independent "
                 "protocols.graphql.capability_acceptance records; a schema capture alone does not "
                 "verify query or field capability"
             )
-        if account_scope == "unknown":
-            errors.append(
-                "protocols.graphql account_scope must be identified before the schema can be verified"
-            )
-        if not capture_ok:
+        if capture is None:
             for field in ("dataset_count", "field_count"):
                 if graphql.get(field) is not None:
                     errors.append(
@@ -2849,8 +3223,29 @@ def validate_protocols(
                     "protocols.graphql.datasets must stay empty while the authorized schema capture "
                     "is invalid or absent"
                 )
+        if account_scope == "unknown":
+            errors.append(
+                "protocols.graphql account_scope must be identified before the schema can be verified"
+            )
+        if scope_blockers:
+            errors.append(
+                "protocols.graphql.account_scope_blockers must be empty once the account scope is "
+                "identified and authorized"
+            )
+    elif status == "awaiting_query_acceptance":
+        if capture is None:
+            errors.append(
+                "protocols.graphql review_status=awaiting_query_acceptance requires a valid "
+                "structured schema_evidence.authorized_introspection capture"
+            )
+        if records or verified_count:
+            errors.append(
+                "protocols.graphql.capability_acceptance must stay empty and protocols.graphql.verified "
+                "must be 0 while awaiting query acceptance; a schema capture only proves field discovery"
+            )
     else:
-        if capture is not None:
+        evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
+        if evidence.get("authorized_introspection") is not None:
             errors.append(
                 "protocols.graphql must not carry an introspection record while awaiting the "
                 "authorized schema"
@@ -2866,13 +3261,58 @@ def validate_protocols(
                     f"protocols.graphql.{field} must stay unknown (null) while awaiting the authorized "
                     "schema; 0 would claim the schema was enumerated"
                 )
-        if verified not in (0, None) or (verified or 0) != 0:
+        if verified_count not in (0, None):
             errors.append("protocols.graphql.verified must be 0 without authorized schema evidence")
         if account_scope != "unknown" or graphql.get("plan_limits") not in ("unverified", "unknown"):
             errors.append(
                 "protocols.graphql account_scope and plan_limits must stay unknown/unverified while "
                 "the authorized schema and plan evidence are missing"
             )
+    if capture is not None:
+        declared_datasets = graphql.get("datasets")
+        if not isinstance(declared_datasets, list):
+            errors.append(
+                f"protocols.graphql.datasets must be a list, got {type(declared_datasets).__name__}"
+            )
+        else:
+            declared_matrix: dict[str, list[str]] = {}
+            for index, entry in enumerate(declared_datasets):
+                label = f"protocols.graphql.datasets[{index}]"
+                item = _protocol_dict(entry, label, errors)
+                dataset = _protocol_text(item.get("dataset"), f"{label}.dataset", errors)
+                fields = _protocol_list(item.get("fields"), f"{label}.fields", errors)
+                clean: list[str] = []
+                for field in fields:
+                    if not isinstance(field, str) or not field.strip():
+                        errors.append(f"{label}.fields items must be non-empty strings")
+                        continue
+                    clean.append(field)
+                if dataset:
+                    declared_matrix[dataset] = clean
+            if declared_matrix != {name: sorted(fields) for name, fields in capture["matrix"].items()}:
+                errors.append(
+                    "protocols.graphql.datasets must match the captured dataset/field matrix"
+                )
+            dataset_count = _protocol_count(
+                graphql.get("dataset_count"), "protocols.graphql.dataset_count", errors
+            )
+            field_count = _protocol_count(
+                graphql.get("field_count"), "protocols.graphql.field_count", errors
+            )
+            if dataset_count is not None and dataset_count != capture["dataset_count"]:
+                errors.append(
+                    f"protocols.graphql.dataset_count={dataset_count} must equal the captured "
+                    f"{capture['dataset_count']} datasets"
+                )
+            if field_count is not None and field_count != capture["field_count"]:
+                errors.append(
+                    f"protocols.graphql.field_count={field_count} must equal the captured "
+                    f"{capture['field_count']} fields"
+                )
+    else:
+        for field in ("dataset_count", "field_count"):
+            if graphql.get(field) is not None:
+                _protocol_count(graphql.get(field), f"protocols.graphql.{field}", errors)
     if not _protocol_list(graphql.get("acceptance_prerequisites"), "protocols.graphql.acceptance_prerequisites", errors):
         errors.append("protocols.graphql.acceptance_prerequisites must list the GraphQL-specific gates")
     for index, family in enumerate(_protocol_list(graphql.get("families"), "protocols.graphql.families", errors)):
@@ -2882,6 +3322,28 @@ def validate_protocols(
             _protocol_text(entry.get(field), f"{label}.{field}", errors)
         if not _protocol_list(entry.get("blockers"), f"{label}.blockers", errors):
             errors.append(f"{label}.blockers must record the concrete evidence gap")
+
+    graphql_denominator = by_name.get("graphql") or {}
+    graphql_count = graphql_denominator.get("count")
+    if graphql_count is not None:
+        unit = graphql_denominator.get("unit")
+        if unit not in GRAPHQL_SINGLE_UNITS:
+            errors.append(
+                f"protocols.denominators graphql.count may only be declared for a single unit "
+                f"({', '.join(GRAPHQL_SINGLE_UNITS)}); mixed dataset/field totals must stay null"
+            )
+        elif capture is None or records == []:
+            errors.append(
+                "protocols.denominators graphql.count must stay unknown (null) while no validated "
+                "capture and acceptance record exists"
+            )
+        else:
+            expected = capture["dataset_count"] if unit == "datasets" else capture["field_count"]
+            if graphql_count != expected:
+                errors.append(
+                    f"protocols.denominators graphql.count={_safe_value(graphql_count)} must equal the "
+                    f"validated {unit} count {expected}"
+                )
 
     # --- realtime ---------------------------------------------------------
     realtime = _protocol_dict(protocols.get("realtime"), "protocols.realtime", errors)
@@ -2926,14 +3388,6 @@ def validate_protocols(
             "protocols.denominators realtime.count must stay unknown (null) while no realtime "
             "acceptance record exists"
         )
-    graphql_denominator = by_name.get("graphql") or {}
-    if graphql_denominator.get("count") is not None and (
-        not isinstance(verified, int) or isinstance(verified, bool) or verified == 0
-    ):
-        errors.append(
-            "protocols.denominators graphql.count must stay unknown (null) while no capability "
-            "acceptance record exists"
-        )
 
     # --- P1/P2 admission --------------------------------------------------
     admission = _protocol_dict(protocols.get("p1_p2_admission"), "protocols.p1_p2_admission", errors)
@@ -2954,7 +3408,10 @@ def validate_protocols(
                     errors.append(f"{label}: duplicate operationId {operation_id!r} in {field}")
                 identifiers.append(operation_id)
             if item.get("risk") not in ADMISSION_RISKS:
-                errors.append(f"{label}.risk={item.get('risk')!r} must be one of {', '.join(ADMISSION_RISKS)}")
+                errors.append(
+                    f"{label}.risk must be one of {', '.join(ADMISSION_RISKS)}, got "
+                    f"{_safe_value(item.get('risk'))}"
+                )
             if item.get("risk_review") != "pending_manual_review":
                 errors.append(
                     f"{label}.risk_review must stay 'pending_manual_review'; a proposed HTTP-method "
@@ -3001,8 +3458,8 @@ def validate_protocols(
     for field in ("p1_new", "p1_existing_compat", "p2_candidates"):
         if counts.get(field) != len(lists.get(field, [])):
             errors.append(
-                f"protocols.p1_p2_admission.counts.{field}={counts.get(field)!r} does not match the "
-                f"{len(lists.get(field, []))} listed operations"
+                f"protocols.p1_p2_admission.counts.{field}={_safe_value(counts.get(field))} does not "
+                f"match the {len(lists.get(field, []))} listed operations"
             )
     overlap = sum(
         1
@@ -3010,19 +3467,19 @@ def validate_protocols(
     )
     if counts.get("overlap") != overlap:
         errors.append(
-            f"protocols.p1_p2_admission.counts.overlap={counts.get('overlap')!r} does not match the "
-            f"computed overlap {overlap}"
+            f"protocols.p1_p2_admission.counts.overlap={_safe_value(counts.get('overlap'))} does not "
+            f"match the computed overlap {overlap}"
         )
     union = len(set().union(*[set(value) for value in lists.values()])) if lists else 0
     if counts.get("unique") != union:
         errors.append(
-            f"protocols.p1_p2_admission.counts.unique={counts.get('unique')!r} does not match the "
-            f"computed unique operation count {union}; the lists overlap and must not be summed"
+            f"protocols.p1_p2_admission.counts.unique={_safe_value(counts.get('unique'))} does not "
+            f"match the computed unique operation count {union}; the lists overlap and must not be summed"
         )
     if counts.get("sum_of_lists") != sum(len(value) for value in lists.values()):
         errors.append(
-            f"protocols.p1_p2_admission.counts.sum_of_lists={counts.get('sum_of_lists')!r} does not "
-            "match the total number of listed entries"
+            f"protocols.p1_p2_admission.counts.sum_of_lists={_safe_value(counts.get('sum_of_lists'))} "
+            "does not match the total number of listed entries"
         )
     policy = _protocol_dict(admission.get("policy"), "protocols.p1_p2_admission.policy", errors)
     if policy.get("runtime_allowlist") is not False:
@@ -3031,28 +3488,9 @@ def validate_protocols(
             "proposal, not a runtime allowlist"
         )
 
-    # --- global blockers and qualification gating -------------------------
-    blocker_codes: list[str] = []
-    active_blockers: list[str] = []
-    for index, blocker in enumerate(_protocol_list(protocols.get("blockers"), "protocols.blockers", errors)):
-        label = f"protocols.blockers[{index}]"
-        item = _protocol_dict(blocker, label, errors)
-        code = _protocol_text(item.get("code"), f"{label}.code", errors)
-        if code:
-            if code in blocker_codes:
-                errors.append(f"{label}.code duplicate global blocker {code!r}")
-            blocker_codes.append(code)
-            if not _clearance_complete(item):
-                active_blockers.append(code)
-        _protocol_text(item.get("detail"), f"{label}.detail", errors)
-    for code in REQUIRED_GLOBAL_BLOCKER_CODES:
-        if code not in blocker_codes:
-            errors.append(
-                f"protocols.blockers must record {code!r} unless it is explicitly cleared with a "
-                "clearance record; removing the blocker is not clearance"
-            )
+    # --- qualification gating from the same validated facts ----------------
     if active_blockers:
-        if isinstance(verified, int) and not isinstance(verified, bool) and verified > 0:
+        if verified_count:
             errors.append(
                 "protocols.graphql.verified must be 0 while global qualification blockers are active: "
                 + ", ".join(active_blockers)

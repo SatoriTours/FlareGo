@@ -13,7 +13,12 @@ import pathlib
 import re
 import unittest
 
-from tools.cloudflare_audit.review import P1_APPROVED_NEW_REQUESTS, validate_protocols
+from tools.cloudflare_audit.review import (
+    P1_APPROVED_NEW_REQUESTS,
+    S3_SOURCE_INVENTORY,
+    s3_feature_digest,
+    validate_protocols,
+)
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 AUDIT = REPO / "docs/cloudflare-audit"
@@ -24,6 +29,7 @@ P2_CANDIDATES = AUDIT / "p2-candidate-endpoints.csv"
 SNAPSHOT = AUDIT / "snapshot.json"
 ENVIRONMENTS_DOC = AUDIT / "acceptance-environments.md"
 S3_DOC = REPO / ".superpowers/cloudflare/flarego-cf-s3-compat.md"
+PINNED_SCHEMA = REPO / ".superpowers/cloudflare/openapi.json"
 S3_DOC_COMMIT = "e3a9cf758c28273178d56918399068c6d2eb8a1d"
 S3_DOC_SHA256 = "a3a9f5b86efc022ae7cbe813e49b682f0dbb3dfc7ff1eac5498d3af62c9e75d8"
 K2_HOST = "https://{stream_id}.k2.cloudflarestorage.com"
@@ -85,7 +91,25 @@ GRAPHQL_SOURCE = {
 }
 
 
+S3_FIXTURE_FEATURES = {
+    "ListBuckets": {
+        "supported": "",
+        "unsupported": "",
+        "experimental": "",
+        "status": "not_listed_in_pinned_table",
+    },
+    "GetBucketAcl": {
+        "supported": "",
+        "unsupported": "x-amz-expected-bucket-owner",
+        "experimental": "",
+        "status": "listed",
+    },
+}
+
+
 def s3_row(operation: str, supported: bool = True, **overrides) -> dict:
+    """Synthetic row whose feature vectors match the frozen source inventory."""
+    features = S3_FIXTURE_FEATURES[operation]
     row = {
         "operation": operation,
         "level": "bucket",
@@ -94,16 +118,17 @@ def s3_row(operation: str, supported: bool = True, **overrides) -> dict:
         "official_compatibility_page": "https://developers.cloudflare.com/r2/api/s3/api/",
         "aws_operation_reference": f"https://docs.aws.amazon.com/AmazonS3/latest/API/API_{operation}.html",
         "feature_limitations": "参见固定版本兼容表逐字段检查",
-        "vendor_supported_features": "x-amz-storage-class" if supported else "",
-        "vendor_unsupported_features": "x-amz-expected-bucket-owner",
-        "vendor_experimental_features": "",
+        "vendor_supported_features": features["supported"],
+        "vendor_unsupported_features": features["unsupported"],
+        "vendor_experimental_features": features["experimental"],
         "feature_groups_reviewed": "Bucket Owner:",
-        "feature_table_status": "listed",
+        "feature_table_status": features["status"],
         "source_name": "s3-compat",
         "source_commit": S3_SOURCE["commit"],
         "source_sha256": S3_SOURCE["sha256"],
         "source_quote_ref": f"s3-compat table row {operation} Feature column",
         "verification_status": "awaiting_authorized_environment" if supported else "provider_unsupported",
+        "verification_evidence": "",
         "acceptance_target_level": "L2" if supported else "n/a",
         "owner_role": "日常工作",
         "phase": "P5",
@@ -113,8 +138,10 @@ def s3_row(operation: str, supported: bool = True, **overrides) -> dict:
         "flarego_implemented": "false",
         "verified": "false",
     }
+    assert s3_feature_digest(row) == S3_SOURCE_INVENTORY[operation][1], operation
     row.update(overrides)
     return row
+
 
 
 def admission_entry(operation_id: str, method: str = "GET", path: str = "/zones") -> dict:
@@ -287,23 +314,35 @@ def cleared_protocols() -> dict:
     )
     for blocker in protocols["blockers"]:
         blocker["cleared_by"] = "synthetic-user-approval-2026-10-08"
-        blocker["clearance_record"] = {"environment": "synthetic-fixture", "date": "2026-10-08"}
+        blocker["clearance_record"] = {
+            "reference": "synthetic-user-approval-2026-10-08",
+            "environment": "synthetic-fixture",
+            "date": "2026-10-08",
+        }
     return protocols
 
 
+SCHEMA_MATRIX = [{"dataset": "synthetic_dataset", "fields": ["synthetic_field"]}]
+QUERY_KINDS = ["timeseries"]
+
+
 def authorized_capture(protocols: dict, *, with_capability: bool = True, environment="graphql_schema_capture") -> dict:
+    """Fill in a self-consistent capture, schema matrix and (optionally) acceptance."""
     protocols["graphql"]["schema_evidence"]["authorized_introspection"] = {
         "environment": environment,
         "captured_at": "2026-10-08T00:00:00Z",
         "artifact_sha256": "a" * 64,
         "authorized_by": "synthetic-user-approval-2026-10-08",
+        "datasets": copy.deepcopy(SCHEMA_MATRIX),
+        "query_kinds": list(QUERY_KINDS),
     }
     protocols["graphql"].update(
-        review_status="verified",
+        review_status="verified" if with_capability else "awaiting_query_acceptance",
         dataset_count=1,
-        field_count=2,
-        datasets=[{"dataset": "synthetic_dataset", "fields": ["synthetic_field"]}],
+        field_count=1,
+        datasets=copy.deepcopy(SCHEMA_MATRIX),
         account_scope="account",
+        account_scope_blockers=[],
         plan_limits="verified",
     )
     if with_capability:
@@ -315,7 +354,7 @@ def authorized_capture(protocols: dict, *, with_capability: bool = True, environ
                 "query_scope": {
                     "dataset": "synthetic_dataset",
                     "fields": ["synthetic_field"],
-                    "query_kinds": ["timeseries"],
+                    "query_kinds": list(QUERY_KINDS),
                 },
                 "result": "verified",
                 "evidence_artifact": "b" * 64,
@@ -859,6 +898,299 @@ def s3_rows_fixture_from_source() -> list[dict]:
     return list(csv.DictReader(S3_CSV.open(encoding="utf-8-sig", newline="")))
 
 
+class FactChainTest(unittest.TestCase):
+    """R1: one validated fact chain from source through authorization to acceptance."""
+
+    def setUp(self):
+        self.s3_rows = [s3_row("ListBuckets"), s3_row("GetBucketAcl", supported=False)]
+        self.catalog = catalog_operations()
+
+    def errors(self, protocols):
+        return validate_protocols(protocols, self.s3_rows, self.catalog)
+
+    def positive(self, **capture_overrides):
+        protocols = cleared_protocols()
+        authorized_capture(protocols)
+        if capture_overrides:
+            protocols["graphql"]["schema_evidence"]["authorized_introspection"].update(capture_overrides)
+        return protocols
+
+    def test_complete_synthetic_authorization_positive(self):
+        protocols = self.positive()
+        self.assertEqual([], self.errors(protocols))
+        self.assertEqual(1, protocols["graphql"]["verified"])
+
+    def test_schema_capture_only_is_discovery_not_capability(self):
+        protocols = cleared_protocols()
+        authorized_capture(protocols, with_capability=False)
+        self.assertEqual([], self.errors(protocols))
+        self.assertEqual(0, protocols["graphql"]["verified"])
+
+    def test_record_id_must_be_a_unique_non_empty_string(self):
+        for value in (None, "", 42, True, ["synthetic-acceptance-1"]):
+            protocols = self.positive()
+            protocols["graphql"]["capability_acceptance"][0]["record_id"] = value
+            errors = self.errors(protocols)
+            self.assertTrue(any("record_id" in error for error in errors), (value, errors))
+        protocols = self.positive()
+        protocols["graphql"]["capability_acceptance"].append(
+            copy.deepcopy(protocols["graphql"]["capability_acceptance"][0])
+        )
+        protocols["graphql"]["verified"] = 2
+        errors = self.errors(protocols)
+        self.assertTrue(any("duplicate" in error for error in errors), errors)
+
+    def test_query_scope_must_reference_the_captured_matrix(self):
+        cases = (
+            {"dataset": True, "fields": [None], "query_kinds": 42},
+            {"dataset": "ghost_dataset", "fields": ["synthetic_field"], "query_kinds": ["timeseries"]},
+            {"dataset": "synthetic_dataset", "fields": ["ghost_field"], "query_kinds": ["timeseries"]},
+            {"dataset": "synthetic_dataset", "fields": ["synthetic_field"], "query_kinds": ["ghost_kind"]},
+            {"dataset": "synthetic_dataset", "fields": [], "query_kinds": ["timeseries"]},
+        )
+        for scope in cases:
+            protocols = self.positive()
+            protocols["graphql"]["capability_acceptance"][0]["query_scope"] = scope
+            errors = self.errors(protocols)
+            self.assertTrue(any("query_scope" in error for error in errors), (scope, errors))
+
+    def test_schema_matrix_counts_must_match_the_listed_datasets(self):
+        for overrides in (
+            {"dataset_count": True},
+            {"field_count": -2},
+            {"datasets": "opaque"},
+            {"dataset_count": 3},
+            {"field_count": 5},
+            {"datasets": [{"dataset": "synthetic_dataset", "fields": ["synthetic_field", "extra"]}]},
+        ):
+            protocols = self.positive()
+            protocols["graphql"].update(overrides)
+            errors = self.errors(protocols)
+            self.assertTrue(errors, overrides)
+
+    def test_capture_dates_must_be_real_utc_calendar_dates(self):
+        for value in ("2026-99-99T99:99:99Z", "2026-02-30T00:00:00Z", "2026-10-08T00:00:00", "not-a-time"):
+            errors = self.errors(self.positive(captured_at=value))
+            self.assertTrue(any("captured_at" in error for error in errors), (value, errors))
+        protocols = self.positive()
+        protocols["graphql"]["capability_acceptance"][0]["captured_at"] = "2026-13-01T00:00:00Z"
+        errors = self.errors(protocols)
+        self.assertTrue(any("captured_at" in error for error in errors), errors)
+
+    def test_capture_authority_must_link_the_authorized_environment(self):
+        for value in ("different-unlinked-synthetic-approval", "", None):
+            errors = self.errors(self.positive(authorized_by=value))
+            self.assertTrue(any("authorized_by" in error for error in errors), (value, errors))
+
+    def test_clearance_records_must_be_structured(self):
+        for record in ({"opaque": True}, {}, {"reference": "synthetic"}, {"reference": "x", "date": "not-a-date"}):
+            protocols = cleared_protocols()
+            authorized_capture(protocols)
+            for blocker in protocols["blockers"]:
+                blocker["clearance_record"] = record
+            errors = self.errors(protocols)
+            self.assertTrue(any("clearance_record" in error for error in errors), (record, errors))
+
+    def test_capture_matrix_must_be_a_typed_dataset_list(self):
+        for value in ("opaque", [], [{"dataset": ""}], [{"dataset": "synthetic_dataset"}], [{"dataset": "a", "fields": []}]):
+            errors = self.errors(self.positive(datasets=value))
+            self.assertTrue(any("datasets" in error for error in errors), (value, errors))
+
+
+class ContextAndDenominatorTest(unittest.TestCase):
+    """R2: explicit context, non-REST denominators and unit definitions."""
+
+    def setUp(self):
+        self.s3_rows = [s3_row("ListBuckets"), s3_row("GetBucketAcl", supported=False)]
+        self.catalog = catalog_operations()
+        self.protocols = protocols_fixture(self.s3_rows)
+
+    def test_explicit_empty_context_fails_closed(self):
+        protocols = copy.deepcopy(self.protocols)
+        protocols["realtime"]["protocols"][0]["session_operations"][0].update(
+            operation_id="ghost-session", method="POST", path="/ghost"
+        )
+        errors = validate_protocols(protocols, self.s3_rows, context={})
+        self.assertTrue(any("ghost-session" in error for error in errors), errors)
+        protocols = copy.deepcopy(self.protocols)
+        protocols["denominators"][0]["count"] = 3732
+        errors = validate_protocols(protocols, self.s3_rows, context={})
+        self.assertTrue(any("rest" in error for error in errors), errors)
+
+    def test_context_must_carry_operations_and_rest_count(self):
+        for context in ({}, {"operations": []}, {"rest_operations": 3659}, {"operations": "x", "rest_operations": 1}):
+            errors = validate_protocols(self.protocols, self.s3_rows, context=context)
+            self.assertTrue(errors, context)
+
+    def test_malformed_pinned_context_json_fails_readably(self):
+        from unittest import mock
+
+        original = pathlib.Path.read_text
+
+        def fake_read(path, *args, **kwargs):
+            if pathlib.Path(path).name == "snapshot.json":
+                return "[]"
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(pathlib.Path, "read_text", fake_read):
+            errors = validate_protocols(self.protocols, self.s3_rows)
+        self.assertTrue(errors)
+        self.assertTrue(all(isinstance(error, str) for error in errors))
+
+    def test_s3_denominator_must_not_recount_rest_operations(self):
+        protocols = copy.deepcopy(self.protocols)
+        protocols["denominators"][1]["operation_ids"] = ["zones-get"]
+        errors = validate_protocols(protocols, self.s3_rows, self.catalog)
+        self.assertTrue(any("zones-get" in error for error in errors), errors)
+
+    def test_graphql_denominator_count_must_match_a_single_unit(self):
+        protocols = cleared_protocols()
+        authorized_capture(protocols)
+        protocols["denominators"][2].update(count=3732, status="verified")
+        errors = validate_protocols(protocols, self.s3_rows, self.catalog)
+        self.assertTrue(any("graphql" in error for error in errors), errors)
+        protocols = cleared_protocols()
+        authorized_capture(protocols)
+        protocols["denominators"][2].update(count=1, status="verified", unit="datasets")
+        self.assertEqual([], validate_protocols(protocols, self.s3_rows, self.catalog))
+
+
+class PrivacyHardeningTest(unittest.TestCase):
+    """R3: no credential material in the registry and no payload echo in errors."""
+
+    def setUp(self):
+        self.s3_rows = [s3_row("ListBuckets"), s3_row("GetBucketAcl", supported=False)]
+        self.catalog = catalog_operations()
+        self.protocols = protocols_fixture(self.s3_rows)
+
+    def errors(self, **overrides):
+        protocols = copy.deepcopy(self.protocols)
+        protocols["environments"][0].update(overrides)
+        return validate_protocols(protocols, self.s3_rows, self.catalog)
+
+    def test_private_key_material_and_config_paths_are_rejected(self):
+        for value in (
+            "-----BEGIN PRIVATE KEY-----\nsynthetic-placeholder\n-----END PRIVATE KEY-----",
+            "credential file at /home/synthetic/.aws/config",
+            "see /home/synthetic/.ssh/id_ed25519",
+            "token in ~/.config/gcloud/credentials.db",
+        ):
+            errors = self.errors(notes=value)
+            self.assertTrue(errors, value)
+
+    def test_error_messages_do_not_echo_untrusted_payloads(self):
+        marker = "synthetic-marker-payload"
+        errors = self.errors(label={"privateKey": marker})
+        self.assertTrue(errors)
+        self.assertTrue(all(marker not in error for error in errors), errors)
+
+    def test_public_templates_and_categories_still_pass(self):
+        errors = self.errors(
+            notes="credential type only; public host https://{stream_id}.k2.cloudflarestorage.com and https://api.cloudflare.com/client/v4",
+            permission_categories=["r2_s3_access_key_type_only"],
+            allowed_action_categories=["read_only_search"],
+        )
+        self.assertEqual([], errors)
+
+
+class S3InventoryTest(unittest.TestCase):
+    """R4: the pinned inventory, not a self-made URL, proves S3 identity and support."""
+
+    def setUp(self):
+        self.s3_rows = [s3_row("ListBuckets"), s3_row("GetBucketAcl", supported=False)]
+        self.catalog = catalog_operations()
+        self.protocols = protocols_fixture(self.s3_rows)
+
+    def errors(self, rows, protocols=None):
+        return validate_protocols(protocols or self.protocols, rows, self.catalog)
+
+    def test_unknown_identity_with_self_consistent_references_is_rejected(self):
+        rows = copy.deepcopy(self.s3_rows)
+        rows[0].update(
+            operation="SyntheticUnknown",
+            aws_operation_reference="https://docs.aws.amazon.com/AmazonS3/latest/API/API_SyntheticUnknown.html",
+            source_quote_ref="s3-compat table row SyntheticUnknown Feature column",
+        )
+        errors = self.errors(rows)
+        self.assertTrue(any("SyntheticUnknown" in error for error in errors), errors)
+
+    def test_swapped_support_flags_are_rejected_even_with_equal_counts(self):
+        rows = copy.deepcopy(self.s3_rows)
+        first, second = rows[0], rows[1]
+        first.update(
+            cloudflare_supports_operation="false",
+            flarego_status="provider_unsupported",
+            verification_status="provider_unsupported",
+            acceptance_target_level="n/a",
+            test_prerequisites="",
+        )
+        second.update(
+            cloudflare_supports_operation="true",
+            flarego_status="not_implemented",
+            verification_status="awaiting_authorized_environment",
+            acceptance_target_level="L2",
+            test_prerequisites="synthetic-prerequisites",
+        )
+        errors = self.errors(rows)
+        self.assertTrue(any("ListBuckets" in error for error in errors), errors)
+
+    def test_feature_content_must_match_the_pinned_inventory(self):
+        rows = copy.deepcopy(self.s3_rows)
+        self.assertEqual([], self.errors(rows))
+        rows = copy.deepcopy(self.s3_rows)
+        rows[1]["vendor_unsupported_features"] = "x-amz-expected-bucket-owner | x-amz-invented-parameter"
+        errors = self.errors(rows)
+        self.assertTrue(errors)
+        rows = copy.deepcopy(self.s3_rows)
+        rows[0]["vendor_supported_features"] = "x-amz-storage-class"
+        self.assertTrue(self.errors(rows))
+
+    def test_s3_source_section_must_match_the_pinned_source(self):
+        for overrides in (
+            {"name": "ghost"},
+            {"commit": "opaque"},
+            {"sha256": "opaque"},
+            {"url": "https://example.invalid/opaque"},
+        ):
+            protocols = copy.deepcopy(self.protocols)
+            protocols["s3"]["source"].update(overrides)
+            errors = self.errors(self.s3_rows, protocols)
+            self.assertTrue(errors, overrides)
+
+
+class BatchFactTest(unittest.TestCase):
+    """R5: batch semantics must match the pinned schema description."""
+
+    def test_real_batch_boundaries_match_the_pinned_facts(self):
+        protocols = json.loads(PROTOCOLS.read_text(encoding="utf-8"))
+        entry = next(
+            item
+            for item in protocols["p1_p2_admission"]["p2_candidates"]
+            if item["operation_id"] == "dns-records-for-a-zone-batch-dns-records"
+        )
+        impact = entry["impact_boundary"]
+        reconciliation = entry["reconciliation_boundary"]
+        # Pinned schema fact: one database transaction, non-atomic propagation.
+        self.assertIn("database transaction", impact.lower())
+        self.assertIn("传播", impact)
+        self.assertIn("不是原子", impact)
+        self.assertNotIn("部分成功", impact)
+        self.assertNotIn("混合状态", impact)
+        self.assertIn("unknown", reconciliation.lower())
+        self.assertIn("传播", reconciliation)
+        self.assertIn("no changes applied", reconciliation)
+        for phrase in ("DELETES", "PATCHES", "PUTS", "POSTS"):
+            self.assertIn(phrase, entry["confirmation_boundary"])
+        self.assertFalse(entry["auto_replay"])
+        if PINNED_SCHEMA.exists():
+            schema = json.loads(PINNED_SCHEMA.read_text(encoding="utf-8"))
+            description = schema["paths"]["/zones/{zone_id}/dns_records/batch"]["post"]["description"]
+            self.assertIn("single database transaction", description)
+            self.assertIn("propagation of changes is not atomic", description)
+            for phrase in ("Deletes", "Patches", "Puts", "Posts"):
+                self.assertIn(phrase, description)
+
+
 class RealProtocolLedgerTest(unittest.TestCase):
     def setUp(self):
         if not PROTOCOLS.exists():
@@ -994,11 +1326,25 @@ class RealProtocolLedgerTest(unittest.TestCase):
         for expected in ("registrar_sandbox", "test_zone_dns", "enterprise_preview", "graphql_schema_capture", "k2_stream_host"):
             self.assertIn(expected, labels)
 
+    def test_real_s3_rows_match_the_frozen_source_inventory(self):
+        """Runs without the ignored pinned table, so a clean checkout is not vacuous."""
+        self.assertEqual(73, len(S3_SOURCE_INVENTORY))
+        self.assertEqual(26, sum(1 for supported, _ in S3_SOURCE_INVENTORY.values() if supported))
+        rows = {row["operation"]: row for row in self.s3_rows}
+        self.assertEqual(sorted(S3_SOURCE_INVENTORY), sorted(rows))
+        for name, (supported, digest) in S3_SOURCE_INVENTORY.items():
+            row = rows[name]
+            self.assertEqual("true" if supported else "false", row["cloudflare_supports_operation"], name)
+            self.assertEqual(digest, s3_feature_digest(row), name)
+            self.assertEqual(S3_DOC_SHA256, row["source_sha256"], name)
+            self.assertEqual(S3_DOC_COMMIT, row["source_commit"], name)
+
     def test_real_s3_feature_lists_match_the_pinned_table_exactly(self):
         table = parse_pinned_s3_table()
         if not table:
-            self.skipTest("pinned S3 compatibility table not present")
+            self.skipTest("pinned S3 compatibility table not present locally")
         self.assertEqual(73, len(table))
+        self.assertEqual(S3_DOC_SHA256, hashlib.sha256(S3_DOC.read_bytes()).hexdigest())
         mismatches = []
         for row in self.s3_rows:
             expected = table[row["operation"]]
@@ -1010,6 +1356,18 @@ class RealProtocolLedgerTest(unittest.TestCase):
                 actual = [item.strip() for item in row[field].split(" | ") if item.strip()]
                 if actual != expected[key]:
                     mismatches.append((row["operation"], field, expected[key], actual))
+            digest = hashlib.sha256(
+                "|".join(
+                    [
+                        ",".join(expected["supported"]),
+                        ",".join(expected["unsupported"]),
+                        ",".join(expected["experimental"]),
+                    ]
+                ).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(
+                S3_SOURCE_INVENTORY[row["operation"]][1], digest, row["operation"]
+            )
         self.assertEqual([], mismatches)
         rows = {row["operation"]: row for row in self.s3_rows}
         self.assertIn(
@@ -1022,8 +1380,6 @@ class RealProtocolLedgerTest(unittest.TestCase):
         for row in self.s3_rows:
             combined = row["vendor_supported_features"] + row["vendor_unsupported_features"]
             self.assertNotIn("\ufe0f", combined, row["operation"])
-            self.assertEqual(S3_DOC_SHA256, row["source_sha256"], row["operation"])
-            self.assertEqual(S3_DOC_COMMIT, row["source_commit"], row["operation"])
             self.assertIn(row["operation"], row["source_quote_ref"], row["operation"])
             self.assertIn(f"/API_{row['operation']}.html", row["aws_operation_reference"])
 
@@ -1045,6 +1401,8 @@ class RealProtocolLedgerTest(unittest.TestCase):
                 self.assertIn(value, row, environment["environment_id"])
             for blocker in environment["blockers"]:
                 self.assertIn(blocker["code"], text, environment["environment_id"])
+            for category in environment["allowed_action_categories"] + environment["permission_categories"]:
+                self.assertIn(category, row, environment["environment_id"])
 
     def test_real_live_tail_facts_match_the_schema(self):
         entry = next(

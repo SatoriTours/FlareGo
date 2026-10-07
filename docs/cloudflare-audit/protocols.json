@@ -1060,9 +1060,9 @@
         "auto_replay": false,
         "readback_required": true,
         "proposed": true,
-        "impact_boundary": "批量写入不是原子事务，部分成功/部分失败会留下混合状态",
-        "confirmation_boundary": "需用户确认整批内容与预期结果，先做预览",
-        "reconciliation_boundary": "逐项回读核对，部分失败必须逐条处理，禁止整体重放",
+        "impact_boundary": "固定 schema 明确整个 batch 在单个 database transaction 中执行，但变更传播不是原子：分布式 KV 逐键传播，边缘可能短暂不一致",
+        "confirmation_boundary": "需用户确认整批内容，并确认固定执行顺序 DELETES→PATCHES→PUTS→POSTS；先做预览与最小作用域/配额核对",
+        "reconciliation_boundary": "区分三种结果：请求被整体拒绝（no changes applied）、结果 unknown（回读核对，不得重放）、事务已提交但传播未完成（等待传播并回读）。不得把边缘/超时不一致当成数据库部分落盘而逐条重放写入",
         "work_package": "P2-T5",
         "review_status": "candidate_pending_policy_and_account_review"
       },
