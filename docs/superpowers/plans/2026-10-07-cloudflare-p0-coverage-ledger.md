@@ -105,17 +105,19 @@
 - CLI：`diff --old PATH --new PATH --output PATH`；`check` 只验证固定基线及已评审文件，不写回它们。
 - 直接／间接引用的结构变化必须检测；使用规范化、循环安全的 schema graph fingerprint，不仅比较 `$ref` 字符串。
 
-- [ ] **Step 1：写失败测试。**
+- [x] **Step 1：写失败测试。**
   ```python
   def test_referenced_body_change_is_reported(self):
       delta = diff_schemas(self.old_schema, self.schema_with_changed_component)
       self.assertIn('example-create', delta['changed'])
   ```
   另测改名导致新增／移除、权限扩张、非 JSON body、新方法、循环引用、仅 key 顺序改变无结构差异。
-- [ ] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_diff.py' -v`。
-- [ ] **Step 3：实现 diff 与 CI。** PR／分支执行离线单测与快照一致性检查；下载仅使用固定 raw GitHub URL，缓存以 SHA 为键。对新版本的比较是显式手动输入候选 commit，不自动改基线。CI 仅 `contents: read`，不引入 cloud secrets，不修改 android.yml 的发布语义。
-- [ ] **Step 4：运行 GREEN。** 全部离线测试；同版本 diff added／removed／changed 都为空；模拟 schema 变更产生报告且固定 manifest 无变化。检查工作流没有发布／Tag 写权限。
-- [ ] **Step 5：提交。** `git commit -m "ci: review Cloudflare schema changes without enabling actions"`。
+- [x] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_diff.py' -v`。
+- [x] **Step 3：实现 diff 与 CI。** PR／分支执行离线单测与快照一致性检查；下载仅使用固定 raw GitHub URL，缓存以 SHA 为键。对新版本的比较是显式手动输入候选 commit，不自动改基线。CI 仅 `contents: read`，不引入 cloud secrets，不修改 android.yml 的发布语义。
+- [x] **Step 4：运行 GREEN。** 全部离线测试；同版本 diff added／removed／changed 都为空；模拟 schema 变更产生报告且固定 manifest 无变化。检查工作流没有发布／Tag 写权限。
+- [x] **Step 5：提交。** `git commit -m "ci: review Cloudflare schema changes without enabling actions"`。
+
+**Task 3 验收记录：**实现 `30d0a29`、修复 `66f48c3` 已通过协调会话独立限范围规格／质量验收。207 项工具测试＋10 项既有 CI 测试通过；报告原子写入／完整基线保护、两侧所有操作的引用校验、多层参数 override、服务器与安全上下文回归通过。真实固定 Schema 同版本 diff 全空；合成深层引用变更影响 33 项、K2 host 变更仅影响 1 项；SHA／计数／catalog 与 5,323,243 字节 ledger 重放不变。当前修复 HEAD 的临时 checkout 执行实际 workflow shell blocks（仅下载替换为本地 pin／合成候选），全部 9 步骤通过、5 项固定 Schema 回归不跳过；真实写回与污染缓存负例被拒绝，既有 gradlew EOL 字节保留。CI 仅只读，缓存为同 job 的 commit＋SHA 复用，不声称持久跨运行缓存。远程 Actions、真实候选下载、Gradle／Android／真实云验收均未执行。
 
 ## Task 4：独立协议范围与试点准入
 
@@ -150,4 +152,4 @@
 
 **执行依赖：**P0 Task 1 → Task 2；Task 3 可在 Task 1 后并行，Task 4 与 Task 2 共用 review.py，必须由同一集成负责人合并。
 
-**执行状态：**Task 1–2 已验收；Task 3–4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
+**执行状态：**Task 1–3 已验收；Task 4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
