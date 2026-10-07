@@ -1,16 +1,15 @@
-# FlareGo
+<p align="center">
+  <img src="docs/brand/flarego-icon.svg" width="88" height="88" alt="FlareGo 图标" />
+</p>
 
-**在手机上管理你的云资源。**
+<h1 align="center">FlareGo</h1>
 
-[![Android 构建](https://github.com/SatoriTours/FlareGo/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/SatoriTours/FlareGo/actions/workflows/android.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-315d43.svg)](app/build.gradle.kts)
+<p align="center">手机上的多云资源管理助手。</p>
 
-FlareGo 是一款面向个人用户的多云资源管理 App。首期接入 Cloudflare，将域名、DNS、边缘计算、存储目录和账单集中到统一的原生界面；后续通过独立适配器扩展 AWS、Google Cloud、Microsoft Azure、阿里云和腾讯云。
-
-项目采用 Kotlin Multiplatform 与 Compose Multiplatform。目前提供 **Android 客户端**，业务核心同时支持 Android 和 JVM；其他平台入口及云厂商适配器仍在规划中。
-
-[获取 APK](#获取-apk) · [快速开始](#快速开始) · [功能范围](#功能范围) · [架构](#架构) · [本地开发](#本地开发) · [构建与发布](#构建与发布)
+<p align="center">
+  <a href="https://github.com/SatoriTours/FlareGo/releases/latest">下载 APK</a> ·
+  <a href="https://github.com/SatoriTours/FlareGo/releases">版本列表</a>
+</p>
 
 ## 界面预览
 
@@ -87,6 +86,8 @@ Account ID 是 32 位十六进制字符串。建议从读取权限开始：账�
 ## 架构
 
 采用 **Clean Architecture + Ports & Adapters**：共享业务定义端口，云厂商和 Android 平台提供实现，UI 消费应用状态与操作意图。
+
+项目采用 Kotlin Multiplatform 与 Compose Multiplatform。目前提供 Android 客户端，业务核心同时支持 Android 和 JVM；其他平台入口及云厂商适配器仍在规划中。
 
 ```mermaid
 flowchart TD
