@@ -169,6 +169,19 @@ S3 操作清单取自官方文档仓库固定提交 `e3a9cf758c28273178d56918399
 
 P8 尾部长尾族已按固定 schema 的 route family 分到具体责任包：`field-extractors-alpha`（3）、`account-reporting-control-plane`（6）、`k2-streams-beta-control-data`（14，其中 6 项 account 作用域控制面、8 项独立 stream 主机数据面保持 `unknown` 作用域并记录 host 证据）。这只是责任归属，不代表厂商资格、套餐或用户排除已批准。
 
+### 3.5 独立协议台账与验收环境登记（P0 复核）
+
+REST 之外的能力不进入 REST 分母，也不与 REST 相加：
+
+- [protocols.json](cloudflare-audit/protocols.json)：机器可验证的协议台账，由 `validate_protocols` 校验；`denominators` 中 REST（3,659）、S3（73）、GraphQL、realtime 各自 `independent`，禁止 `total_coverage`／合并分母。
+- [r2-s3-operations.csv](cloudflare-audit/r2-s3-operations.csv)：73 个 S3 操作身份、顺序与 26／47 厂商判定不变，新增逐操作参数／特性子集（`vendor_supported_features`／`vendor_unsupported_features`／`feature_groups_reviewed`）、`feature_table_status`、来源引用与 `verification_status`。47 项 `provider_unsupported` 只登记厂商限制，不是 FlareGo 待实现写动作，也不强行给全部 73 项验收目标。
+- GraphQL：单端点 `POST https://api.cloudflare.com/client/v4/graphql`；没有授权 introspection 捕获时 `review_status=awaiting_authorized_schema`，dataset／field 全集保持未知（`null`，不是 0），不发明 dataset／field 名或套餐限额。验收前提包括部分 data + errors、采样与时间窗口、dataset 访问限制，且不得当作计费用量证据。
+- 实时协议：tail／SFU／TURN／MoQ／live input／流式推理等把「REST 会话创建与管理」与「实际连接协议」分开登记；会话端点引用精确 catalog ID 与 METHOD+path（不重复计入非 REST 分母），连接协议、鉴权／主机策略、生命周期与消费者证据各自阻塞。运行时 binding／RPC 不属于手机客户端通用管理 API，需单独桥接评审。
+- K2：14 个控制／数据操作已在 REST 分母；其中 8 项数据面使用独立 stream host `https://{stream_id}.k2.cloudflarestorage.com`，保留 `unknown` stream scope 与独立 host／凭据准入，禁止复用 API 基础主机凭据。
+- [acceptance-environments.md](cloudflare-audit/acceptance-environments.md)：只登记环境标签、套餐类别、允许动作类别、负责人、权限类别、清理责任与状态；不存账号／Zone ID、Token、S3 secret、付款资料、私钥或本机凭据路径。全部真实环境状态为 `awaiting_authorized_environment`。
+
+当前协议计数：S3 73 documented／26 vendor-supported／47 provider-unsupported／0 verified；GraphQL dataset／field 未知且 0 verified；realtime 仅登记会话端点与协议阻塞；`capability_verified` 与 `verified_available` 均为 0。P1 新增 5／P1 兼容 11／P2 候选 54，重叠 5，去重后 65，列表相加 70——列表相加不得当成唯一总数。
+
 ## 4. 必须纠正的 API 边界
 
 ### 4.1 Registrar 不再只是“没有真实注册 API”
@@ -385,15 +398,25 @@ python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_catalog.py
 python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_review.py' -v
 python3 -m tools.cloudflare_audit.cli check --review docs/cloudflare-audit/review.json \
   --catalog docs/cloudflare-audit/endpoints.csv
+python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_protocols.py' -v
+python3 -m tools.cloudflare_audit.cli diff --old docs/cloudflare-audit/pinned-openapi.json \
+  --new /path/to/candidate-openapi.json --output /tmp/cf-schema-diff.json
 ```
 
-`cli check` 只读，不修改 CSV、manifest、review 或产品行为；结构错误非零退出，可用性阻塞与待审数量照实报告而不隐藏。
+`cli check` 与 `cli diff` 只读（`diff` 拒绝写入已评审审计目录或覆盖输入），不修改 CSV、manifest、review 或产品行为；结构错误非零退出，可用性阻塞与待审数量照实报告而不隐藏。`test_protocols.py` 额外校验协议分母独立、GraphQL 未授权状态、S3 参数子集与来源、环境登记无敏感材料，以及 P1／P2 准入列表与已批准 ID 一致且不误求和。
 
 执行阶段增加：固定 Schema 检查、生成代码可重复性、operationId 全归属、能力与风险策略完整性、各产品 mock／sandbox／授权账号测试任务。CI 不含生产 Token，不执行真实扣款或破坏性操作；受控真实账号验收是单独授权作业。
 
 **完成定义：**适配器、权限策略、操作流程、UI、测试、端到端证据、支持矩阵和用户文档同步完成。仅添加函数或入口不算完成。
 
 ## 10. 当前决策与下一步
+
+P0 的两类门禁分开评估，不互相替代：
+
+1. **工程台账门禁**：REST 3,659 项全部有产品、批次、负责人、目标与证据；固定快照可离线复现；台账可由固定 schema 重放；schema 变更生成只读审查差异而不自动改基线。这些已由 Task 1–3 的离线证据支撑。
+2. **真实账号资格门禁**：授权账号、授权 GraphQL schema 捕获、stream-scoped 凭据与 sandbox 环境都尚未提供，因此 `verified_available`／`capability_verified` 保持 0，相关 L2 真实验收保持阻塞；不缩分母、不伪造排除批准、不把未知项降为 L0-only。
+
+P1／P2 的 5／11／54 项准入清单与风险、确认、回读、不自动重放边界已登记在 `protocols.json`，仅供人工审查；其余 3,594 项不因宽泛产品归属提前准入。
 
 推荐采用 **C：协议基础层＋产品模块＋受控原生能力页**，目标为全部合格管理 API 到 L2、高频产品到 L3，保留向全部 L3 扩展的独立子项目路线。
 

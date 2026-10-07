@@ -2048,3 +2048,587 @@ def cross_check_schema(schema: dict, catalog_operations: list[dict], review: dic
     for operation_id in sorted(set(enumerated) - set(entries)):
         errors.append(f"schema operation has no review entry: {operation_id}")
     return errors
+
+
+# --------------------------------------------------------------------------- #
+# Independent protocol ledger (Task 4)
+# --------------------------------------------------------------------------- #
+
+PROTOCOLS_FORMAT = "flarego.cloudflare-audit.protocols/1"
+S3_VERIFICATION_STATUSES = ("awaiting_authorized_environment", "provider_unsupported")
+GRAPHQL_REVIEW_STATUSES = ("awaiting_authorized_schema", "verified")
+ENVIRONMENT_STATUSES = ("awaiting_authorized_environment", "available", "blocked")
+ADMISSION_RISKS = ("low", "medium", "high", "unknown")
+FORBIDDEN_COMBINED_KEYS = (
+    "total_coverage",
+    "combined_denominator",
+    "overall_coverage",
+    "combined_total",
+)
+FORBIDDEN_DENOMINATOR_NAMES = ("total", "combined", "overall", "all")
+NON_REST_DENOMINATORS = ("s3", "graphql", "realtime")
+ENVIRONMENT_FIELDS = (
+    "environment_id",
+    "label",
+    "plan",
+    "allowed_action_categories",
+    "owner_role",
+    "permission_categories",
+    "cleanup_responsibility",
+    "status",
+    "blockers",
+    "notes",
+)
+ADMISSION_FIELDS = (
+    "operation_id",
+    "method",
+    "path",
+    "source",
+    "risk",
+    "confirmation_required",
+    "verification_boundary",
+    "proposed",
+)
+S3_REQUIRED_FIELDS = (
+    "owner_role",
+    "phase",
+    "source_commit",
+    "source_sha256",
+    "source_quote_ref",
+    "feature_table_status",
+    "acceptance_target_level",
+    "verification_status",
+)
+SENSITIVE_KEY_SUBSTRINGS = (
+    "secret",
+    "password",
+    "private_key",
+    "credential_path",
+    "credentials_path",
+    "payment",
+    "card_number",
+    "bearer",
+    "authorization",
+)
+SENSITIVE_KEYS = frozenset(
+    {
+        "token",
+        "api_token",
+        "token_value",
+        "access_key",
+        "access_key_id",
+        "account_id",
+        "zone_id",
+        "session_url",
+        "cookie",
+        "signing_key",
+        "credential_value",
+        "client_secret",
+    }
+)
+CREDENTIAL_VALUE_PATTERNS = (
+    re.compile(r"^ey[A-Za-z0-9_-]{8,}\."),
+    re.compile(r"^AKIA[0-9A-Z]{16}$"),
+    re.compile(r"^[0-9a-f]{32}$"),
+    re.compile(r"^[A-Za-z0-9+/]{40,}={0,2}$"),
+    re.compile(r"^(/|~)"),
+    re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"),
+    re.compile(r"^Bearer\s+\S{8,}$", re.IGNORECASE),
+)
+
+
+def _protocol_dict(value: Any, label: str, errors: list[str]) -> dict:
+    if isinstance(value, dict):
+        return value
+    errors.append(f"{label} must be an object, got {type(value).__name__}")
+    return {}
+
+
+def _protocol_list(value: Any, label: str, errors: list[str]) -> list:
+    if isinstance(value, list):
+        return value
+    errors.append(f"{label} must be a list, got {type(value).__name__}")
+    return []
+
+
+def _protocol_text(value: Any, label: str, errors: list[str]) -> str:
+    if isinstance(value, str) and value.strip():
+        return value
+    errors.append(f"{label} must be a non-empty string, got {value!r}")
+    return ""
+
+
+def _csv_flag(value: Any) -> bool | None:
+    """Strict CSV boolean: only the exact strings ``true``/``false`` count."""
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return None
+
+
+def _sensitive_findings(label: str, node: Any) -> list[str]:
+    """Recursively report credential-shaped keys or values in a registry entry."""
+    findings: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            name = str(key).lower()
+            if name in SENSITIVE_KEYS or any(part in name for part in SENSITIVE_KEY_SUBSTRINGS):
+                findings.append(f"{label}.{key}: sensitive key must not be recorded in the environment registry")
+                continue
+            findings.extend(_sensitive_findings(f"{label}.{key}", value))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            findings.extend(_sensitive_findings(f"{label}[{index}]", value))
+    elif isinstance(node, str):
+        for pattern in CREDENTIAL_VALUE_PATTERNS:
+            if pattern.match(node):
+                findings.append(
+                    f"{label}: value looks like credential material or a local path and must not be recorded"
+                )
+                break
+    return findings
+
+
+def _catalog_index(catalog_operations: list[dict] | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
+    if catalog_operations is None:
+        return None
+    index: dict[str, tuple[str, str]] = {}
+    try:
+        normalized = normalize_operations(catalog_operations)
+    except ValueError as error:
+        errors.append(f"catalog operations are not usable: {error}")
+        return None
+    for operation in normalized:
+        index[operation["operation_id"]] = (operation["method"], operation["path"])
+    return index
+
+
+def _check_operation_reference(
+    entry: Any, label: str, catalog: dict[str, tuple[str, str]] | None, errors: list[str]
+) -> str:
+    if not isinstance(entry, dict):
+        errors.append(f"{label} must be an object, got {type(entry).__name__}")
+        return ""
+    operation_id = entry.get("operation_id")
+    if not isinstance(operation_id, str) or not operation_id:
+        errors.append(f"{label}.operation_id must be a non-empty string")
+        return ""
+    if catalog is None:
+        return operation_id
+    known = catalog.get(operation_id)
+    if known is None:
+        errors.append(f"{label}: unknown operationId {operation_id!r} is not present in the catalog")
+        return operation_id
+    declared = (entry.get("method"), entry.get("path"))
+    if declared != known:
+        errors.append(
+            f"{label}: operationId {operation_id!r} has a different METHOD+path binding: "
+            f"{declared[0]} {declared[1]} vs catalog {known[0]} {known[1]}"
+        )
+    return operation_id
+
+
+def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
+    facts: dict[str, Any] = {
+        "documented": 0,
+        "vendor_supported": 0,
+        "provider_unsupported": 0,
+        "names": [],
+        "verified": 0,
+    }
+    seen: dict[str, int] = {}
+    for index, row in enumerate(_protocol_list(rows, "s3_rows", errors)):
+        label = f"s3_rows[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{label} must be an object, got {type(row).__name__}")
+            continue
+        name = row.get("operation")
+        if not isinstance(name, str) or not name:
+            errors.append(f"{label} has no operation name")
+            continue
+        if name in seen:
+            errors.append(
+                f"duplicate S3 operation {name!r} in s3_rows (indexes {seen[name]} and {index})"
+            )
+            continue
+        seen[name] = index
+        facts["documented"] += 1
+        facts["names"].append(name)
+        supported = _csv_flag(row.get("cloudflare_supports_operation"))
+        if supported is None:
+            errors.append(
+                f"{label} {name}: cloudflare_supports_operation must be exactly 'true' or 'false', "
+                f"got {row.get('cloudflare_supports_operation')!r}"
+            )
+            continue
+        if supported:
+            facts["vendor_supported"] += 1
+        else:
+            facts["provider_unsupported"] += 1
+        for field in S3_REQUIRED_FIELDS:
+            if not row.get(field):
+                errors.append(f"{label} {name}: {field} is required")
+        status = row.get("verification_status")
+        if status not in S3_VERIFICATION_STATUSES:
+            errors.append(
+                f"{label} {name}: verification_status={status!r} must be one of "
+                f"{', '.join(S3_VERIFICATION_STATUSES)}"
+            )
+        if not supported:
+            if status != "provider_unsupported":
+                errors.append(
+                    f"{label} {name}: provider-unsupported rows must keep "
+                    "verification_status=provider_unsupported"
+                )
+            if row.get("acceptance_target_level") != "n/a":
+                errors.append(
+                    f"{label} {name}: provider-unsupported rows are not FlareGo implementation "
+                    "targets and must not carry an acceptance target level"
+                )
+            if row.get("test_prerequisites"):
+                errors.append(
+                    f"{label} {name}: provider-unsupported rows must not carry test prerequisites; "
+                    "they are vendor limitations, not pending FlareGo work"
+                )
+        else:
+            if row.get("acceptance_target_level") != "L2":
+                errors.append(f"{label} {name}: vendor-supported rows need an explicit L2 target")
+            if not row.get("test_prerequisites"):
+                errors.append(f"{label} {name}: vendor-supported rows need test prerequisites")
+        for field in ("flarego_implemented", "verified"):
+            flag = _csv_flag(row.get(field))
+            if flag is None:
+                errors.append(f"{label} {name}: {field} must be exactly 'true' or 'false'")
+            elif flag:
+                errors.append(f"{label} {name}: {field}=true is not supported by any pinned evidence")
+        if row.get("feature_table_status") == "not_listed_in_pinned_table" and (
+            row.get("vendor_supported_features") or row.get("vendor_unsupported_features")
+        ):
+            errors.append(
+                f"{label} {name}: feature_table_status says the pinned table lists no features, "
+                "so no feature names may be recorded"
+            )
+        if _csv_flag(row.get("verified")) is True:
+            evidence = row.get("verification_evidence")
+            if not isinstance(evidence, dict) or not evidence.get("environment") or not evidence.get("source"):
+                errors.append(
+                    f"{label} {name}: verification_evidence must be a structured record with "
+                    "environment and source before verified can be true"
+                )
+            else:
+                facts["verified"] += 1
+    return facts
+
+
+def validate_protocols(
+    protocols: dict, s3_rows: list[dict], catalog_operations: list[dict] | None = None
+) -> list[str]:
+    """Validate the independent protocol ledger. Read-only; returns readable errors.
+
+    REST, S3, GraphQL and realtime keep separate denominators and can never be
+    summed into a combined coverage claim. Missing or opaque evidence fails closed
+    instead of becoming positive acceptance, and provider-unsupported S3 rows stay
+    registered without becoming FlareGo implementation targets.
+    """
+    if not isinstance(protocols, dict):
+        return [f"protocols ledger must be an object, got {type(protocols).__name__}"]
+    errors: list[str] = []
+    if protocols.get("format") != PROTOCOLS_FORMAT:
+        errors.append(f"protocols.format must be {PROTOCOLS_FORMAT!r}, got {protocols.get('format')!r}")
+    for key in FORBIDDEN_COMBINED_KEYS:
+        if key in protocols:
+            errors.append(
+                f"protocols must not declare a combined denominator {key!r}; REST, S3, GraphQL and "
+                "realtime stay separate and must not be summed"
+            )
+    catalog = _catalog_index(catalog_operations, errors)
+
+    # --- denominators -------------------------------------------------------
+    denominators = _protocol_list(protocols.get("denominators"), "protocols.denominators", errors)
+    names: list[str] = []
+    for index, denominator in enumerate(denominators):
+        label = f"protocols.denominators[{index}]"
+        entry = _protocol_dict(denominator, label, errors)
+        name = _protocol_text(entry.get("name"), f"{label}.name", errors)
+        if name:
+            if name in names:
+                errors.append(f"{label}.name duplicate denominator {name!r}")
+            names.append(name)
+            if name in FORBIDDEN_DENOMINATOR_NAMES or any(
+                word in name for word in FORBIDDEN_DENOMINATOR_NAMES
+            ):
+                errors.append(
+                    f"{label}.name {name!r} would combine protocols; keep separate denominators only"
+                )
+        _protocol_text(entry.get("unit"), f"{label}.unit", errors)
+        _protocol_text(entry.get("source"), f"{label}.source", errors)
+        if entry.get("independent") is not True:
+            errors.append(f"{label}.independent must be true for every protocol denominator")
+        if name != "rest" and name in NON_REST_DENOMINATORS and entry.get("operation_ids"):
+            for operation_id in _protocol_list(
+                entry.get("operation_ids"), f"{label}.operation_ids", errors
+            ):
+                if catalog is None or operation_id in catalog:
+                    errors.append(
+                        f"{label}: REST operation {operation_id!r} must not be counted again in the "
+                        f"non-REST {name!r} denominator"
+                    )
+
+    # --- S3 ---------------------------------------------------------------
+    facts = _s3_row_facts(s3_rows, errors)
+    s3 = _protocol_dict(protocols.get("s3"), "protocols.s3", errors)
+    for field in ("documented", "vendor_supported", "provider_unsupported"):
+        if s3.get(field) != facts[field]:
+            errors.append(
+                f"protocols.s3.{field}={s3.get(field)!r} does not match the {facts[field]} derived "
+                "from the S3 rows"
+            )
+    if facts["provider_unsupported"] and not s3.get("provider_unsupported"):
+        errors.append(
+            "protocols.s3 must record the provider_unsupported count; those rows are vendor-"
+            "unsupported, not pending FlareGo work"
+        )
+    if s3.get("verified") != facts["verified"]:
+        errors.append(
+            f"protocols.s3.verified={s3.get('verified')!r} does not match the {facts['verified']} rows "
+            "with structured verification evidence"
+        )
+    source = _protocol_dict(s3.get("source"), "protocols.s3.source", errors)
+    for field in ("name", "commit", "sha256", "url"):
+        _protocol_text(source.get(field), f"protocols.s3.source.{field}", errors)
+    _protocol_text(s3.get("operations_file"), "protocols.s3.operations_file", errors)
+    if not _protocol_list(s3.get("limitations"), "protocols.s3.limitations", errors):
+        errors.append("protocols.s3.limitations must list the preserved vendor limitations")
+    k2 = _protocol_dict(s3.get("k2_stream_host"), "protocols.s3.k2_stream_host", errors)
+    host = _protocol_text(k2.get("host"), "protocols.s3.k2_stream_host.host", errors)
+    if host and "k2.cloudflarestorage.com" not in host:
+        errors.append("protocols.s3.k2_stream_host.host must be the dedicated K2 stream host")
+    if k2.get("rest_denominator") is not True:
+        errors.append("protocols.s3.k2_stream_host.rest_denominator must be true; those operations are REST")
+    k2_operations = _protocol_list(
+        k2.get("rest_operations"), "protocols.s3.k2_stream_host.rest_operations", errors
+    )
+    for index, entry in enumerate(k2_operations):
+        label = f"protocols.s3.k2_stream_host.rest_operations[{index}]"
+        _check_operation_reference(entry, label, catalog, errors)
+        if isinstance(entry, dict) and entry.get("rest_denominator") is not True:
+            errors.append(f"{label}.rest_denominator must be true")
+    _protocol_text(k2.get("acceptance"), "protocols.s3.k2_stream_host.acceptance", errors)
+
+    # --- GraphQL ----------------------------------------------------------
+    graphql = _protocol_dict(protocols.get("graphql"), "protocols.graphql", errors)
+    _protocol_text(graphql.get("endpoint"), "protocols.graphql.endpoint", errors)
+    _protocol_text(graphql.get("transport"), "protocols.graphql.transport", errors)
+    status = graphql.get("review_status")
+    if status not in GRAPHQL_REVIEW_STATUSES:
+        errors.append(
+            f"protocols.graphql.review_status={status!r} must be one of "
+            f"{', '.join(GRAPHQL_REVIEW_STATUSES)}"
+        )
+    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
+    introspection = evidence.get("authorized_introspection")
+    if status == "verified":
+        valid_capture = (
+            isinstance(introspection, dict)
+            and bool(introspection)
+            and bool(introspection.get("environment"))
+            and bool(introspection.get("captured_at"))
+        )
+        if not isinstance(introspection, dict) or not introspection:
+            errors.append(
+                "protocols.graphql schema_evidence.authorized_introspection must be a structured "
+                "capture record before the schema can be verified"
+            )
+        elif not introspection.get("environment") or not introspection.get("captured_at"):
+            errors.append(
+                "protocols.graphql schema_evidence.authorized_introspection needs environment and "
+                "captured_at"
+            )
+        if not graphql.get("verified"):
+            errors.append("protocols.graphql verified status requires a positive verified count")
+        if not valid_capture:
+            for field in ("dataset_count", "field_count"):
+                if graphql.get(field) is not None:
+                    errors.append(
+                        f"protocols.graphql.{field} must stay unknown (null) while the authorized "
+                        "schema capture is absent"
+                    )
+            if graphql.get("datasets"):
+                errors.append(
+                    "protocols.graphql.datasets must stay empty while the authorized schema capture "
+                    "is absent"
+                )
+    else:
+        if introspection is not None:
+            errors.append(
+                "protocols.graphql must not carry an introspection record while awaiting the "
+                "authorized schema"
+            )
+        if graphql.get("datasets"):
+            errors.append(
+                "protocols.graphql.datasets must stay empty: no dataset or field name may be invented "
+                "without authorized introspection"
+            )
+        for field in ("dataset_count", "field_count"):
+            if graphql.get(field) is not None:
+                errors.append(
+                    f"protocols.graphql.{field} must stay unknown (null) while awaiting the authorized "
+                    "schema; 0 would claim the schema was enumerated"
+                )
+        if graphql.get("verified") not in (0, None) or (graphql.get("verified") or 0) != 0:
+            errors.append("protocols.graphql.verified must be 0 without authorized schema evidence")
+    if not _protocol_list(graphql.get("acceptance_prerequisites"), "protocols.graphql.acceptance_prerequisites", errors):
+        errors.append("protocols.graphql.acceptance_prerequisites must list the GraphQL-specific gates")
+    for index, family in enumerate(_protocol_list(graphql.get("families"), "protocols.graphql.families", errors)):
+        label = f"protocols.graphql.families[{index}]"
+        entry = _protocol_dict(family, label, errors)
+        for field in ("family", "need", "owner_role", "phase", "target_level", "evidence_status"):
+            _protocol_text(entry.get(field), f"{label}.{field}", errors)
+        if not _protocol_list(entry.get("blockers"), f"{label}.blockers", errors):
+            errors.append(f"{label}.blockers must record the concrete evidence gap")
+
+    # --- realtime ---------------------------------------------------------
+    realtime = _protocol_dict(protocols.get("realtime"), "protocols.realtime", errors)
+    protocols_seen: list[str] = []
+    for index, entry in enumerate(
+        _protocol_list(realtime.get("protocols"), "protocols.realtime.protocols", errors)
+    ):
+        label = f"protocols.realtime.protocols[{index}]"
+        item = _protocol_dict(entry, label, errors)
+        protocol_id = _protocol_text(item.get("protocol_id"), f"{label}.protocol_id", errors)
+        if protocol_id:
+            if protocol_id in protocols_seen:
+                errors.append(f"{label}.protocol_id duplicate {protocol_id!r}")
+            protocols_seen.append(protocol_id)
+        for field in (
+            "connection_protocol",
+            "auth_host_policy",
+            "lifecycle",
+            "owner_role",
+            "phase",
+            "target_level",
+            "enumeration_status",
+        ):
+            _protocol_text(item.get(field), f"{label}.{field}", errors)
+        sessions = _protocol_list(item.get("session_operations"), f"{label}.session_operations", errors)
+        if not sessions:
+            errors.append(f"{label}.session_operations must reference the catalog session operations")
+        for session_index, session in enumerate(sessions):
+            _check_operation_reference(
+                session, f"{label}.session_operations[{session_index}]", catalog, errors
+            )
+        if not _protocol_list(item.get("blockers"), f"{label}.blockers", errors):
+            errors.append(f"{label}.blockers must record the concrete protocol evidence gap")
+        if item.get("verified") not in (0, None):
+            errors.append(f"{label}.verified must stay 0 without protocol evidence")
+
+    # --- environments -----------------------------------------------------
+    environments_seen: list[str] = []
+    for index, entry in enumerate(
+        _protocol_list(protocols.get("environments"), "protocols.environments", errors)
+    ):
+        label = f"protocols.environments[{index}]"
+        item = _protocol_dict(entry, label, errors)
+        for key in item:
+            if key not in ENVIRONMENT_FIELDS:
+                errors.append(
+                    f"{label}.{key} is not part of the environment registry; only labels, plan, "
+                    "allowed action categories, owner, permission categories, cleanup and status "
+                    "may be recorded"
+                )
+        environment_id = _protocol_text(item.get("environment_id"), f"{label}.environment_id", errors)
+        if environment_id:
+            if environment_id in environments_seen:
+                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
+            environments_seen.append(environment_id)
+        _protocol_text(item.get("label"), f"{label}.label", errors)
+        _protocol_text(item.get("plan"), f"{label}.plan", errors)
+        _protocol_text(item.get("owner_role"), f"{label}.owner_role", errors)
+        _protocol_text(item.get("cleanup_responsibility"), f"{label}.cleanup_responsibility", errors)
+        if item.get("status") not in ENVIRONMENT_STATUSES:
+            errors.append(
+                f"{label}.status={item.get('status')!r} must be one of {', '.join(ENVIRONMENT_STATUSES)}"
+            )
+        for field in ("allowed_action_categories", "permission_categories"):
+            values = _protocol_list(item.get(field), f"{label}.{field}", errors)
+            if not values:
+                errors.append(f"{label}.{field} must list at least one category")
+            for value in values:
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"{label}.{field} items must be non-empty strings, got {value!r}")
+        errors.extend(_sensitive_findings(label, item))
+
+    # --- P1/P2 admission --------------------------------------------------
+    admission = _protocol_dict(protocols.get("p1_p2_admission"), "protocols.p1_p2_admission", errors)
+    lists: dict[str, list[str]] = {}
+    for field in ("p1_new", "p1_existing_compat", "p2_candidates"):
+        identifiers: list[str] = []
+        for index, entry in enumerate(
+            _protocol_list(admission.get(field), f"protocols.p1_p2_admission.{field}", errors)
+        ):
+            label = f"protocols.p1_p2_admission.{field}[{index}]"
+            item = _protocol_dict(entry, label, errors)
+            for required in ADMISSION_FIELDS:
+                if required not in item:
+                    errors.append(f"{label}.{required} is required")
+            operation_id = _check_operation_reference(item, label, catalog, errors)
+            if operation_id:
+                if operation_id in identifiers:
+                    errors.append(f"{label}: duplicate operationId {operation_id!r} in {field}")
+                identifiers.append(operation_id)
+            if item.get("risk") not in ADMISSION_RISKS:
+                errors.append(f"{label}.risk={item.get('risk')!r} must be one of {', '.join(ADMISSION_RISKS)}")
+            if not isinstance(item.get("confirmation_required"), bool):
+                errors.append(f"{label}.confirmation_required must be a boolean")
+            _protocol_text(item.get("verification_boundary"), f"{label}.verification_boundary", errors)
+            _protocol_text(item.get("source"), f"{label}.source", errors)
+            if item.get("proposed") is not True:
+                errors.append(f"{label}.proposed must be true; this is a proposal, not an approval")
+        lists[field] = identifiers
+    counts = _protocol_dict(admission.get("counts"), "protocols.p1_p2_admission.counts", errors)
+    for field in ("p1_new", "p1_existing_compat", "p2_candidates"):
+        if counts.get(field) != len(lists.get(field, [])):
+            errors.append(
+                f"protocols.p1_p2_admission.counts.{field}={counts.get(field)!r} does not match the "
+                f"{len(lists.get(field, []))} listed operations"
+            )
+    overlap = sum(
+        1
+        for operation_id in set(lists.get("p1_existing_compat", [])) & set(lists.get("p2_candidates", []))
+    )
+    if counts.get("overlap") != overlap:
+        errors.append(
+            f"protocols.p1_p2_admission.counts.overlap={counts.get('overlap')!r} does not match the "
+            f"computed overlap {overlap}"
+        )
+    union = len(set().union(*[set(value) for value in lists.values()])) if lists else 0
+    if counts.get("unique") != union:
+        errors.append(
+            f"protocols.p1_p2_admission.counts.unique={counts.get('unique')!r} does not match the "
+            f"computed unique operation count {union}; the lists overlap and must not be summed"
+        )
+    if counts.get("sum_of_lists") != sum(len(value) for value in lists.values()):
+        errors.append(
+            f"protocols.p1_p2_admission.counts.sum_of_lists={counts.get('sum_of_lists')!r} does not "
+            "match the total number of listed entries"
+        )
+    policy = _protocol_dict(admission.get("policy"), "protocols.p1_p2_admission.policy", errors)
+    if policy.get("runtime_allowlist") is not False:
+        errors.append(
+            "protocols.p1_p2_admission.policy.runtime_allowlist must be false; admission is a review "
+            "proposal, not a runtime allowlist"
+        )
+
+    # --- global blockers --------------------------------------------------
+    blocker_codes: list[str] = []
+    for index, blocker in enumerate(_protocol_list(protocols.get("blockers"), "protocols.blockers", errors)):
+        label = f"protocols.blockers[{index}]"
+        item = _protocol_dict(blocker, label, errors)
+        code = _protocol_text(item.get("code"), f"{label}.code", errors)
+        if code:
+            if code in blocker_codes:
+                errors.append(f"{label}.code duplicate global blocker {code!r}")
+            blocker_codes.append(code)
+        _protocol_text(item.get("detail"), f"{label}.detail", errors)
+    return errors

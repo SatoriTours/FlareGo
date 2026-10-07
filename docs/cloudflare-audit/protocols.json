@@ -1,0 +1,1591 @@
+{
+  "format": "flarego.cloudflare-audit.protocols/1",
+  "generated_from": {
+    "tool": "tools/cloudflare_audit/review.py validate_protocols",
+    "review_state": "proposed_not_approved",
+    "snapshot": "docs/cloudflare-audit/snapshot.json",
+    "catalog": "docs/cloudflare-audit/endpoints.csv",
+    "s3_operations": "docs/cloudflare-audit/r2-s3-operations.csv",
+    "implemented": "docs/cloudflare-audit/implemented.json",
+    "p2_candidates": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+    "note": "Protocol scope and acceptance gates are audit data: not a runtime allowlist, not a vendor availability certification and not an authenticated acceptance result."
+  },
+  "denominators": [
+    {
+      "name": "rest",
+      "unit": "operations",
+      "count": 3659,
+      "independent": true,
+      "source": "docs/cloudflare-audit/snapshot.json",
+      "note": "METHOD+path unique REST operations; never summed with any other protocol"
+    },
+    {
+      "name": "s3",
+      "unit": "operations",
+      "count": 73,
+      "vendor_supported": 26,
+      "provider_unsupported": 47,
+      "independent": true,
+      "source": "docs/cloudflare-audit/r2-s3-operations.csv",
+      "note": "vendor compatibility table; provider-unsupported rows are not FlareGo work"
+    },
+    {
+      "name": "graphql",
+      "unit": "datasets_and_fields",
+      "count": null,
+      "status": "awaiting_authorized_schema",
+      "independent": true,
+      "source": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/analytics/graphql-api/index.mdx",
+      "note": "field universe unknown until an authorized introspection capture exists"
+    },
+    {
+      "name": "realtime",
+      "unit": "sessions_and_streams",
+      "count": null,
+      "status": "awaiting_protocol_evidence",
+      "independent": true,
+      "source": "docs/cloudflare-audit/endpoints.csv session operations",
+      "note": "REST session endpoints are counted once in the REST denominator; consumer protocols are separate evidence"
+    }
+  ],
+  "s3": {
+    "operations_file": "docs/cloudflare-audit/r2-s3-operations.csv",
+    "source": {
+      "name": "s3-compat",
+      "url": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/r2/api/s3/api.mdx",
+      "sha256": "a3a9f5b86efc022ae7cbe813e49b682f0dbb3dfc7ff1eac5498d3af62c9e75d8",
+      "commit": "e3a9cf758c28273178d56918399068c6d2eb8a1d"
+    },
+    "documented": 73,
+    "vendor_supported": 26,
+    "provider_unsupported": 47,
+    "verified": 0,
+    "target_policy": {
+      "vendor_supported_target": "L2 protocol-level acceptance per operation, blocked until an authorized environment exists",
+      "provider_unsupported_policy": "registered as provider_unsupported with the vendor source; never listed as FlareGo implementation work",
+      "feature_subset_policy": "only the pinned table rows define the supported/unsupported feature subsets; empty feature rows stay not_listed_in_pinned_table"
+    },
+    "k2_stream_host": {
+      "host": "https://{stream_id}.k2.cloudflarestorage.com",
+      "rest_denominator": true,
+      "rest_operations": [
+        {
+          "operation_id": "postK2Produce",
+          "method": "POST",
+          "path": "/produce",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "postK2Subscriptions",
+          "method": "POST",
+          "path": "/subscriptions",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "deleteK2SubscriptionsBySubscription_id",
+          "method": "DELETE",
+          "path": "/subscriptions/{subscription_id}",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "getK2SubscriptionsBySubscription_id",
+          "method": "GET",
+          "path": "/subscriptions/{subscription_id}",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "postK2SubscriptionsBySubscription_idBatchesByBatch_idAck",
+          "method": "POST",
+          "path": "/subscriptions/{subscription_id}/batches/{batch_id}/ack",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "postK2SubscriptionsBySubscription_idBatchesByBatch_idExtend",
+          "method": "POST",
+          "path": "/subscriptions/{subscription_id}/batches/{batch_id}/extend",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "postK2SubscriptionsBySubscription_idBatchesByBatch_idNack",
+          "method": "POST",
+          "path": "/subscriptions/{subscription_id}/batches/{batch_id}/nack",
+          "rest_denominator": true
+        },
+        {
+          "operation_id": "postK2SubscriptionsBySubscription_idConsume",
+          "method": "POST",
+          "path": "/subscriptions/{subscription_id}/consume",
+          "rest_denominator": true
+        }
+      ],
+      "acceptance": "awaiting_authorized_environment",
+      "note": "K2 data-plane routes keep unknown stream scope and need their own stream-host acceptance; API-base credentials must never be reused here"
+    },
+    "limitations": [
+      "bucket region is auto; an empty value and us-east-1 alias to auto, also for CreateBucket LocationConstraint",
+      "S3 access uses a separate endpoint and dedicated SigV4 credential type; only the credential type/template is registered, never a value",
+      "checksum support differs by type: CRC64NVME is FULL_OBJECT only while CRC32, CRC32C, SHA1 and SHA256 are COMPOSITE only",
+      "HeadObject Range is accepted but has no effect",
+      "CopyObject and UploadPartCopy have different conditional-request support; UploadPartCopy rejects copy-source conditional headers",
+      "UploadPart replaces the same part number, and a failed replacement loses the original part, which must be re-uploaded",
+      "ListObjects is supported but ListObjectsV2 is recommended for applications",
+      "multipart uploads need explicit abort/cleanup responsibility and recovery checks before retrying",
+      "x-amz-expected-bucket-owner, request payer and ACL headers are unsupported where the pinned table marks them ❌"
+    ]
+  },
+  "graphql": {
+    "endpoint": "https://api.cloudflare.com/client/v4/graphql",
+    "transport": "POST JSON payload on the single GraphQL endpoint",
+    "source": {
+      "name": "graphql-overview",
+      "url": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/analytics/graphql-api/index.mdx",
+      "sha256": "d75107f225c0f742efc888d7de34936ad0355d7e967aa4770fba52e550a009c0",
+      "commit": "e3a9cf758c28273178d56918399068c6d2eb8a1d"
+    },
+    "review_status": "awaiting_authorized_schema",
+    "schema_evidence": {
+      "authorized_introspection": null,
+      "public_overview_only": true,
+      "note": "the pinned overview documents the endpoint and limitations but no dataset or field names"
+    },
+    "datasets": [],
+    "dataset_count": null,
+    "field_count": null,
+    "verified": 0,
+    "families": [
+      {
+        "family": "http_and_cache_analytics",
+        "need": "HTTP request, cache and performance datasets with filters and time windows",
+        "owner_role": "日常工作",
+        "phase": "P4",
+        "target_level": "L2",
+        "evidence_status": "awaiting_authorized_schema",
+        "blockers": [
+          "authorized_schema_capture_absent"
+        ]
+      },
+      {
+        "family": "security_events",
+        "need": "firewall, WAF and security event datasets including sampled events",
+        "owner_role": "日常工作",
+        "phase": "P5",
+        "target_level": "L2",
+        "evidence_status": "awaiting_authorized_schema",
+        "blockers": [
+          "authorized_schema_capture_absent",
+          "security_event_sampling_semantics_absent"
+        ]
+      },
+      {
+        "family": "workers_and_storage_analytics",
+        "need": "Workers, R2, D1, KV and queue analytics datasets",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "evidence_status": "awaiting_authorized_schema",
+        "blockers": [
+          "authorized_schema_capture_absent"
+        ]
+      },
+      {
+        "family": "media_and_stream_analytics",
+        "need": "Stream and Images delivery analytics datasets",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "evidence_status": "awaiting_authorized_schema",
+        "blockers": [
+          "authorized_schema_capture_absent"
+        ]
+      },
+      {
+        "family": "zero_trust_and_network_analytics",
+        "need": "Zero Trust, Gateway, DNS and network analytics datasets including packet-level data",
+        "owner_role": "日常工作",
+        "phase": "P6",
+        "target_level": "L2",
+        "evidence_status": "awaiting_authorized_schema",
+        "blockers": [
+          "authorized_schema_capture_absent",
+          "packet_level_dataset_access_evidence_absent"
+        ]
+      }
+    ],
+    "acceptance_prerequisites": [
+      "partial_data_plus_errors_must_both_be_handled",
+      "sampling_and_time_window_semantics_must_be_recorded",
+      "dataset_access_limits_and_plan_scope_must_be_verified",
+      "graphql_is_not_a_billing_measure_and_must_not_be_used_as_usage_cost_evidence"
+    ]
+  },
+  "realtime": {
+    "protocols": [
+      {
+        "protocol_id": "worker_tail",
+        "connection_protocol": "websocket",
+        "session_operations": [
+          {
+            "operation_id": "worker-tail-logs-start-tail",
+            "method": "POST",
+            "path": "/accounts/{account_id}/workers/scripts/{script_name}/tails",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "worker-tail-logs-delete-tail",
+            "method": "DELETE",
+            "path": "/accounts/{account_id}/workers/scripts/{script_name}/tails/{id}",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_with_scoped_token",
+        "lifecycle": "create_tail_session_then_consume_frames_then_delete_tail",
+        "owner_role": "日常工作",
+        "phase": "P3",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_consumer_protocol_awaiting_evidence",
+        "blockers": [
+          "websocket_frame_protocol_evidence_absent",
+          "tail_session_cancellation_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "workers_observability_live_tail",
+        "connection_protocol": "streaming_http",
+        "session_operations": [
+          {
+            "operation_id": "telemetry.live-tail.post",
+            "method": "POST",
+            "path": "/accounts/{account_id}/workers/observability/telemetry/live-tail",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "telemetry.live-tail.heartbeat.get",
+            "method": "POST",
+            "path": "/accounts/{account_id}/workers/observability/telemetry/live-tail/heartbeat",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_with_scoped_token",
+        "lifecycle": "open_live_tail_stream_then_heartbeat_then_close",
+        "owner_role": "日常工作",
+        "phase": "P3",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_consumer_protocol_awaiting_evidence",
+        "blockers": [
+          "streaming_http_chunk_semantics_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "realtime_kit_sfu",
+        "connection_protocol": "webrtc_sfu_sdk",
+        "session_operations": [
+          {
+            "operation_id": "create_meeting",
+            "method": "POST",
+            "path": "/accounts/{account_id}/realtime/kit/{app_id}/meetings",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "add_participant",
+            "method": "POST",
+            "path": "/accounts/{account_id}/realtime/kit/{app_id}/meetings/{meeting_id}/participants",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "regenerate_token",
+            "method": "POST",
+            "path": "/accounts/{account_id}/realtime/kit/{app_id}/meetings/{meeting_id}/participants/{participant_id}/token",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_mints_participant_token_for_sfu_join",
+        "lifecycle": "create_meeting_then_join_sfu_with_participant_token_then_end_session",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_sfu_protocol_awaiting_evidence",
+        "blockers": [
+          "sfu_join_protocol_evidence_absent",
+          "participant_token_lifetime_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "realtime_turn",
+        "connection_protocol": "turn_stun",
+        "session_operations": [
+          {
+            "operation_id": "calls-turn-key-create",
+            "method": "POST",
+            "path": "/accounts/{account_id}/calls/turn_keys",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "calls-delete-turn-key",
+            "method": "DELETE",
+            "path": "/accounts/{account_id}/calls/turn_keys/{key_id}",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_issues_short_lived_turn_credentials",
+        "lifecycle": "create_turn_key_then_use_until_expiry_then_revoke",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_turn_protocol_awaiting_evidence",
+        "blockers": [
+          "turn_credential_lifetime_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "moq_relays",
+        "connection_protocol": "moq_webtransport",
+        "session_operations": [
+          {
+            "operation_id": "moq-relays-create",
+            "method": "POST",
+            "path": "/accounts/{account_id}/moq/relays",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "moq-relays-tokens-create",
+            "method": "POST",
+            "path": "/accounts/{account_id}/moq/relays/{relay_id}/tokens",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "moq-relays-delete",
+            "method": "DELETE",
+            "path": "/accounts/{account_id}/moq/relays/{relay_id}",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_mints_relay_token_for_separate_relay_host",
+        "lifecycle": "create_relay_then_mint_token_then_delete_relay",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_relay_protocol_awaiting_evidence",
+        "blockers": [
+          "relay_host_acceptance_absent",
+          "moq_protocol_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "stream_live_inputs",
+        "connection_protocol": "rtmps_srt_ingest_with_hls_playback",
+        "session_operations": [
+          {
+            "operation_id": "stream-live-inputs-create-a-live-input",
+            "method": "POST",
+            "path": "/accounts/{account_id}/stream/live_inputs",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "stream-live-inputs-rotate-keys-for-a-live-input",
+            "method": "POST",
+            "path": "/accounts/{account_id}/stream/live_inputs/{live_input_identifier}/rotate_keys",
+            "rest_denominator": true
+          },
+          {
+            "operation_id": "stream-live-inputs-delete-a-live-input",
+            "method": "DELETE",
+            "path": "/accounts/{account_id}/stream/live_inputs/{live_input_identifier}",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_issues_ingest_keys_playback_uses_public_delivery_urls",
+        "lifecycle": "create_live_input_then_ingest_then_disable_or_delete",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoints_known_ingest_protocol_awaiting_evidence",
+        "blockers": [
+          "ingest_protocol_evidence_absent",
+          "ingest_key_rotation_evidence_absent"
+        ],
+        "verified": 0
+      },
+      {
+        "protocol_id": "workers_ai_streaming",
+        "connection_protocol": "server_sent_events_over_http",
+        "session_operations": [
+          {
+            "operation_id": "workers-ai-post-run-model",
+            "method": "POST",
+            "path": "/accounts/{account_id}/ai/run/{model_name}",
+            "rest_denominator": true
+          }
+        ],
+        "auth_host_policy": "api_base_host_with_scoped_token",
+        "lifecycle": "single_request_with_streamed_response_no_session_resource",
+        "owner_role": "日常工作",
+        "phase": "P7",
+        "target_level": "L2",
+        "enumeration_status": "session_endpoint_known_streaming_response_awaiting_evidence",
+        "blockers": [
+          "streaming_response_cancellation_evidence_absent"
+        ],
+        "verified": 0
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "registrar_sandbox",
+      "label": "Cloudflare Registrar sandbox",
+      "plan": "sandbox",
+      "allowed_action_categories": [
+        "read_only_domain_search",
+        "availability_and_price_check",
+        "sandbox_registration_flow"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "registrar_api_scoped_token"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "sandbox_access_not_provided",
+          "detail": "no authorized Registrar sandbox account is available"
+        }
+      ],
+      "notes": "real domain registration, renewals and payment are never ordinary automated tests"
+    },
+    {
+      "environment_id": "test_zone_dns",
+      "label": "isolated test zone and DNS records",
+      "plan": "free_or_pro",
+      "allowed_action_categories": [
+        "zone_read",
+        "dns_record_create_update_delete",
+        "cache_purge"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "zone_dns_edit",
+        "zone_settings_read"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "test_zone_not_provided",
+          "detail": "no disposable zone or DNS record set is authorized"
+        }
+      ],
+      "notes": "production DNS is out of scope for automated tests"
+    },
+    {
+      "environment_id": "enterprise_preview",
+      "label": "enterprise or preview entitlement checks",
+      "plan": "enterprise_or_preview",
+      "allowed_action_categories": [
+        "capability_read_only_check"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "account_read",
+        "plan_entitlement_read"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "enterprise_plan_evidence_absent",
+          "detail": "no enterprise or preview entitlement evidence"
+        }
+      ],
+      "notes": "read-only capability checks only; no entitlement is assumed"
+    },
+    {
+      "environment_id": "s3_multipart_cleanup",
+      "label": "R2 bucket for S3 multipart lifecycle",
+      "plan": "r2_developer_bucket",
+      "allowed_action_categories": [
+        "multipart_upload_create",
+        "multipart_abort_and_cleanup",
+        "object_read_back"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "r2_s3_access_key_type_only"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "s3_credentials_not_provided",
+          "detail": "dedicated S3 access key material is not authorized"
+        }
+      ],
+      "notes": "aborted and incomplete multipart uploads must be cleaned up by the owning role"
+    },
+    {
+      "environment_id": "graphql_schema_capture",
+      "label": "authorized GraphQL schema capture",
+      "plan": "analytics_access",
+      "allowed_action_categories": [
+        "schema_introspection_capture",
+        "dataset_read_only_query"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "analytics_read"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "authorized_schema_capture_absent",
+          "detail": "no authorized introspection capture exists"
+        }
+      ],
+      "notes": "the dataset and field universe stays unknown until an authorized capture is recorded"
+    },
+    {
+      "environment_id": "k2_stream_host",
+      "label": "dedicated K2 stream endpoint",
+      "plan": "k2_beta_stream",
+      "allowed_action_categories": [
+        "stream_scoped_produce_consume",
+        "subscription_lease_ack_nack"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "stream_scoped_credential_type_only"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "stream_host_credentials_absent",
+          "detail": "no stream-scoped credential or disposable stream is authorized"
+        }
+      ],
+      "notes": "API-base credentials must not be reused on the stream host; lease and ACK/NACK mutate delivery state"
+    },
+    {
+      "environment_id": "realtime_session_pilot",
+      "label": "realtime session pilot (tail, SFU, TURN, MoQ, live input)",
+      "plan": "product_specific_preview",
+      "allowed_action_categories": [
+        "session_create_and_consume",
+        "session_cancel_and_cleanup"
+      ],
+      "owner_role": "日常工作",
+      "permission_categories": [
+        "product_scoped_token_type_only"
+      ],
+      "cleanup_responsibility": "owner_role",
+      "status": "awaiting_authorized_environment",
+      "blockers": [
+        {
+          "code": "realtime_protocol_evidence_absent",
+          "detail": "consumer protocol evidence for each realtime family is missing"
+        }
+      ],
+      "notes": "connection protocols are enumerated separately from the REST session endpoints"
+    }
+  ],
+  "p1_p2_admission": {
+    "p1_new": [
+      {
+        "operation_id": "accounts-list-accounts",
+        "method": "GET",
+        "path": "/accounts",
+        "source": "docs/superpowers/plans/2026-10-07-cloudflare-p0-p1-basics.md#p1-approved-new-request",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "user-api-tokens-verify-token",
+        "method": "GET",
+        "path": "/user/tokens/verify",
+        "source": "docs/superpowers/plans/2026-10-07-cloudflare-p0-p1-basics.md#p1-approved-new-request",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "account-api-tokens-verify-token",
+        "method": "GET",
+        "path": "/accounts/{account_id}/tokens/verify",
+        "source": "docs/superpowers/plans/2026-10-07-cloudflare-p0-p1-basics.md#p1-approved-new-request",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "listWorkers",
+        "method": "GET",
+        "path": "/accounts/{account_id}/workers/workers",
+        "source": "docs/superpowers/plans/2026-10-07-cloudflare-p0-p1-basics.md#p1-approved-new-request",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "account-billing-history-get-billing-history",
+        "method": "GET",
+        "path": "/accounts/{account_id}/billing/history",
+        "source": "docs/superpowers/plans/2026-10-07-cloudflare-p0-p1-basics.md#p1-approved-new-request",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      }
+    ],
+    "p1_existing_compat": [
+      {
+        "operation_id": "accounts-account-details",
+        "method": "GET",
+        "path": "/accounts/{account_id}",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "d1-list-databases",
+        "method": "GET",
+        "path": "/accounts/{account_id}/d1/database",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-create-dns-record",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-delete-dns-record",
+        "method": "DELETE",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-list-dns-records",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-patch-dns-record",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true
+      },
+      {
+        "operation_id": "r2-list-buckets",
+        "method": "GET",
+        "path": "/accounts/{account_id}/r2/buckets",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "user-billing-history-(-deprecated)-billing-history-details",
+        "method": "GET",
+        "path": "/user/billing/history",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "worker-script-list-workers",
+        "method": "GET",
+        "path": "/accounts/{account_id}/workers/scripts",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "workers-kv-namespace-list-namespaces",
+        "method": "GET",
+        "path": "/accounts/{account_id}/storage/kv/namespaces",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      },
+      {
+        "operation_id": "zones-get",
+        "method": "GET",
+        "path": "/zones",
+        "source": "docs/cloudflare-audit/implemented.json",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true
+      }
+    ],
+    "p2_candidates": [
+      {
+        "operation_id": "zones-get",
+        "method": "GET",
+        "path": "/zones",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zones-post",
+        "method": "POST",
+        "path": "/zones",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zones-0-delete",
+        "method": "DELETE",
+        "path": "/zones/{zone_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zones-0-get",
+        "method": "GET",
+        "path": "/zones/{zone_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zones-0-patch",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "put-zones-zone_id-activation_check",
+        "method": "PUT",
+        "path": "/zones/{zone_id}/activation_check",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T3",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-list-dns-records",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-create-dns-record",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-batch-dns-records",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records/batch",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T5",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-export-dns-records",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records/export",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T6",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-import-dns-records",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records/import",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T6",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-review-dns-scan",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records/scan/review",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-apply-dns-scan-results",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records/scan/review",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-trigger-dns-scan",
+        "method": "POST",
+        "path": "/zones/{zone_id}/dns_records/scan/trigger",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-get-usage",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records/usage",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-delete-dns-record",
+        "method": "DELETE",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-dns-record-details",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-patch-dns-record",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-records-for-a-zone-update-dns-record",
+        "method": "PUT",
+        "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T2",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-settings-for-a-zone-list-dns-settings",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dns_settings",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dns-settings-for-a-zone-update-dns-settings",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/dns_settings",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T7",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dnssec-delete-dnssec-records",
+        "method": "DELETE",
+        "path": "/zones/{zone_id}/dnssec",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T8",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dnssec-dnssec-details",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dnssec",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T8",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dnssec-edit-dnssec-status",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/dnssec",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T8",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "dnssec-list-dnssec-zsks",
+        "method": "GET",
+        "path": "/zones/{zone_id}/dnssec/zsk",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T8",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-purge",
+        "method": "POST",
+        "path": "/zones/{zone_id}/purge_cache",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "unknown",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-get-aegis-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/aegis",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-change-aegis-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/aegis",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-automatic-platform-optimization-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/automatic_platform_optimization",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-automatic-platform-optimization-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/automatic_platform_optimization",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-binary-ast-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/binary_ast",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-binary-ast-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/binary_ast",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-fonts-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/fonts",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-fonts-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/fonts",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-h2-prioritization-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/h2_prioritization",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-h2-prioritization-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/h2_prioritization",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-image-resizing-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/image_resizing",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-image-resizing-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/image_resizing",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-get-origin-h2-max-streams-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/origin_h2_max_streams",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-change-origin-h2-max-streams-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/origin_h2_max_streams",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-get-origin-max-http-version-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/origin_max_http_version",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-cache-settings-change-origin-max-http-version-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/origin_max_http_version",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-speed-brain-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/speed_brain",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-speed-brain-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/speed_brain",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-transformations-allowed-origins-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/transformations_allowed_origins",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-transformations-allowed-origins-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/transformations_allowed_origins",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-transformations-c2pa-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/transformations_c2pa",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-transformations-c2pa-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/transformations_c2pa",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-transformations-config",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/transformations_config",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-change-transformations-config",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/transformations_config",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-get-single-setting",
+        "method": "GET",
+        "path": "/zones/{zone_id}/settings/{setting_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "zone-settings-edit-single-setting",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/settings/{setting_id}",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "universal-ssl-settings-for-a-zone-universal-ssl-settings-details",
+        "method": "GET",
+        "path": "/zones/{zone_id}/ssl/universal/settings",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "low",
+        "confirmation_required": false,
+        "verification_boundary": "authenticated_account_acceptance_required",
+        "auto_replay": false,
+        "readback_required": false,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      },
+      {
+        "operation_id": "universal-ssl-settings-for-a-zone-edit-universal-ssl-settings",
+        "method": "PATCH",
+        "path": "/zones/{zone_id}/ssl/universal/settings",
+        "source": "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+        "risk": "medium",
+        "confirmation_required": true,
+        "verification_boundary": "authenticated_account_acceptance_and_manual_write_risk_review",
+        "auto_replay": false,
+        "readback_required": true,
+        "proposed": true,
+        "work_package": "P2-T9",
+        "review_status": "candidate_pending_policy_and_account_review"
+      }
+    ],
+    "counts": {
+      "p1_new": 5,
+      "p1_existing_compat": 11,
+      "p2_candidates": 54,
+      "overlap": 5,
+      "unique": 65,
+      "sum_of_lists": 70
+    },
+    "policy": {
+      "runtime_allowlist": false,
+      "note": "P1 and P2 admission is a review proposal referencing the approved IDs; the lists overlap and must not be summed into a unique total, and no other product is enabled by these lists"
+    }
+  },
+  "blockers": [
+    {
+      "code": "authorized_account_absent",
+      "detail": "no authorized Cloudflare account exists, so no protocol acceptance is verified"
+    },
+    {
+      "code": "authorized_schema_capture_absent",
+      "detail": "no authorized GraphQL introspection capture exists"
+    },
+    {
+      "code": "stream_host_credentials_absent",
+      "detail": "no stream-scoped K2 credential or disposable stream is authorized"
+    },
+    {
+      "code": "sandbox_access_not_provided",
+      "detail": "no Registrar sandbox environment is authorized"
+    },
+    {
+      "code": "enterprise_plan_evidence_absent",
+      "detail": "no enterprise or preview entitlement evidence is available"
+    },
+    {
+      "code": "realtime_protocol_evidence_absent",
+      "detail": "consumer protocol evidence for the realtime families is missing"
+    }
+  ]
+}
