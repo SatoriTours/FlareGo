@@ -77,6 +77,14 @@ BLOCKER_DEPRECATION_CONFLICT = "deprecation_conflict"
 BLOCKER_FORGE_HIDDEN = "forge_hidden_flag_requires_review"
 BLOCKER_RISK_REVIEW = "manual_risk_review_required"
 BLOCKER_UNCLASSIFIED = "unclassified_product"
+BLOCKER_MALFORMED_EVIDENCE = "malformed_evidence"
+BLOCKER_K2_HOST = "k2_stream_host_acceptance_required"
+
+K2_STREAM_HOST = "https://{stream_id}.k2.cloudflarestorage.com"
+K2_STREAM_HOST_NOTE = (
+    "path-level servers in the fixed schema; the K2 stream endpoint needs its own "
+    "acceptance and must not receive API-base host credentials by default"
+)
 
 GLOBAL_ACCOUNT_BLOCKER = "authorized_account_absent"
 
@@ -115,12 +123,21 @@ SCOPE_GLOBAL_EXACT = {
     "/api/v4/health": "public health endpoint with no credential scope",
 }
 SCOPE_GLOBAL_PREFIXES = (("/radar/", "public Radar datasets with no account or zone scope"),)
-SCOPE_UNKNOWN_PREFIXES = (("/tenants/", "tenant scope has no matching scope kind; needs review"),)
+SCOPE_UNKNOWN_PREFIXES = (
+    ("/tenants/", "tenant scope has no matching scope kind; needs review"),
+    (
+        "/subscriptions",
+        "K2 data-plane stream route with a separate stream host; account/global scope is not established",
+    ),
+)
 SCOPE_UNKNOWN_EXACT = {
     "/live": "internal/misc route without a documented resource scope",
     "/ready": "internal/misc route without a documented resource scope",
     "/signed-url": "internal/misc route without a documented resource scope",
     "/internal/submit": "internal/misc route without a documented resource scope",
+    "/produce": (
+        "K2 data-plane stream route with a separate stream host; account/global scope is not established"
+    ),
 }
 SCOPE_PRINCIPAL_BASIS = (
     "no path id; the credential subject determines which resources are visible"
@@ -168,7 +185,7 @@ UNCLASSIFIED_PACKAGE = {
     "phase": "P8",
     "target_level": "L2",
     "spec_reference": UNCLASSIFIED_SPEC_REFERENCE,
-    "tags": ("workers_k2_other", "reports_other", "Field Extractors"),
+    "tags": (),
 }
 
 # Explicit product work packages. Phase, target level and spec reference come from
@@ -216,12 +233,11 @@ PRODUCT_PACKAGES: tuple[dict[str, Any], ...] = (
         "product_id": "zones-and-zone-settings",
         "phase": "P2",
         "target_level": "L3",
-        "spec_reference": "§3.1 Zones / §3.2 Cache／CDN／Performance（Zone 级）",
+        "spec_reference": "§3.1 Zones（P2 基础 Zone 生命周期与设置）",
         "tags": (
-            "Available Page Rules settings", "Page Rules", "Zone", "Zone Cache Settings",
-            "Zone Cloud Connector Rules GET", "Zone Cloud Connector Rules PUT",
-            "Zone Entitlements", "Zone Environments", "Zone Holds", "Zone Lockdown",
-            "Zone Settings", "Zone Snippets",
+            "Zone", "Zone Cache Settings", "Zone Cloud Connector Rules GET",
+            "Zone Cloud Connector Rules PUT", "Zone Entitlements", "Zone Environments",
+            "Zone Holds", "Zone Settings",
         ),
     },
     {
@@ -238,12 +254,10 @@ PRODUCT_PACKAGES: tuple[dict[str, Any], ...] = (
         "product_id": "ssl-tls-and-certificates",
         "phase": "P2",
         "target_level": "L3",
-        "spec_reference": "§3.2 SSL／TLS／Certificates",
+        "spec_reference": "§3.2 SSL／TLS／Certificates（P2 基础模式与验证）",
         "tags": (
-            "Analyze Certificate", "Automatic SSL/TLS", "Certificate Packs",
-            "Custom CSRs for a Zone", "Custom CSRs for an Account", "Custom Origin Trust Store",
-            "Custom SSL for a Zone", "DCV Delegation", "SSL Verification",
-            "SSL/TLS Mode Recommendation", "Total TLS", "Universal SSL Settings for a Zone",
+            "Analyze Certificate", "Automatic SSL/TLS", "SSL Verification",
+            "SSL/TLS Mode Recommendation", "Universal SSL Settings for a Zone",
         ),
     },
     {
@@ -346,16 +360,16 @@ PRODUCT_PACKAGES: tuple[dict[str, Any], ...] = (
         "product_id": "rules-waf-bots",
         "phase": "P5",
         "target_level": "L3",
-        "spec_reference": "§3.2 Rules／WAF／Bots",
+        "spec_reference": "§3.2 Rules／WAF／Bots（含 P5 网站规则：Page Rules／Zone Lockdown／Snippets）",
         "tags": (
-            "AI Security for Apps", "Account Rulesets", "Bot Settings", "Botnet Threat Feed",
-            "CSAM Scanner Settings", "Feedback", "Filters", "Firewall rules",
-            "Fraud Detection", "IP Access rules for a user", "IP Access rules for a zone",
-            "IP Access rules for an account", "Leaked Credential Checks", "Lists",
-            "Managed Transforms", "Precursor", "Rate Limiting Analytics",
-            "Rate limits for a zone", "Rules", "User Agent Blocking rules", "WAF overrides",
-            "WAF packages",
-            "WAF rule groups", "WAF rules", "Zone Rulesets",
+            "AI Security for Apps", "Account Rulesets", "Available Page Rules settings",
+            "Bot Settings", "Botnet Threat Feed", "CSAM Scanner Settings", "Feedback",
+            "Filters", "Firewall rules", "Fraud Detection", "IP Access rules for a user",
+            "IP Access rules for a zone", "IP Access rules for an account",
+            "Leaked Credential Checks", "Lists", "Managed Transforms", "Page Rules",
+            "Precursor", "Rate Limiting Analytics", "Rate limits for a zone", "Rules",
+            "User Agent Blocking rules", "WAF overrides", "WAF packages", "WAF rule groups",
+            "WAF rules", "Zone Lockdown", "Zone Rulesets", "Zone Snippets",
         ),
     },
     {
@@ -401,11 +415,14 @@ PRODUCT_PACKAGES: tuple[dict[str, Any], ...] = (
         "product_id": "certificates-advanced-and-mtls",
         "phase": "P5",
         "target_level": "L2",
-        "spec_reference": "§3.2 SSL／TLS／Certificates（高级／mTLS）",
+        "spec_reference": "§3.2 SSL／TLS／Certificates（高级证书与 mTLS，P5）",
         "tags": (
+            "Certificate Packs", "Custom CSRs for a Zone", "Custom CSRs for an Account",
+            "Custom Origin Trust Store", "Custom SSL for a Zone", "DCV Delegation",
             "Keyless SSL for a Zone", "mTLS Certificate Management", "Origin CA",
             "Origin Post-Quantum", "Origin TLS", "Per-Hostname TLS Settings",
-            "Per-hostname Authenticated Origin Pull", "Zone-Level Authenticated Origin Pulls",
+            "Per-hostname Authenticated Origin Pull", "Total TLS",
+            "Zone-Level Authenticated Origin Pulls",
         ),
     },
     {
@@ -814,6 +831,46 @@ PRODUCT_PACKAGES: tuple[dict[str, Any], ...] = (
         "spec_reference": "§3.2 尾部标签与新产品（维护／投诉／诊断）",
         "tags": ("Diagnostics", "tseng-abuse-complaint-processor_other"),
     },
+    {
+        "product_id": "field-extractors-alpha",
+        "phase": "P8",
+        "target_level": "L2",
+        "spec_reference": "§3.2 尾部标签与新产品（field extractors alpha SDK family）",
+        "classification_evidence": (
+            "fixed schema x-fern-sdk-group-name=fieldExtractors; GET/PUT/DELETE "
+            "/accounts/{account_id}/field_extractors/{extractor}; x-fern-availability=alpha; "
+            "no token-permission metadata; route-family ownership only, not vendor availability"
+        ),
+        "qualification_blockers": ("alpha_sdk_family_unqualified",),
+        "tags": ("Field Extractors",),
+    },
+    {
+        "product_id": "account-reporting-control-plane",
+        "phase": "P8",
+        "target_level": "L2",
+        "spec_reference": "§3.2 尾部标签与新产品（account reporting control plane）",
+        "classification_evidence": (
+            "fixed schema x-fern-sdk-group-name reporting.industry/policies/reports; "
+            "/accounts/{account_id}/reporting/*; #reports:read and #reports:edit token groups; "
+            "route-family ownership only, entitlement and availability stay pending"
+        ),
+        "qualification_blockers": ("reporting_qualification_and_entitlement_pending",),
+        "tags": ("reports_other",),
+    },
+    {
+        "product_id": "k2-streams-beta-control-data",
+        "phase": "P8",
+        "target_level": "L2",
+        "spec_reference": "§3.2 尾部标签与新产品（K2 streams beta control/data plane）",
+        "classification_evidence": (
+            "fixed schema x-fern-sdk-group-name k2.streams/k2.streams.subscriptions/"
+            "k2.streams.subscriptions.batches; x-fern-availability=beta; six account-scoped "
+            "control-plane routes plus eight stream-host data-plane routes; route-family "
+            "ownership only, protocol/host acceptance stays pending"
+        ),
+        "qualification_blockers": ("k2_beta_qualification_pending",),
+        "tags": ("workers_k2_other",),
+    },
     UNCLASSIFIED_PACKAGE,
 )
 
@@ -859,6 +916,8 @@ PREREQUISITE_ORDER = (
     "rollback_or_recovery_check",
     "migration_decision",
     "product_ownership_decision",
+    "route_family_qualification_review",
+    "separate_stream_host_acceptance",
 )
 
 
@@ -882,6 +941,16 @@ TAG_INDEX = _package_index()
 PACKAGE_BY_ID = {package["product_id"]: package for package in PRODUCT_PACKAGES}
 
 
+def _permissions_present_from_raw(raw: Any, operation_id: str) -> bool:
+    """Parse token-permission metadata; malformed or non-dict values grant nothing."""
+    if raw in (None, ""):
+        return False
+    parsed = _json_column(raw, "token_permissions_raw", operation_id)
+    if not isinstance(parsed, dict):
+        return False
+    return any(parsed.get(field) for field in PERMISSION_FIELDS)
+
+
 def _json_column(value: Any, field: str, operation_id: str) -> Any:
     if value in (None, "", "null"):
         return None
@@ -898,7 +967,8 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
 
     Both input shapes are accepted so the ledger can be validated against the
     generated CSV or against ``enumerate_operations`` output. A missing field is
-    left unknown rather than treated as a positive qualification.
+    left unknown rather than treated as a positive qualification, and malformed
+    permission JSON is a readable failure instead of a granted permission.
     """
     normalized: list[dict] = []
     for operation in operations:
@@ -912,7 +982,9 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
             tags = operation.get("tags") or []
             availability = metadata.get("x-fern-availability", "unspecified")
             stability = metadata.get("x-stability", "unspecified")
-            permissions_present = any(field in metadata for field in PERMISSION_FIELDS)
+            permissions_present = any(
+                metadata.get(field) for field in PERMISSION_FIELDS
+            )
             plan_availability = metadata.get("x-cfPlanAvailability") or {}
             forge_hidden = metadata.get("x-forge-hidden")
             fern_ignore = metadata.get("x-fern-ignore")
@@ -926,7 +998,9 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
             tags = raw_tags.split(" | ") if isinstance(raw_tags, str) else list(raw_tags or [])
             availability = operation.get("official_availability", "unspecified")
             stability = operation.get("official_stability", "unspecified")
-            permissions_present = operation.get("token_permissions_raw") not in (None, "", "{}")
+            permissions_present = _permissions_present_from_raw(
+                operation.get("token_permissions_raw"), operation_id
+            )
             plan_availability = _json_column(
                 operation.get("plan_availability_raw"), "plan_availability_raw", operation_id
             ) or {}
@@ -938,6 +1012,8 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
             summary = operation.get("summary") or ""
             flarego_status = operation.get("flarego_status")
             coverage_note = operation.get("coverage_note")
+        if not isinstance(plan_availability, dict):
+            plan_availability = {}
         normalized.append(
             {
                 "operation_id": operation_id,
@@ -947,7 +1023,7 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
                 "availability": availability,
                 "stability": stability,
                 "permissions_present": bool(permissions_present),
-                "plan_availability": plan_availability if isinstance(plan_availability, dict) else {},
+                "plan_availability": plan_availability,
                 "forge_hidden": forge_hidden,
                 "fern_ignore": fern_ignore,
                 "deprecation_signals": signals,
@@ -958,6 +1034,45 @@ def normalize_operations(operations: list[dict]) -> list[dict]:
             }
         )
     return normalized
+
+
+def identity_errors(operations: list[dict]) -> list[str]:
+    """Report duplicate operationId or duplicate METHOD+path identities.
+
+    Returned as readable errors so validation can fail closed without raising;
+    generation and summarization fail explicitly instead.
+    """
+    errors: list[str] = []
+    try:
+        normalized = normalize_operations(operations)
+    except ValueError as error:
+        return [f"invalid operation input: {error}"]
+    seen_ids: dict[str, str] = {}
+    seen_identities: dict[tuple[str, str], str] = {}
+    for operation in normalized:
+        operation_id = operation["operation_id"]
+        identity = (operation["method"], operation["path"])
+        if operation_id in seen_ids:
+            errors.append(
+                f"duplicate operationId in input: {operation_id!r} appears more than once"
+            )
+        else:
+            seen_ids[operation_id] = operation_id
+        if identity in seen_identities:
+            errors.append(
+                f"duplicate METHOD+path in input: {identity[0]} {identity[1]} is claimed by "
+                f"{seen_identities[identity]!r} and {operation_id!r}"
+            )
+        else:
+            seen_identities[identity] = operation_id
+    return errors
+
+
+def _require_unique_identities(operations: list[dict]) -> list[dict]:
+    errors = identity_errors(operations)
+    if errors:
+        raise ValueError("invalid operation identities: " + "; ".join(errors))
+    return normalize_operations(operations)
 
 
 def assign_product(operation: dict) -> tuple[dict, str]:
@@ -1050,8 +1165,9 @@ def derived_blockers(operation: dict) -> list[str]:
     """Blockers derived from pinned facts, independent of hand-written evidence.
 
     A ledger edit cannot whitelist an operation by deleting ``evidence.blockers``:
-    missing permission metadata, a Forge-hidden-only flag, an unreviewed write or
-    an unclassified product still block because the fact is re-derived here.
+    missing permission metadata, a Forge-hidden-only flag, an unreviewed write, an
+    unclassified product or a route family whose qualification is still pending
+    still block because the fact is re-derived here.
     """
     blockers: list[str] = []
     if not operation["permissions_present"]:
@@ -1068,52 +1184,91 @@ def derived_blockers(operation: dict) -> list[str]:
         blockers.append(BLOCKER_FORGE_HIDDEN)
     if semantics_hint(operation["method"]) != "read":
         blockers.append(BLOCKER_RISK_REVIEW)
-    if assign_product(operation)[0]["product_id"] == UNCLASSIFIED_PRODUCT_ID:
+    package, _ = assign_product(operation)
+    blockers.extend(package.get("qualification_blockers", ()))
+    if package["product_id"] == UNCLASSIFIED_PRODUCT_ID:
         blockers.append(BLOCKER_UNCLASSIFIED)
-    return blockers
+    if is_k2_data_plane(operation["path"]):
+        blockers.append(BLOCKER_K2_HOST)
+    return sorted(set(blockers))
+
+
+def is_k2_data_plane(path: str) -> bool:
+    """K2 stream data-plane routes use a separate stream host, not the API base."""
+    return path == "/produce" or path.startswith("/subscriptions")
 
 
 def recorded_blockers(entry: dict) -> list[str]:
-    blockers = (entry.get("evidence") or {}).get("blockers")
+    evidence = entry.get("evidence") if isinstance(entry, dict) else None
+    if not isinstance(evidence, dict):
+        return []
+    blockers = evidence.get("blockers")
     return [code for code in blockers if isinstance(code, str)] if isinstance(blockers, list) else []
 
 
 def effective_blockers(operation: dict, entry: dict) -> list[str]:
     """Union of fact-derived and recorded blockers (facts cannot be washed out)."""
-    return sorted(set(derived_blockers(operation)) | set(recorded_blockers(entry)))
+    blockers = set(derived_blockers(operation)) | set(recorded_blockers(entry))
+    evidence = entry.get("evidence") if isinstance(entry, dict) else None
+    if not isinstance(evidence, dict) or not evidence:
+        blockers.add(BLOCKER_MALFORMED_EVIDENCE)
+    return sorted(blockers)
 
 
 def account_blocker_active(review: dict) -> bool:
-    """True while the global no-authorized-account blocker is not cleared."""
+    """True while authorized-account evidence is missing, empty or uncleared.
+
+    Absence or omission of the global blocker is unknown/blocked, never clearance;
+    clearance needs an explicit positive reference plus a clearance record.
+    """
     blockers = review.get("blockers") if isinstance(review, dict) else None
-    if not isinstance(blockers, list):
+    if not isinstance(blockers, list) or not blockers:
         return True
     for blocker in blockers:
         if isinstance(blocker, dict) and blocker.get("code") == GLOBAL_ACCOUNT_BLOCKER:
-            return not blocker.get("cleared_by")
-    return False
+            cleared_by = blocker.get("cleared_by")
+            record = blocker.get("clearance_record")
+            has_reference = isinstance(cleared_by, str) and bool(cleared_by.strip())
+            has_record = isinstance(record, dict) and bool(record)
+            return not (has_reference and has_record)
+    return True
+
+
+def _pending_qualification(entry: dict) -> bool:
+    return entry.get("needs_review") is not False or entry.get("scope_kind") == "unknown"
 
 
 def _verified(entry: dict, operation: dict, account_blocked: bool) -> bool:
     """API availability verified against an authorized account (not FlareGo capability)."""
-    evidence = entry.get("evidence") or {}
+    evidence = entry.get("evidence") if isinstance(entry, dict) else None
+    if not isinstance(evidence, dict):
+        return False
     if entry.get("availability_decision") != "verified_available":
         return False
     if evidence.get("acceptance") != "authenticated_account":
         return False
-    if not evidence.get("acceptance_record"):
+    if not isinstance(evidence.get("acceptance_record"), dict) or not evidence["acceptance_record"]:
         return False
-    if derived_blockers(operation):
+    if derived_blockers(operation) or recorded_blockers(entry):
+        return False
+    if _pending_qualification(entry):
         return False
     return not account_blocked
 
 
-def _capability_verified(entry: dict, account_blocked: bool) -> bool:
+def _capability_verified(entry: dict, operation: dict, account_blocked: bool) -> bool:
     """FlareGo L2/L3 capability acceptance, reported separately from availability."""
-    evidence = entry.get("evidence") or {}
+    evidence = entry.get("evidence") if isinstance(entry, dict) else None
+    if not isinstance(evidence, dict):
+        return False
     if evidence.get("capability_acceptance") != "authenticated_account":
         return False
-    if not evidence.get("capability_record"):
+    record = evidence.get("capability_record")
+    if not isinstance(record, dict) or not record:
+        return False
+    if derived_blockers(operation) or recorded_blockers(entry):
+        return False
+    if _pending_qualification(entry):
         return False
     return not account_blocked
 
@@ -1138,6 +1293,10 @@ def _prerequisites(operation: dict, entry: dict) -> list[str]:
         wanted.add("migration_decision")
     if entry["product_id"] == UNCLASSIFIED_PRODUCT_ID:
         wanted.add("product_ownership_decision")
+    if is_k2_data_plane(operation["path"]):
+        wanted.add("separate_stream_host_acceptance")
+    if entry["evidence"].get("classification_evidence"):
+        wanted.add("route_family_qualification_review")
     return [name for name in PREREQUISITE_ORDER if name in wanted]
 
 
@@ -1216,6 +1375,13 @@ def _entry_for(
     if product_id == UNCLASSIFIED_PRODUCT_ID:
         tag = basis.split(": ", 1)[-1]
         entry["evidence"]["gap"] = UNCLASSIFIED_GAPS.get(tag, DEFAULT_UNCLASSIFIED_GAP)
+    if package.get("classification_evidence"):
+        entry["evidence"]["classification_evidence"] = package["classification_evidence"]
+    if is_k2_data_plane(operation["path"]):
+        entry["evidence"]["protocol_review"] = {
+            "host": K2_STREAM_HOST,
+            "note": K2_STREAM_HOST_NOTE,
+        }
     entry["test_prerequisites"] = _prerequisites(operation, entry)
     return entry
 
@@ -1235,11 +1401,22 @@ def propose_review(
     The result is deterministic, records each proposal's assignment basis and
     keeps every entry in ``needs_review``; it is not a user approval.
     """
-    normalized = normalize_operations(operations)
+    normalized = _require_unique_identities(operations)
     overrides = dict(phase_overrides or {})
     mapping = implemented.get("operations", {}) if isinstance(implemented, dict) else {}
     if not isinstance(mapping, dict):
         raise ValueError("implemented mapping must contain an 'operations' object")
+    known_ids = {operation["operation_id"] for operation in normalized}
+    for label, references in (
+        ("implemented mapping", set(mapping)),
+        ("phase override", set(overrides)),
+    ):
+        unknown = sorted(references - known_ids)
+        if unknown:
+            raise ValueError(
+                f"{label} references operationId(s) absent from the input operations: "
+                + ", ".join(unknown)
+            )
     entries: dict[str, dict] = {}
     for operation in sorted(normalized, key=lambda item: (item["path"], item["method"])):
         operation_id = operation["operation_id"]
@@ -1361,6 +1538,17 @@ def load_catalog_operations(path: Path) -> list[dict]:
         return list(csv.DictReader(handle))
 
 
+def _user_approval_reference(evidence: dict) -> bool:
+    """Require a real user reference; booleans, bare strings and coordinator notes do not count."""
+    approval = evidence.get("user_approval")
+    if not isinstance(approval, dict):
+        return False
+    if approval.get("source") != "user":
+        return False
+    reference = approval.get("reference")
+    return isinstance(reference, str) and bool(reference.strip())
+
+
 def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]:
     errors: list[str] = []
     if not isinstance(entry, dict):
@@ -1402,10 +1590,17 @@ def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]
         errors.append(f"{operation_id}: evidence must be a non-empty object")
         return errors
 
-    if entry.get("target_level") == "L0" and not evidence.get("user_approval"):
-        errors.append(
-            f"{operation_id}: target_level L0 requires recorded user approval evidence"
-        )
+    if entry.get("target_level") == "L0":
+        reason = evidence.get("reduction_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(
+                f"{operation_id}: target_level L0 requires a concrete evidence.reduction_reason"
+            )
+        if not _user_approval_reference(evidence):
+            errors.append(
+                f"{operation_id}: target_level L0 requires a real user approval reference "
+                "(evidence.user_approval.source == 'user' plus a non-empty reference)"
+            )
     if entry.get("availability_decision") == "verified_available" and (
         evidence.get("acceptance") != "authenticated_account"
     ):
@@ -1413,24 +1608,41 @@ def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]
             f"{operation_id}: availability_decision verified_available requires "
             "evidence.acceptance == 'authenticated_account'"
         )
-    if entry.get("availability_decision") == "provider_removed" and not evidence.get(
-        "removal_evidence"
+    if entry.get("availability_decision") == "verified_available" and not (
+        isinstance(evidence.get("acceptance_record"), dict) and evidence.get("acceptance_record")
     ):
         errors.append(
-            f"{operation_id}: availability_decision provider_removed requires removal evidence"
-        )
-    if entry.get("availability_decision") == "console_only" and not evidence.get(
-        "console_only_evidence"
-    ):
-        errors.append(
-            f"{operation_id}: availability_decision console_only requires console-only evidence"
-        )
-    if entry.get("availability_decision") == "verified_available" and not evidence.get(
-        "acceptance_record"
-    ):
-        errors.append(
-            f"{operation_id}: availability_decision verified_available requires an "
+            f"{operation_id}: availability_decision verified_available requires a structured "
             "evidence.acceptance_record from an authorized account"
+        )
+    if entry.get("availability_decision") in ("provider_removed", "console_only"):
+        key = (
+            "removal_evidence"
+            if entry["availability_decision"] == "provider_removed"
+            else "console_only_evidence"
+        )
+        if not evidence.get(key):
+            errors.append(
+                f"{operation_id}: availability_decision {entry['availability_decision']} requires "
+                f"{key}"
+            )
+        reason = evidence.get("reduction_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(
+                f"{operation_id}: availability_decision {entry['availability_decision']} requires "
+                "a concrete evidence.reduction_reason"
+            )
+        if not _user_approval_reference(evidence):
+            errors.append(
+                f"{operation_id}: availability_decision {entry['availability_decision']} requires "
+                "a real user approval reference (evidence.user_approval)"
+            )
+    capability_record = evidence.get("capability_record")
+    if "capability_acceptance" in evidence and (
+        not isinstance(capability_record, dict) or not capability_record
+    ):
+        errors.append(
+            f"{operation_id}: capability_acceptance requires a structured evidence.capability_record"
         )
     if entry.get("product_id") == UNCLASSIFIED_PRODUCT_ID:
         if entry.get("needs_review") is not True:
@@ -1444,17 +1656,23 @@ def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]
     blockers = evidence.get("blockers")
     if not isinstance(blockers, list):
         errors.append(f"{operation_id}: evidence.blockers must be a list")
-    elif entry.get("semantics") != "read" and BLOCKER_RISK_REVIEW not in blockers:
-        errors.append(
-            f"{operation_id}: semantics {entry.get('semantics')!r} must stay blocked with "
-            f"{BLOCKER_RISK_REVIEW}"
-        )
-    missing = sorted(set(derived_blockers(operation)) - set(recorded_blockers(entry)))
-    if missing:
-        errors.append(
-            f"{operation_id}: evidence.blockers omits fact-derived blocker(s) {', '.join(missing)}; "
-            "the summary derives them from the catalog metadata regardless"
-        )
+    else:
+        for code in blockers:
+            if not isinstance(code, str) or not code:
+                errors.append(
+                    f"{operation_id}: evidence.blockers items must be non-empty strings, got {code!r}"
+                )
+        if entry.get("semantics") != "read" and BLOCKER_RISK_REVIEW not in blockers:
+            errors.append(
+                f"{operation_id}: semantics {entry.get('semantics')!r} must stay blocked with "
+                f"{BLOCKER_RISK_REVIEW}"
+            )
+        missing = sorted(set(derived_blockers(operation)) - set(recorded_blockers(entry)))
+        if missing:
+            errors.append(
+                f"{operation_id}: evidence.blockers omits fact-derived blocker(s) "
+                f"{', '.join(missing)}; the summary derives them from the catalog metadata regardless"
+            )
     approvals = evidence.get("approvals")
     if not isinstance(approvals, list) or not approvals:
         errors.append(f"{operation_id}: evidence.approvals must list at least one approval code")
@@ -1491,7 +1709,15 @@ def _validate_entry(operation_id: str, entry: Any, operation: dict) -> list[str]
 def validate_review(
     operations: list[dict], review: dict, *, selected_ids: set[str] | None = None
 ) -> list[str]:
-    """Return readable ledger errors without modifying the ledger."""
+    """Return readable ledger errors without modifying the ledger.
+
+    Identity corruption (duplicate operationId or duplicate METHOD+path) is a
+    global input problem and is reported before any selected_ids scoping, so a
+    scoped review can never silently authorize a corrupted catalog.
+    """
+    identity = identity_errors(operations)
+    if identity:
+        return identity
     normalized = normalize_operations(operations)
     if not isinstance(review, dict) or not isinstance(review.get("operations"), dict):
         return ["review document must contain an 'operations' object indexed by operationId"]
@@ -1525,7 +1751,8 @@ def is_implemented(operation: dict, entry: dict) -> bool:
     status = operation.get("flarego_status")
     if status is not None:
         return status == "implemented_subset"
-    return (entry.get("evidence") or {}).get("source_support") == "source_subset"
+    evidence = entry.get("evidence") if isinstance(entry, dict) else None
+    return isinstance(evidence, dict) and evidence.get("source_support") == "source_subset"
 
 
 def summarize_review(operations: list[dict], review: dict) -> dict:
@@ -1535,7 +1762,7 @@ def summarize_review(operations: list[dict], review: dict) -> dict:
     ``capability_verified`` is FlareGo L2/L3 capability acceptance; they are
     reported separately and both stay 0 while no authorized account exists.
     """
-    normalized = normalize_operations(operations)
+    normalized = _require_unique_identities(operations)
     entries = review.get("operations") if isinstance(review, dict) else None
     if not isinstance(entries, dict):
         raise ValueError("review document must contain an 'operations' object")
@@ -1568,7 +1795,7 @@ def summarize_review(operations: list[dict], review: dict) -> dict:
         entry = entries.get(operation["operation_id"])
         if not isinstance(entry, dict):
             continue
-        evidence = entry.get("evidence") or {}
+        evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
         blockers = effective_blockers(operation, entry)
         product_id = entry.get("product_id", "<missing>")
         report["registered"] += 1
@@ -1578,7 +1805,7 @@ def summarize_review(operations: list[dict], review: dict) -> dict:
             report["implemented"] += 1
         if _verified(entry, operation, account_blocked):
             report["verified"] += 1
-        if _capability_verified(entry, account_blocked):
+        if _capability_verified(entry, operation, account_blocked):
             report["capability_verified"] += 1
         if entry.get("deprecation_decision") != "active":
             report["legacy"] += 1
@@ -1601,8 +1828,9 @@ def summarize_review(operations: list[dict], review: dict) -> dict:
         report["by_deprecation_decision"][
             entry.get("deprecation_decision", "<missing>")
         ] += 1
-        for approval in evidence.get("approvals") or []:
-            report["by_implementation_approval"][approval] += 1
+        for approval in evidence.get("approvals") if isinstance(evidence.get("approvals"), list) else []:
+            if isinstance(approval, str):
+                report["by_implementation_approval"][approval] += 1
         for code in blockers:
             report["blockers"][code] += 1
         product = report["by_product"].setdefault(
@@ -1649,15 +1877,32 @@ def summarize_review(operations: list[dict], review: dict) -> dict:
 
 
 def cross_check_schema(schema: dict, catalog_operations: list[dict], review: dict) -> list[str]:
-    """Optional deep check: pinned schema enumeration vs catalog vs ledger."""
+    """Optional deep check: schema enumeration vs catalog vs ledger identities.
+
+    Compares operationId to METHOD+path bindings, not just ID sets, so a row that
+    keeps an ID but changes its route is reported.
+    """
     errors: list[str] = []
-    enumerated = {operation["operation_id"] for operation in enumerate_operations(schema)}
-    catalog = {operation["operation_id"] for operation in normalize_operations(catalog_operations)}
+    enumerated = {
+        operation["operation_id"]: (operation["method"], operation["path"])
+        for operation in enumerate_operations(schema)
+    }
+    catalog = {
+        operation["operation_id"]: (operation["method"], operation["path"])
+        for operation in normalize_operations(catalog_operations)
+    }
     entries = review.get("operations", {}) if isinstance(review, dict) else {}
-    for operation_id in sorted(enumerated - catalog):
+    for operation_id in sorted(set(enumerated) - set(catalog)):
         errors.append(f"schema operation missing from the catalog CSV: {operation_id}")
-    for operation_id in sorted(catalog - enumerated):
+    for operation_id in sorted(set(catalog) - set(enumerated)):
         errors.append(f"catalog CSV operation is absent from the schema: {operation_id}")
-    for operation_id in sorted(enumerated - set(entries)):
+    for operation_id in sorted(set(enumerated) & set(catalog)):
+        if enumerated[operation_id] != catalog[operation_id]:
+            errors.append(
+                f"operationId {operation_id!r} has a different METHOD+path binding: schema "
+                f"{enumerated[operation_id][0]} {enumerated[operation_id][1]} vs catalog "
+                f"{catalog[operation_id][0]} {catalog[operation_id][1]}"
+            )
+    for operation_id in sorted(set(enumerated) - set(entries)):
         errors.append(f"schema operation has no review entry: {operation_id}")
     return errors

@@ -4,6 +4,7 @@ All fixtures are local and synthetic; the real catalog/ledger checks only read
 committed repository files. No network access, no credentials, no cloud calls.
 """
 import copy
+import csv
 import json
 import pathlib
 import tempfile
@@ -21,6 +22,8 @@ from tools.cloudflare_audit.review import (
     SCOPE_KINDS,
     SEMANTICS,
     TARGET_LEVELS,
+    account_blocker_active,
+    cross_check_schema,
     load_catalog_operations,
     load_p2_candidates,
     load_review,
@@ -434,7 +437,11 @@ class ScopeKindTest(unittest.TestCase):
 
 
 class BlockerIntegrityTest(unittest.TestCase):
-    """Facts, not hand-written strings, decide blocked/verified."""
+    """Facts, not hand-written strings, decide blocked/verified.
+
+    Every positive case here is explicitly synthetic: it proves the gate can be
+    satisfied, never that a real Cloudflare account was tested.
+    """
 
     def setUp(self):
         self.operations = [
@@ -444,87 +451,54 @@ class BlockerIntegrityTest(unittest.TestCase):
             ),
         ]
 
-    def test_editing_blockers_cannot_whitelist_missing_permissions(self):
-        review = review_document(
+    def bare_evidence(self, blockers=None):
+        return {
+            "assignment": "tag: Zone Settings",
+            "scope_basis": "path scope /zones/{zone_id}",
+            "source_support": "unimplemented",
+            "work_package": "zones-and-zone-settings",
+            "approvals": ["future_batch_not_yet_approved"],
+            "blockers": list(blockers or []),
+        }
+
+    def review_without_blockers(self):
+        return review_document(
             {
                 "no-permissions": review_entry(
-                    product_id="zones-and-zone-settings",
-                    phase="P2",
-                    evidence={
-                        "assignment": "tag: Zone Settings",
-                        "scope_basis": "path scope /zones/{zone_id}",
-                        "source_support": "unimplemented",
-                        "work_package": "zones-and-zone-settings",
-                        "approvals": ["future_batch_not_yet_approved"],
-                        "blockers": [],
-                    },
+                    product_id="zones-and-zone-settings", phase="P2", evidence=self.bare_evidence()
                 ),
                 "hidden": review_entry(
-                    product_id="zones-and-zone-settings",
-                    phase="P2",
-                    evidence={
-                        "assignment": "tag: Zone Settings",
-                        "scope_basis": "path scope /zones/{zone_id}",
-                        "source_support": "unimplemented",
-                        "work_package": "zones-and-zone-settings",
-                        "approvals": ["future_batch_not_yet_approved"],
-                        "blockers": [],
-                    },
+                    product_id="zones-and-zone-settings", phase="P2", evidence=self.bare_evidence()
                 ),
             }
         )
-        report = summarize_review(self.operations, review)
+
+    def test_editing_blockers_cannot_whitelist_missing_permissions(self):
+        report = summarize_review(self.operations, self.review_without_blockers())
         self.assertEqual(2, report["blocked"])
         self.assertEqual(2, report["blockers"]["permission_metadata_absent"])
-        errors = validate_review(self.operations, review)
+        errors = validate_review(self.operations, self.review_without_blockers())
         self.assertTrue(any("permission_metadata_absent" in error for error in errors), errors)
 
     def test_editing_blockers_cannot_whitelist_forge_hidden(self):
-        review = review_document(
-            {
-                "no-permissions": review_entry(
-                    product_id="zones-and-zone-settings",
-                    phase="P2",
-                    evidence={
-                        "assignment": "tag: Zone Settings",
-                        "scope_basis": "path scope /zones/{zone_id}",
-                        "source_support": "unimplemented",
-                        "work_package": "zones-and-zone-settings",
-                        "approvals": ["future_batch_not_yet_approved"],
-                        "blockers": [],
-                    },
-                ),
-                "hidden": review_entry(
-                    product_id="zones-and-zone-settings",
-                    phase="P2",
-                    evidence={
-                        "assignment": "tag: Zone Settings",
-                        "scope_basis": "path scope /zones/{zone_id}",
-                        "source_support": "unimplemented",
-                        "work_package": "zones-and-zone-settings",
-                        "approvals": ["future_batch_not_yet_approved"],
-                        "blockers": [],
-                    },
-                ),
-            }
-        )
-        errors = validate_review(self.operations, review)
+        errors = validate_review(self.operations, self.review_without_blockers())
         self.assertTrue(any("forge_hidden_flag_requires_review" in error for error in errors), errors)
 
-    def test_verified_requires_a_record_and_a_cleared_global_blocker(self):
-        operations = [
-            operation(
-                "permitted",
-                "GET",
-                "/zones/{zone_id}/settings/always_use_https",
-                ["Zone Settings"],
-                {"x-api-token-group": ["Zone Settings Read"]},
-            )
-        ]
+    def permitted_operation(self):
+        return operation(
+            "permitted",
+            "GET",
+            "/zones/{zone_id}/settings/always_use_https",
+            ["Zone Settings"],
+            {"x-api-token-group": ["Zone Settings Read"]},
+        )
+
+    def passing_entry(self, **overrides):
         entry = review_entry(
             product_id="zones-and-zone-settings",
             phase="P2",
             availability_decision="verified_available",
+            needs_review=False,
             evidence={
                 "assignment": "tag: Zone Settings",
                 "scope_basis": "path scope /zones/{zone_id}",
@@ -532,57 +506,162 @@ class BlockerIntegrityTest(unittest.TestCase):
                 "work_package": "zones-and-zone-settings",
                 "approvals": ["future_batch_not_yet_approved"],
                 "acceptance": "authenticated_account",
+                "acceptance_record": {"environment": "synthetic-fixture", "date": "2026-10-08"},
+                "capability_acceptance": "authenticated_account",
+                "capability_record": {"environment": "synthetic-fixture", "date": "2026-10-08"},
                 "blockers": [],
             },
         )
-        review = review_document({"permitted": entry})
-        self.assertEqual(0, summarize_review(operations, review)["verified"])
-        self.assertTrue(any("acceptance_record" in error for error in validate_review(operations, review)))
+        entry.update(overrides)
+        return entry
 
-        with_record = copy.deepcopy(review)
-        with_record["operations"]["permitted"]["evidence"]["acceptance_record"] = {
-            "environment": "isolated",
-            "date": "2026-10-08",
-        }
-        self.assertEqual(0, summarize_review(operations, with_record)["verified"])
-
-        cleared = copy.deepcopy(with_record)
-        cleared["blockers"] = [
-            blocker for blocker in cleared["blockers"] if blocker["code"] != "authorized_account_absent"
-        ]
-        cleared["operations"]["permitted"]["evidence"]["user_approval"] = "coordinator:2026-10-08"
-        self.assertEqual(1, summarize_review(operations, cleared)["verified"])
-
-    def test_capability_verified_is_reported_separately(self):
-        operations = [
-            operation(
-                "permitted",
-                "GET",
-                "/zones/{zone_id}/settings/always_use_https",
-                ["Zone Settings"],
-                {"x-api-token-group": ["Zone Settings Read"]},
-            )
-        ]
-        entry = review_entry(
-            product_id="zones-and-zone-settings",
-            phase="P2",
-            availability_decision="verified_available",
-            evidence={
-                "assignment": "tag: Zone Settings",
-                "scope_basis": "path scope /zones/{zone_id}",
-                "source_support": "unimplemented",
-                "work_package": "zones-and-zone-settings",
-                "approvals": ["future_batch_not_yet_approved"],
-                "acceptance": "authenticated_account",
-                "acceptance_record": {"environment": "isolated", "date": "2026-10-08"},
-                "blockers": [],
-            },
+    def cleared_review(self, entries):
+        return review_document(
+            entries,
+            blockers=[
+                {
+                    "code": "authorized_account_absent",
+                    "detail": "synthetic clearance fixture",
+                    "cleared_by": "synthetic-fixture",
+                    "clearance_record": {"environment": "synthetic-fixture", "date": "2026-10-08"},
+                }
+            ],
         )
-        review = review_document({"permitted": entry})
+
+    def test_missing_global_blocker_is_not_clearance(self):
+        operations = [self.permitted_operation()]
+        review = review_document({"permitted": self.passing_entry()})
         review["blockers"] = []
-        report = summarize_review(operations, review)
+        self.assertTrue(account_blocker_active(review))
+        self.assertEqual(0, summarize_review(operations, review)["verified"])
+        review["blockers"] = [{"code": "user_approval_absent", "detail": "x"}]
+        self.assertTrue(account_blocker_active(review))
+        self.assertEqual(0, summarize_review(operations, review)["verified"])
+        del review["blockers"]
+        self.assertTrue(account_blocker_active(review))
+        self.assertEqual(0, summarize_review(operations, review)["verified"])
+
+    def test_explicit_clearance_needs_a_reference_and_a_record(self):
+        operations = [self.permitted_operation()]
+        partial = review_document(
+            {"permitted": self.passing_entry()},
+            blockers=[{"code": "authorized_account_absent", "detail": "x", "cleared_by": "fixture"}],
+        )
+        self.assertEqual(0, summarize_review(operations, partial)["verified"])
+        complete = self.cleared_review({"permitted": self.passing_entry()})
+        report = summarize_review(operations, complete)
+        self.assertFalse(report["authorized_account_blocker_active"])
         self.assertEqual(1, report["verified"])
+        self.assertEqual(1, report["capability_verified"])
+        self.assertEqual([], validate_review(operations, complete))
+
+    def test_blocked_entry_cannot_claim_capability_verified(self):
+        operations = [self.permitted_operation()]
+        entry = self.passing_entry()
+        entry["evidence"]["blockers"] = ["permission_metadata_absent"]
+        review = self.cleared_review({"permitted": entry})
+        report = summarize_review(operations, review)
+        self.assertEqual(0, report["verified"])
         self.assertEqual(0, report["capability_verified"])
+
+    def test_pending_review_cannot_claim_capability_verified(self):
+        operations = [self.permitted_operation()]
+        entry = self.passing_entry(needs_review=True)
+        review = self.cleared_review({"permitted": entry})
+        self.assertEqual(0, summarize_review(operations, review)["capability_verified"])
+
+    def test_unknown_scope_cannot_claim_capability_verified(self):
+        operations = [self.permitted_operation()]
+        entry = self.passing_entry(scope_kind="unknown")
+        review = self.cleared_review({"permitted": entry})
+        self.assertEqual(0, summarize_review(operations, review)["capability_verified"])
+
+    def test_opaque_capability_record_is_rejected(self):
+        operations = [self.permitted_operation()]
+        for record in (True, "fixture", [], {}):
+            entry = self.passing_entry()
+            entry["evidence"]["capability_record"] = record
+            review = self.cleared_review({"permitted": entry})
+            self.assertEqual(
+                0, summarize_review(operations, review)["capability_verified"], repr(record)
+            )
+            self.assertTrue(
+                any("capability_record" in error for error in validate_review(operations, review)),
+                record,
+            )
+
+    def test_l0_requires_reason_and_user_approval_reference(self):
+        operations = [self.permitted_operation()]
+        base = review_entry(
+            product_id="zones-and-zone-settings",
+            phase="P2",
+            target_level="L0",
+            evidence=self.bare_evidence(),
+        )
+        without_reason = review_document({"permitted": copy.deepcopy(base)})
+        without_reason["operations"]["permitted"]["evidence"]["user_approval"] = {
+            "source": "user",
+            "reference": "synthetic-fixture",
+        }
+        errors = validate_review(operations, without_reason)
+        self.assertTrue(any("reduction_reason" in error for error in errors), errors)
+
+        without_approval = review_document({"permitted": copy.deepcopy(base)})
+        without_approval["operations"]["permitted"]["evidence"]["reduction_reason"] = "synthetic reason"
+        errors = validate_review(operations, without_approval)
+        self.assertTrue(any("user_approval" in error for error in errors), errors)
+
+        complete = review_document({"permitted": copy.deepcopy(base)})
+        complete["operations"]["permitted"]["evidence"]["reduction_reason"] = "synthetic reason"
+        complete["operations"]["permitted"]["evidence"]["user_approval"] = {
+            "source": "user",
+            "reference": "synthetic-fixture",
+        }
+        self.assertEqual([], validate_review(operations, complete))
+
+    def test_coordinator_note_cannot_masquerade_as_user_approval(self):
+        operations = [self.permitted_operation()]
+        for approval in (
+            True,
+            "approved",
+            {"source": "coordinator", "reference": "coordinator-note"},
+            {"source": "user", "reference": ""},
+            {"reference": "no-source"},
+        ):
+            review = review_document(
+                {
+                    "permitted": review_entry(
+                        product_id="zones-and-zone-settings",
+                        phase="P2",
+                        target_level="L0",
+                        evidence={
+                            **self.bare_evidence(),
+                            "reduction_reason": "synthetic reason",
+                            "user_approval": approval,
+                        },
+                    )
+                }
+            )
+            errors = validate_review(operations, review)
+            self.assertTrue(any("user_approval" in error for error in errors), approval)
+
+    def test_provider_removed_and_console_only_require_exclusion_evidence(self):
+        operations = [self.permitted_operation()]
+        for decision in ("provider_removed", "console_only"):
+            review = review_document(
+                {
+                    "permitted": review_entry(
+                        product_id="zones-and-zone-settings",
+                        phase="P2",
+                        availability_decision=decision,
+                        evidence=self.bare_evidence(),
+                    )
+                }
+            )
+            errors = validate_review(operations, review)
+            self.assertTrue(any(decision in error for error in errors), errors)
+            self.assertTrue(any("reduction_reason" in error for error in errors), errors)
+            self.assertTrue(any("user_approval" in error for error in errors), errors)
 
 
 class ProposalTest(unittest.TestCase):
@@ -834,6 +913,169 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual(["P1", "P8"], report["by_product"][product_id]["phases"])
 
 
+class IdentityIntegrityTest(unittest.TestCase):
+    """I1: operationId and METHOD+path identity must be unique and bound."""
+
+    def op(self, operation_id, method="GET", path="/zones/{zone_id}/settings", tags=("Zone Settings",)):
+        return operation(
+            operation_id, method, path, list(tags), {"x-api-token-group": ["Zone Settings Read"]}
+        )
+
+    def ledger(self, entries):
+        return review_document(entries)
+
+    def test_duplicate_operation_id_rows_are_rejected_by_validate(self):
+        operations = [self.op("fixture-read"), self.op("fixture-read")]
+        errors = validate_review(operations, self.ledger({}))
+        self.assertTrue(any("duplicate operationId" in error for error in errors), errors)
+
+    def test_duplicate_identity_rows_are_rejected_by_validate(self):
+        operations = [self.op("fixture-read"), self.op("fixture-read-copy")]
+        errors = validate_review(operations, self.ledger({}))
+        self.assertTrue(any("duplicate METHOD+path" in error for error in errors), errors)
+
+    def test_summarize_and_propose_fail_on_duplicate_identities(self):
+        operations = [self.op("fixture-read"), self.op("fixture-read")]
+        with self.assertRaises(ValueError):
+            summarize_review(operations, self.ledger({"fixture-read": review_entry()}))
+        with self.assertRaises(ValueError):
+            propose_review(operations, {"operations": {}})
+
+    def test_identity_errors_are_reported_even_with_selected_ids(self):
+        operations = [self.op("fixture-read"), self.op("fixture-read")]
+        errors = validate_review(operations, self.ledger({}), selected_ids={"other"})
+        self.assertTrue(any("duplicate operationId" in error for error in errors), errors)
+
+    def test_unknown_implemented_mapping_reference_fails(self):
+        implemented = {"operations": {"ghost-op": {"method": "GET", "path": "/zones/{zone_id}/ghost"}}}
+        with self.assertRaises(ValueError) as caught:
+            propose_review([self.op("fixture-read")], implemented)
+        self.assertIn("ghost-op", str(caught.exception))
+
+    def test_unknown_phase_override_reference_fails(self):
+        overrides = {"missing-op": {"phase": "P1", "approvals": ["p1_approved_new_request"]}}
+        with self.assertRaises(ValueError) as caught:
+            propose_review([self.op("fixture-read")], {"operations": {}}, phase_overrides=overrides)
+        self.assertIn("missing-op", str(caught.exception))
+
+    def test_cross_check_schema_compares_identity_bindings(self):
+        schema = {
+            "openapi": "3.0.3",
+            "paths": {"/zones/{zone_id}/settings": {"get": {"operationId": "fixture-read", "responses": {}}}},
+        }
+        review = self.ledger({"fixture-read": review_entry()})
+        matching = [catalog_row("fixture-read", "GET", "/zones/{zone_id}/settings", ["Zone Settings"])]
+        self.assertEqual([], cross_check_schema(schema, matching, review))
+        wrong_path = [catalog_row("fixture-read", "GET", "/zones/{zone_id}/other", ["Zone Settings"])]
+        errors = cross_check_schema(schema, wrong_path, review)
+        self.assertTrue(any("METHOD+path" in error for error in errors), errors)
+        wrong_method = [catalog_row("fixture-read", "POST", "/zones/{zone_id}/settings", ["Zone Settings"])]
+        errors = cross_check_schema(schema, wrong_method, review)
+        self.assertTrue(any("METHOD+path" in error for error in errors), errors)
+
+    def test_identity_binding_must_match_between_raw_and_catalog(self):
+        raw = [self.op("fixture-read")]
+        rows = [
+            catalog_row(
+                "fixture-read",
+                "GET",
+                "/zones/{zone_id}/other",
+                ["Zone Settings"],
+                token_permissions_raw='{"x-api-token-group": ["Zone Settings Read"]}',
+            )
+        ]
+        errors = validate_review(rows, self.ledger({"fixture-read": review_entry()}))
+        self.assertEqual([], errors)
+        self.assertEqual(1, len(normalize_operations(raw)))
+        schema = {
+            "openapi": "3.0.3",
+            "paths": {"/zones/{zone_id}/settings": {"get": {"operationId": "fixture-read", "responses": {}}}},
+        }
+        errors = cross_check_schema(schema, rows, self.ledger({"fixture-read": review_entry()}))
+        self.assertTrue(any("METHOD+path" in error for error in errors), errors)
+
+
+class MalformedInputTest(unittest.TestCase):
+    """I3: malformed nested values must fail readably, never grant facts."""
+
+    def setUp(self):
+        self.operation = operation(
+            "permitted",
+            "GET",
+            "/zones/{zone_id}/settings",
+            ["Zone Settings"],
+            {"x-api-token-group": ["Zone Settings Read"]},
+        )
+
+    def test_normalize_rejects_invalid_permission_json(self):
+        rows = [catalog_row("permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"], token_permissions_raw="not-json")]
+        with self.assertRaises(ValueError) as caught:
+            normalize_operations(rows)
+        self.assertIn("token_permissions_raw", str(caught.exception))
+        errors = validate_review(rows, review_document({}))
+        self.assertTrue(any("token_permissions_raw" in error for error in errors), errors)
+
+    def test_null_or_empty_permission_json_is_not_positive(self):
+        for raw in ("null", "[]", "{}", '{"unexpected": true}', '"text"'):
+            rows = [catalog_row("permitted", "GET", "/zones/{zone_id}/settings", ["Zone Settings"], token_permissions_raw=raw)]
+            normalized = normalize_operations(rows)
+            self.assertFalse(normalized[0]["permissions_present"], raw)
+        rows = [
+            catalog_row(
+                "permitted",
+                "GET",
+                "/zones/{zone_id}/settings",
+                ["Zone Settings"],
+                token_permissions_raw='{"x-api-token-group": ["Zone Settings Read"]}',
+            )
+        ]
+        self.assertTrue(normalize_operations(rows)[0]["permissions_present"])
+
+    def test_check_ledger_reports_malformed_evidence_without_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            review_path = pathlib.Path(directory) / "review.json"
+            catalog_path = pathlib.Path(directory) / "endpoints.csv"
+            document = review_document({"permitted": review_entry()})
+            document["operations"]["permitted"]["evidence"] = "wrong type"
+            review_path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+            row = catalog_row(
+                "permitted",
+                "GET",
+                "/zones/{zone_id}/settings",
+                ["Zone Settings"],
+                token_permissions_raw='{"x-api-token-group": ["Zone Settings Read"]}',
+            )
+            with catalog_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerow(row)
+            result = cli.check_ledger(review_path, catalog_path)
+            self.assertTrue(result["errors"])
+            self.assertIsNone(result["summary"])
+            self.assertNotEqual(0, cli.main(["check", "--review", str(review_path), "--catalog", str(catalog_path)]))
+
+    def test_non_string_blocker_and_approval_items_are_reported(self):
+        entry = review_entry()
+        entry["evidence"]["blockers"] = [1, None]
+        entry["evidence"]["approvals"] = [{"code": "x"}]
+        errors = validate_review([self.operation], review_document({"permitted": entry}))
+        self.assertTrue(any("blockers" in error for error in errors), errors)
+        self.assertTrue(any("approval" in error for error in errors), errors)
+
+    def test_summarize_does_not_crash_on_malformed_evidence(self):
+        entry = review_entry()
+        entry["evidence"] = "wrong type"
+        report = summarize_review([self.operation], review_document({"permitted": entry}))
+        self.assertEqual(1, report["blocked"])
+        self.assertEqual(1, report["blockers"]["malformed_evidence"])
+        self.assertEqual(0, report["verified"])
+        self.assertEqual(0, report["capability_verified"])
+
+    def test_missing_essential_fields_are_reported(self):
+        errors = validate_review([self.operation], review_document({"permitted": {}}))
+        self.assertTrue(any("missing required field" in error for error in errors), errors)
+
+
 class RealLedgerTest(unittest.TestCase):
     """Checks the committed ledger against the committed catalog (offline)."""
 
@@ -854,6 +1096,7 @@ class RealLedgerTest(unittest.TestCase):
         self.assertEqual(0, report["capability_verified"])
         self.assertEqual(3659, report["needs_review"])
         self.assertNotIn("P10", report["by_phase"])
+        self.assertTrue(report["authorized_account_blocker_active"])
 
     def test_real_ledger_has_no_verified_or_l0_entries(self):
         for operation_id, entry in self.review["operations"].items():
@@ -878,19 +1121,78 @@ class RealLedgerTest(unittest.TestCase):
         self.assertEqual(54, approvals["p2_candidate"])
         self.assertGreater(approvals["future_batch_not_yet_approved"], 3500)
 
-    def test_real_ledger_unclassified_is_explicit(self):
+    def test_real_ledger_unclassified_bucket_is_empty(self):
         report = summarize_review(self.operations, self.review)
-        self.assertGreaterEqual(report["unclassified"], 1)
-        unclassified = [
+        self.assertEqual(0, report["unclassified"])
+        self.assertNotIn("unclassified-review", {e["product_id"] for e in self.review["operations"].values()})
+
+    def test_real_ledger_tail_families_are_owned(self):
+        report = summarize_review(self.operations, self.review)
+        for product_id, count in (
+            ("field-extractors-alpha", 3),
+            ("account-reporting-control-plane", 6),
+            ("k2-streams-beta-control-data", 14),
+        ):
+            product = report["by_product"][product_id]
+            self.assertEqual(count, product["registered"], product_id)
+            self.assertEqual(["P8"], product["phases"], product_id)
+            self.assertEqual(DEFAULT_OWNER_ROLE, product["owner_role"], product_id)
+        for operation_id, entry in self.review["operations"].items():
+            if entry["product_id"] in (
+                "field-extractors-alpha",
+                "account-reporting-control-plane",
+                "k2-streams-beta-control-data",
+            ):
+                self.assertTrue(entry["needs_review"], operation_id)
+                self.assertNotEqual("L0", entry["target_level"], operation_id)
+                self.assertTrue(entry["evidence"]["classification_evidence"], operation_id)
+                self.assertTrue(entry["evidence"]["blockers"], operation_id)
+
+    def test_real_ledger_k2_data_plane_keeps_unknown_scope_and_host_evidence(self):
+        data_plane = [
             operation_id
             for operation_id, entry in self.review["operations"].items()
-            if entry["product_id"] == "unclassified-review"
+            if entry["product_id"] == "k2-streams-beta-control-data"
+            and entry["scope_kind"] == "unknown"
         ]
-        self.assertTrue(unclassified)
-        for operation_id in unclassified:
+        self.assertEqual(8, len(data_plane))
+        for operation_id in data_plane:
             entry = self.review["operations"][operation_id]
-            self.assertTrue(entry["needs_review"], operation_id)
-            self.assertTrue(entry["evidence"]["gap"], operation_id)
+            self.assertEqual("unknown", entry["scope_kind"])
+            self.assertEqual(
+                "https://{stream_id}.k2.cloudflarestorage.com",
+                entry["evidence"]["protocol_review"]["host"],
+            )
+            self.assertIn("k2_stream_host_acceptance_required", entry["evidence"]["blockers"])
+            self.assertIn("separate_stream_host_acceptance", entry["test_prerequisites"])
+            self.assertNotEqual("principal", entry["scope_kind"])
+        control = [
+            entry
+            for entry in self.review["operations"].values()
+            if entry["product_id"] == "k2-streams-beta-control-data" and entry["scope_kind"] == "account"
+        ]
+        self.assertEqual(6, len(control))
+
+    def test_real_ledger_advanced_ssl_and_zone_rules_are_p5(self):
+        for operation_id, entry in self.review["operations"].items():
+            tags = set(self.review_tag(operation_id))
+            if tags & {"Custom SSL for a Zone", "Certificate Packs", "Custom Origin Trust Store", "Total TLS", "DCV Delegation"}:
+                self.assertEqual("P5", entry["phase"], operation_id)
+                self.assertEqual("certificates-advanced-and-mtls", entry["product_id"], operation_id)
+            if tags & {"Page Rules", "Zone Lockdown", "Zone Snippets", "Available Page Rules settings"}:
+                self.assertEqual("P5", entry["phase"], operation_id)
+                self.assertEqual("rules-waf-bots", entry["product_id"], operation_id)
+        report = summarize_review(self.operations, self.review)
+        self.assertEqual(54, report["by_implementation_approval"]["p2_candidate"])
+
+    def review_tag(self, operation_id):
+        row = self.catalog_row(operation_id)
+        return [tag for tag in row["tags"].split(" | ") if tag]
+
+    def catalog_row(self, operation_id):
+        if not hasattr(self, "_rows"):
+            self._rows = {row["operation_id"]: row for row in self.operations}
+        return self._rows[operation_id]
 
     def test_real_ledger_products_have_phase_owner_and_spec(self):
         for operation_id, entry in self.review["operations"].items():

@@ -162,10 +162,12 @@ S3 操作清单取自官方文档仓库固定提交 `e3a9cf758c28273178d56918399
 | verified_available | 0 | 无授权账号，无真实验收记录 |
 | capability_verified（L2／L3） | 0 | 接口资格可用不等于 FlareGo 能力验收 |
 | legacy／migration | 432 | 保留弃用证据与迁移决策，不自动缩成 L0 |
-| blocked | 2,988 | 权限元数据缺失、Forge hidden 待审、写入风险待审、未归类产品等 |
-| unclassified-review | 23 | 明确的未归类工作包，P0 完成前必须人工消除 |
+| blocked | 3,001 | 权限元数据缺失、Forge hidden 待审、写入风险待审、尾部长尾族资格待审等 |
+| unclassified-review | 0 | 尾部家族已分到具体责任包；未来未知 tag 仍会落入该回退包 |
 
-已批准的当前批次：P1 新增请求 5 项、P1 既有兼容 11 项、P2 候选 54 项（见 [p2-candidate-endpoints.csv](cloudflare-audit/p2-candidate-endpoints.csv)）；其余 3,594 项标记 `future_batch_not_yet_approved`。作用域分布：account 2,563／zone 693／global 281／user 54／unknown 30／principal 22／organization 16。阻塞与验证数由 catalog 事实重新推导，不能靠删除 `evidence.blockers` 洗白。
+已批准的当前批次：P1 新增请求 5 项、P1 既有兼容 11 项、P2 候选 54 项（见 [p2-candidate-endpoints.csv](cloudflare-audit/p2-candidate-endpoints.csv)）；其余 3,594 项标记 `future_batch_not_yet_approved`。作用域分布：account 2,563／zone 693／global 281／user 54／unknown 32／principal 20／organization 16；批次分布：P1 16／P2 89／P3 254／P4 181／P5 552／P6 635／P7 496／P8 1,436。阻塞与验证数由 catalog 事实重新推导，不能靠删除 `evidence.blockers` 洗白；缺失或未清除的账号证据一律视为未知／阻塞，只有带引用与记录的显式清除才生效。
+
+P8 尾部长尾族已按固定 schema 的 route family 分到具体责任包：`field-extractors-alpha`（3）、`account-reporting-control-plane`（6）、`k2-streams-beta-control-data`（14，其中 6 项 account 作用域控制面、8 项独立 stream 主机数据面保持 `unknown` 作用域并记录 host 证据）。这只是责任归属，不代表厂商资格、套餐或用户排除已批准。
 
 ## 4. 必须纠正的 API 边界
 

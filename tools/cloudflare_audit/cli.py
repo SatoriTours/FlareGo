@@ -1,9 +1,9 @@
 """Command line entry point for the reproducible Cloudflare coverage ledger.
 
-Only ``generate`` exists in this task: it verifies the pinned schema against
-the manifest SHA-256, rebuilds the CSV artifacts and refuses to write anything
-when the reviewed baseline no longer matches. It is offline and read-only with
-respect to Cloudflare.
+``generate`` rebuilds the pinned CSV artifacts, ``propose`` regenerates the
+review ledger proposal and ``check`` validates the ledger read-only against the
+catalog (optionally cross-checking the pinned schema). Everything is offline;
+no credential or Cloudflare request is involved.
 """
 from __future__ import annotations
 
@@ -76,14 +76,20 @@ def generate(schema_path: Path, manifest_path: Path, implemented_path: Path, out
 
 
 def check_ledger(review_path: Path, catalog_path: Path, schema_path: Path | None = None) -> dict:
-    """Validate and summarize the ledger. Read-only: nothing is written back."""
+    """Validate and summarize the ledger. Read-only: nothing is written back.
+
+    A structurally invalid ledger yields readable errors and no summary, so the
+    CLI can never present a success summary derived from invalid entries.
+    """
     review = load_review(review_path)
     operations = load_catalog_operations(catalog_path)
     errors = validate_review(operations, review)
     if schema_path is not None:
         schema = load_schema(schema_path, None)
         errors.extend(cross_check_schema(schema, operations, review))
-    return {"errors": errors, "summary": summarize_review(operations, review)}
+    if errors:
+        return {"errors": errors, "summary": None}
+    return {"errors": [], "summary": summarize_review(operations, review)}
 
 
 def propose_ledger(
@@ -172,10 +178,13 @@ def main(argv: list[str] | None = None) -> int:
             result = check_ledger(args.review, args.catalog, args.schema)
             for error in result["errors"]:
                 print(f"error: {error}", file=sys.stderr)
-            print(json.dumps(result["summary"], ensure_ascii=False, indent=2, default=dict))
-            if result["errors"]:
-                print(f"ledger check failed: {len(result['errors'])} structural error(s)", file=sys.stderr)
+            if result["summary"] is None:
+                print(
+                    f"summary withheld: ledger has {len(result['errors'])} structural error(s)",
+                    file=sys.stderr,
+                )
                 return 1
+            print(json.dumps(result["summary"], ensure_ascii=False, indent=2, default=dict))
         else:
             document = propose_ledger(
                 args.catalog, args.implemented, args.output, args.snapshot, args.p2_candidates
