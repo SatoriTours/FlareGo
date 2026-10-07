@@ -19,6 +19,16 @@ from .catalog import (
     pinned_count_problems,
     render_catalog_files,
 )
+from .review import (
+    cross_check_schema,
+    load_catalog_operations,
+    load_p2_candidates,
+    load_review,
+    phase_overrides_for,
+    propose_review,
+    summarize_review,
+    validate_review,
+)
 from .schema import load_schema
 
 MANIFEST_NAME = "snapshot.json"
@@ -65,6 +75,59 @@ def generate(schema_path: Path, manifest_path: Path, implemented_path: Path, out
     return catalog
 
 
+def check_ledger(review_path: Path, catalog_path: Path, schema_path: Path | None = None) -> dict:
+    """Validate and summarize the ledger. Read-only: nothing is written back."""
+    review = load_review(review_path)
+    operations = load_catalog_operations(catalog_path)
+    errors = validate_review(operations, review)
+    if schema_path is not None:
+        schema = load_schema(schema_path, None)
+        errors.extend(cross_check_schema(schema, operations, review))
+    return {"errors": errors, "summary": summarize_review(operations, review)}
+
+
+def propose_ledger(
+    catalog_path: Path,
+    implemented_path: Path,
+    output_path: Path,
+    snapshot_path: Path | None = None,
+    p2_candidates_path: Path | None = None,
+) -> dict:
+    """Regenerate the ledger proposal from the committed catalog and mapping."""
+    operations = load_catalog_operations(catalog_path)
+    implemented = _read_json(implemented_path)
+    candidates = load_p2_candidates(p2_candidates_path) if p2_candidates_path else None
+    provenance = {
+        "catalog": str(catalog_path),
+        "implemented": str(implemented_path),
+        "baseline_commit": implemented.get("baseline_commit"),
+        "approved_lists": {
+            "p1_approved_new_requests": 5,
+            "p1_existing_compat": len(implemented.get("operations", {})),
+            "p2_candidates": len(candidates or {}),
+        },
+    }
+    if p2_candidates_path is not None:
+        provenance["p2_candidates"] = str(p2_candidates_path)
+    if snapshot_path is not None:
+        snapshot = _read_json(snapshot_path)
+        provenance["snapshot"] = str(snapshot_path)
+        provenance["schema_commit"] = (snapshot.get("schema") or {}).get("commit")
+    document = propose_review(
+        operations,
+        implemented,
+        phase_overrides=phase_overrides_for(implemented, candidates),
+        provenance=provenance,
+    )
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
+        encoding="utf-8",
+    )
+    return document
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python3 -m tools.cloudflare_audit.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -75,14 +138,54 @@ def main(argv: list[str] | None = None) -> int:
     generate_parser.add_argument("--manifest", type=Path, required=True)
     generate_parser.add_argument("--implemented", type=Path, required=True)
     generate_parser.add_argument("--output", type=Path, required=True)
+
+    check_parser = subparsers.add_parser(
+        "check", help="validate the review ledger against the catalog (read-only)"
+    )
+    check_parser.add_argument("--review", type=Path, required=True)
+    check_parser.add_argument("--catalog", type=Path, required=True)
+    check_parser.add_argument(
+        "--schema", type=Path, default=None, help="optional pinned schema for a deep cross-check"
+    )
+
+    propose_parser = subparsers.add_parser(
+        "propose", help="regenerate the review ledger proposal from the catalog"
+    )
+    propose_parser.add_argument("--catalog", type=Path, required=True)
+    propose_parser.add_argument("--implemented", type=Path, required=True)
+    propose_parser.add_argument("--output", type=Path, required=True)
+    propose_parser.add_argument("--snapshot", type=Path, default=None)
+    propose_parser.add_argument(
+        "--p2-candidates",
+        type=Path,
+        default=None,
+        help="approved P2 candidate list (docs/cloudflare-audit/p2-candidate-endpoints.csv)",
+    )
+
     args = parser.parse_args(argv)
 
     try:
-        catalog = generate(args.schema, args.manifest, args.implemented, args.output)
+        if args.command == "generate":
+            catalog = generate(args.schema, args.manifest, args.implemented, args.output)
+            print(json.dumps(catalog["counts"], ensure_ascii=False, indent=2))
+        elif args.command == "check":
+            result = check_ledger(args.review, args.catalog, args.schema)
+            for error in result["errors"]:
+                print(f"error: {error}", file=sys.stderr)
+            print(json.dumps(result["summary"], ensure_ascii=False, indent=2, default=dict))
+            if result["errors"]:
+                print(f"ledger check failed: {len(result['errors'])} structural error(s)", file=sys.stderr)
+                return 1
+        else:
+            document = propose_ledger(
+                args.catalog, args.implemented, args.output, args.snapshot, args.p2_candidates
+            )
+            print(json.dumps(summarize_review(
+                load_catalog_operations(args.catalog), document
+            ), ensure_ascii=False, indent=2, default=dict))
     except (ValueError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(json.dumps(catalog["counts"], ensure_ascii=False, indent=2))
     return 0
 
 

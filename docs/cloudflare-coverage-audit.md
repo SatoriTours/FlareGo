@@ -143,6 +143,30 @@ DNS 列表能容纳其他类型的基础信息，但写入校验只允许五类�
 
 S3 操作清单取自官方文档仓库固定提交 `e3a9cf758c28273178d56918399068c6d2eb8a1d`；原始来源与 SHA-256 见 snapshot.json。REST 穷举与 S3 兼容表已经完成，GraphQL 全字段及专用实时协议穷举仍待授权与 P0 核验，不声称本轮已经列完一切非 REST 接口。
 
+### 3.4 归属、批次与资格台账（P0 复核）
+
+[endpoints.csv](cloudflare-audit/endpoints.csv) 只回答“官方有哪些操作”；[review.json](cloudflare-audit/review.json) 回答“谁负责、属于哪个批次、当前资格如何”。台账按 `operationId` 索引全部 3,659 个操作，每项固定 14 个字段：`product_id`、`phase`、`owner_role`、`scope_kind`、`protocol`、`semantics`、`risk`、`pagination`、`availability_decision`、`deprecation_decision`、`target_level`、`test_prerequisites`、`needs_review`、`evidence`。
+
+- `scope_kind` 只描述 API 授权／资源作用域：`account`／`zone`／`user`／`organization`／`global`／`principal`／`unknown`；源码支持状态单独放在 `evidence.source_support`（`source_subset`／`unimplemented`）。无法确定作用域时记 `unknown` 并保留证据，不默认成 `global`。
+- `phase` 是剩余产品工作的长期批次；`evidence.approvals` 才表示当前已批准的实现清单。两者分离，避免某个 tag 的默认归属被当成整个产品提前开工的许可。
+- `semantics` 只由 HTTP 方法给出提示：POST 一律为 `unknown`，因为参数才决定读写；未审核的写入保持阻塞。
+- 台账是审计数据，不是运行时白名单；`availability_decision` 不是写许可，运行时放行仍只来自 P1 手写策略。
+
+当前 3,659 项全部是 `needs_review` 的机器提议（`proposed_not_approved`），没有用户逐项批准：
+
+| 状态 | 数量 | 说明 |
+| --- | ---: | --- |
+| registered | 3,659 | 全部操作都有产品、批次、负责人、目标与证据 |
+| target（L2／L3） | 3,659 | 未获批准排除，也没有 L0-only 项 |
+| implemented（源码子集） | 11 | 仍是部分参数／字段支持，不等于完整支持 |
+| verified_available | 0 | 无授权账号，无真实验收记录 |
+| capability_verified（L2／L3） | 0 | 接口资格可用不等于 FlareGo 能力验收 |
+| legacy／migration | 432 | 保留弃用证据与迁移决策，不自动缩成 L0 |
+| blocked | 2,988 | 权限元数据缺失、Forge hidden 待审、写入风险待审、未归类产品等 |
+| unclassified-review | 23 | 明确的未归类工作包，P0 完成前必须人工消除 |
+
+已批准的当前批次：P1 新增请求 5 项、P1 既有兼容 11 项、P2 候选 54 项（见 [p2-candidate-endpoints.csv](cloudflare-audit/p2-candidate-endpoints.csv)）；其余 3,594 项标记 `future_batch_not_yet_approved`。作用域分布：account 2,563／zone 693／global 281／user 54／unknown 30／principal 22／organization 16。阻塞与验证数由 catalog 事实重新推导，不能靠删除 `evidence.blockers` 洗白。
+
 ## 4. 必须纠正的 API 边界
 
 ### 4.1 Registrar 不再只是“没有真实注册 API”
@@ -355,7 +379,13 @@ P0 完成后，逐工作包采用：端点数 × 实际复杂度（生成绑定�
   :app:assembleDebug :app:lintDebug :android-platform:lintDebug
 ./gradlew :app:connectedDebugAndroidTest
 python3 -m unittest discover -s tools/ci/tests -v
+python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_catalog.py' -v
+python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_review.py' -v
+python3 -m tools.cloudflare_audit.cli check --review docs/cloudflare-audit/review.json \
+  --catalog docs/cloudflare-audit/endpoints.csv
 ```
+
+`cli check` 只读，不修改 CSV、manifest、review 或产品行为；结构错误非零退出，可用性阻塞与待审数量照实报告而不隐藏。
 
 执行阶段增加：固定 Schema 检查、生成代码可重复性、operationId 全归属、能力与风险策略完整性、各产品 mock／sandbox／授权账号测试任务。CI 不含生产 Token，不执行真实扣款或破坏性操作；受控真实账号验收是单独授权作业。
 
