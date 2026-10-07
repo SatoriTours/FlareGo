@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 标准库、unittest、GitHub Actions；不新增产品依赖。
 
-**Spec:** `docs/cloudflare-coverage-audit.md` §1、§3.3、§5、§8 P0、§9。用户已同意继续细化该书面草案；本计划须评审后才实施。
+**Spec:** `docs/cloudflare-coverage-audit.md` §1、§3.3、§5、§8 P0、§9。用户已评审本计划并明确批准开始执行；实施边界见 P0–P2 总览。
 
 ## Global Constraints
 
@@ -54,7 +54,7 @@
 - `build_catalog(schema: dict, implemented: dict) -> dict`：返回 `endpoints`、`products`、`counts`；排序由 method＋path 固定，不依赖 dict 插入顺序。
 - CLI：`python3 -m tools.cloudflare_audit.cli generate --schema PATH --manifest docs/cloudflare-audit/snapshot.json --implemented docs/cloudflare-audit/implemented.json --output DIR`。
 
-- [ ] **Step 1：写失败测试。** fixture 含 2 个路径、3 个操作、一个双 tag、一个含转义 JSON Pointer 的引用；新增断言：
+- [x] **Step 1：写失败测试。** fixture 含 2 个路径、3 个操作、一个双 tag、一个含转义 JSON Pointer 的引用；新增断言：
   ```python
   def test_multitag_is_not_an_extra_operation(self):
       result = build_catalog(self.schema, self.implemented)
@@ -63,10 +63,12 @@
       self.assertEqual(1, result['counts']['implemented_subset'])
   ```
   同时测试重复 operationId、映射命中不存在操作、坏 SHA、未解引用 schema、重复生成字节完全一致。
-- [ ] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_catalog.py' -v`；新增测试因工具缺失而失败。
-- [ ] **Step 3：实现接口与生成器。** 把当前临时分析逻辑正式化；UTF-8 BOM CSV；保留 METHOD、operationId、原始 flags；初始 implemented.json 从已审查的 11 项手工映射建立，并记录 source file 与 baseline commit。当前源码变化不能被旧映射自动认定为新支持。
-- [ ] **Step 4：运行 GREEN 及固定快照检查。** 重跑测试；公开 Schema 校验后生成临时目录，确认 3,659／2,298／582／11／3,648／335／432 与 snapshot 一致。差异只能是批准新增的审查字段，不改原始基线。
-- [ ] **Step 5：提交独立成果。** 审阅本 task 路径后 `git add` 明确文件，`git commit -m "build: make Cloudflare coverage audit reproducible"`；不使用 `git add .`。
+- [x] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_catalog.py' -v`；新增测试因工具缺失而失败。
+- [x] **Step 3：实现接口与生成器。** 把当前临时分析逻辑正式化；UTF-8 BOM CSV；保留 METHOD、operationId、原始 flags；初始 implemented.json 从已审查的 11 项手工映射建立，并记录 source file 与 baseline commit。当前源码变化不能被旧映射自动认定为新支持。
+- [x] **Step 4：运行 GREEN 及固定快照检查。** 重跑测试；公开 Schema 校验后生成临时目录，确认 3,659／2,298／582／11／3,648／335／432 与 snapshot 一致。差异只能是批准新增的审查字段，不改原始基线。
+- [x] **Step 5：提交独立成果。** 审阅本 task 路径后 `git add` 明确文件，`git commit -m "build: make Cloudflare coverage audit reproducible"`；不使用 `git add .`。
+
+**Task 1 验收记录：**实现 `d2aac70`、引用解析修复 `3d5eecd` 已通过协调会话独立规格／质量审查。36 项工具测试、10 项已有 Python 测试通过；固定 Schema SHA、全部初始计数与三个产物字节复核一致。三个产物重新生成后无改动，满足复现要求；保留原有 path→method 确定性顺序。此成果仅为离线审计工具，不代表新增产品能力或真实账号验收。未运行 Gradle／Android／真实云端测试。
 
 ## Task 2：全量负责人、批次与资格决策
 
@@ -146,4 +148,4 @@
 
 **执行依赖：**P0 Task 1 → Task 2；Task 3 可在 Task 1 后并行，Task 4 与 Task 2 共用 review.py，必须由同一集成负责人合并。
 
-**未执行说明：**本文中的测试命令、生成工具、CI 和提交均为待实施步骤。本轮仅写计划。
+**执行状态：**Task 1 已验收；Task 2–4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
