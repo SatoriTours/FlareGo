@@ -37,7 +37,7 @@ Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。
 
 ## 签名构建与应用更新
 
-每次提交通过 GitHub Actions 构建签名 APK，main 发布到 `latest` 测试通道；`vMAJOR.MINOR.PATCH` Tag 发布正式版。两个通道共用独立发布证书，私钥只保存在 GitHub Actions Secrets。账号页支持更新通道切换、自动/手动检查、下载校验与系统安装确认。详见 [发布与更新说明](docs/releases.md)。
+每次提交通过 GitHub Actions 构建签名 APK，main 发布到 `latest` 测试通道；`vMAJOR.MINOR.PATCH` Tag 发布正式版。两个通道共用独立发布证书，私钥只保存在 GitHub Actions Secrets。账号页支持更新通道切换、自动/手动检查、下载校验与系统安装确认。详见 [发布与更新说明](docs/releases.md) 与 [实际验证记录](docs/release-verification.md)。
 
 ## 工程结构
 

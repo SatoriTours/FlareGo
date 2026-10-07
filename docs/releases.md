@@ -18,7 +18,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-Tag 不允许前导零或预发布后缀，已经发布的正式 Release 不会覆盖。先保证对应提交通过检查，再创建新 Tag。main 的旧提交重跑仅保存 artifact，不替换当前 `latest`。流水线统一串行，且不取消正在发布的构建。`versionCode` 为 `max(10000 + workflow run number, highest published versionCode + 1)`，所有通道共用序列；切换通道只安装高于本机版本的 APK。
+Tag 不允许前导零或预发布后缀，已经发布的正式 Release 不会覆盖。先保证对应提交通过检查，再创建新 Tag。main 的旧提交重跑仅保存 artifact，不替换当前 `latest`。流水线统一串行，且不取消正在发布的构建。`versionCode` 为 `max(10000 + workflow run number, highest recorded metadata versionCode + 1)`，草稿中的已分配元数据也参与版本下限，避免中断发布后重用较低版本号。所有通道共用序列；切换通道只安装高于本机版本的 APK。
 
 发布附件：APK、`build-metadata.json`、`SHA256SUMS`。元数据包含通道、Tag、显示版本、整数版本号、Git commit SHA、APK 名称；校验文件绑定 APK 和元数据。发布期间滚动 Release 暂时转为 draft，上传全部附件后再发布。若网络故障造成草稿，可重新运行同一受信任构建完成发布；已公开的正式版本仍不可覆盖。
 

@@ -20,6 +20,7 @@ files = [Path("dist") / value["apk_name"], Path("dist/build-metadata.json")]
 Path("dist/SHA256SUMS").write_text("".join(
     f"{hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()}  {path.name}\n" for path in files))
 tag = value["release_tag"]
+notes = f"Signed Android build\n\nCommit: {value['commit_sha']}\nVersion code: {value['version_code']}\nSHA-256: see SHA256SUMS."
 # Keep latest's release draft while replacing files: the updater refuses draft releases.
 existing = subprocess.run(["gh", "release", "view", tag, "--repo", repo, "--json", "isDraft"], capture_output=True, text=True)
 exists = existing.returncode == 0
@@ -27,16 +28,20 @@ if exists and value["channel"] == "release" and not json.loads(existing.stdout)[
     raise SystemExit("Published stable releases are immutable")
 if exists:
     subprocess.run(["gh", "release", "edit", tag, "--repo", repo, "--draft"], check=True)
+    if value["channel"] == "snapshot":
+        subprocess.run(["gh", "api", "--method", "PATCH", f"repos/{repo}/git/refs/tags/latest",
+                        "-f", f"sha={value['commit_sha']}", "-F", "force=true"], check=True,
+                       stdout=subprocess.DEVNULL)
     subprocess.run(["gh", "release", "upload", tag, *map(str, files), "dist/SHA256SUMS", "--clobber", "--repo", repo], check=True)
 else:
     args = ["gh", "release", "create", tag, *map(str, files), "dist/SHA256SUMS", "--repo", repo,
             "--draft", "--title", "FlareGo " + value["version_name"], "--target", value["commit_sha"],
-            "--notes", f"Signed Android build\n\nCommit: {value['commit_sha']}\nVersion code: {value['version_code']}\nSHA-256: see SHA256SUMS."]
+            "--notes", notes]
     if value["channel"] == "snapshot":
         args.append("--prerelease")
     else:
         args.append("--verify-tag")
     subprocess.run(args, check=True)
-args = ["gh", "release", "edit", tag, "--repo", repo, "--draft=false", "--title", "FlareGo " + value["version_name"]]
+args = ["gh", "release", "edit", tag, "--repo", repo, "--draft=false", "--title", "FlareGo " + value["version_name"], "--notes", notes]
 args.append("--prerelease" if value["channel"] == "snapshot" else "--latest")
 subprocess.run(args, check=True)

@@ -13,7 +13,7 @@ def metadata(ref_type, ref_name, run_number, sha, highest):
     if code > 2147483647:
         raise ValueError("Android versionCode exhausted")
     if ref_type == "tag":
-        if not re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", ref_name):
+        if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", ref_name):
             raise ValueError("Release tag must be vMAJOR.MINOR.PATCH without leading zeroes")
         version = ref_name[1:]
         channel, tag, apk = "release", ref_name, f"flarego-{version}.apk"
@@ -44,10 +44,11 @@ def published(repo):
     versions, tags = [], set()
     for page in pages:
         for release in page:
-            if release["draft"]:
-                continue
-            tags.add(release["tag_name"])
+            if not release["draft"]:
+                tags.add(release["tag_name"])
             assets = [a for a in release["assets"] if a["name"] == "build-metadata.json"]
+            if release["draft"] and not assets:
+                continue
             if len(assets) != 1:
                 raise ValueError("Published release has missing/duplicate build metadata")
             value = gh_json("api", f"repos/{repo}/releases/assets/{assets[0]['id']}",

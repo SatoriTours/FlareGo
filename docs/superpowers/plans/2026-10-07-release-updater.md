@@ -1,6 +1,6 @@
 # GitHub 发布与应用更新实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 发布签名的 FlareGo 开源 Android 应用，打通提交、Tag 与应用内更新闭环。
 
@@ -46,15 +46,15 @@
 **Interfaces:** installer.prepare(path,update): Intent，经 hash/包名/签名/版本校验；根 Activity 消费安装请求并处理授权。
 - [x] 写下载完整性/可信 URL 与安装校验测试，观察失败。
 - [x] 实现下载/进度、安装授权和账号页更新入口。
-- [ ] 完成本地测试、Release 签名验证、lint 和界面验证。
+- [x] 完成本地测试、Release 签名验证、lint 和界面验证。
 
 ### Task 4: GitHub 实际发布与验收
 
 **Files:** README、发布/更新文档、验证记录。
-- [ ] 完成只读独立审查并修复重要发现。
-- [ ] 提交并推送 main，观察 Actions 构建与 latest 发布；创建并推送 v0.1.0，观察正式 Release 构建。
-- [ ] 下载 CI APK 验证包名、版本与证书一致性，验证应用通过 GitHub 读取正式/提交更新契约。
-- [ ] 提供仓库、Actions、Release 链接及实际通过的检查。
+- [x] 完成只读独立审查并修复重要发现。
+- [x] 提交并推送 main，观察 Actions 构建与 latest 发布；创建并推送 v0.1.0，观察正式 Release 构建。
+- [x] 下载 CI APK 验证包名、版本与证书一致性，验证应用通过 GitHub 读取正式/提交更新契约。
+- [x] 提供仓库、Actions、Release 链接及实际通过的检查。
 
 用户已明确授权公开、提交、签名与发布，直接连续执行；不要求重复设计审批。
 
@@ -64,3 +64,9 @@
 - 5 项 Python、26 项核心 JVM、6 项平台单元测试通过；Debug / Release 与 lint 通过。
 - 独立审查修复：StateFlow.collect 不因消费安装请求取消验证；ViewModel 保留 pending 请求到系统安装器启动；Activity 重建及授权结果单次交接；Actions queue:max 保护排队 Tag 构建。
 - 新增 Android 安装前拒绝旧版本、缓存篡改、缓存外路径的集成测试，验证持久化更新偏好。
+
+- Android 原生 6 项测试全部通过；新增更新测试真实翻转缓存字节，证实安装前重新 hash。
+- main 已推送；首个 runner 缺失 SDK，已改为固定版本 setup-android 显式安装 SDK 36，新运行已完成 SDK、Secrets、版本分配，目前在远端测试与 lint。
+
+- 提交构建与 v0.1.0 Tag 构建均已成功发布，已验证两 APK 校验文件和同证书。App 真实覆盖升级已通过 10000 → 10002（提交通道）→ 10003（正式通道）；下载及授权期间 Activity 重建恢复通过。签名临时私钥和密码已删除，四项 GitHub Secrets 保留。
+- 追加草稿版本下限、严格 ASCII Tag 校验及滚动 latest 的 Tag/说明同步；7 项 CI 契约测试通过。验证记录见 docs/release-verification.md。
