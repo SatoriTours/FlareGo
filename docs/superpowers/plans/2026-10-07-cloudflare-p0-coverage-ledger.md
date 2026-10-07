@@ -81,7 +81,7 @@
 - `availability_decision`：documented_unverified／verified_available／restricted／provider_removed／console_only；未知不等于不可用。
 - `target_level`：L0／L2／L3；任何只做 L0／排除项必须有原因与用户批准证据。运行时写许可仍属于 P1 手写策略，不来自该字段。
 
-- [ ] **Step 1：写失败测试。**
+- [x] **Step 1：写失败测试。**
   ```python
   def test_unknown_permission_does_not_grant_availability(self):
       report = summarize_review(self.operations_without_permissions, self.review)
@@ -89,10 +89,12 @@
       self.assertEqual(1, report['blocked'])
   ```
   另测缺失 owner、未知 operationId、重复归属、SDK GA 与摘要 Alpha 冲突、仅 Forge hidden 不等于 removed、selected_ids 审查不影响其他产品。
-- [ ] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_review.py' -v`。
-- [ ] **Step 3：实现验证并人工归类。** 可按路径／SDK group 提议产品归属，但每项记录 review 状态。所有 3,659 项必须有 owner 与 phase；模糊标签分到显式 `unclassified-review` 工作包并在 P0 完成前人工消除。资格不明确的保留 needs_review 与具体证据缺口，不编造可用性。
-- [ ] **Step 4：运行 GREEN 与台账门禁。** `python3 -m tools.cloudflare_audit.cli check --review docs/cloudflare-audit/review.json --catalog docs/cloudflare-audit/endpoints.csv`；期望缺 owner／phase／产品归属为 0，并报告而非隐藏可用性阻塞数。P0 不要求普通账号验收数等于总数。
-- [ ] **Step 5：提交。** `git commit -m "docs: assign Cloudflare operation owners and acceptance targets"`，仅添加本 task 的文件。
+- [x] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_review.py' -v`。
+- [x] **Step 3：实现验证并人工归类。** 可按路径／SDK group 提议产品归属，但每项记录 review 状态。所有 3,659 项必须有 owner 与 phase；模糊标签分到显式 `unclassified-review` 工作包并在 P0 完成前人工消除。资格不明确的保留 needs_review 与具体证据缺口，不编造可用性。
+- [x] **Step 4：运行 GREEN 与台账门禁。** `python3 -m tools.cloudflare_audit.cli check --review docs/cloudflare-audit/review.json --catalog docs/cloudflare-audit/endpoints.csv`；期望缺 owner／phase／产品归属为 0，并报告而非隐藏可用性阻塞数。P0 不要求普通账号验收数等于总数。
+- [x] **Step 5：提交。** `git commit -m "docs: assign Cloudflare operation owners and acceptance targets"`，仅添加本 task 的文件。
+
+**Task 2 验收记录：**初始实现 `d14774d`，修复 `b2b8ba1`／`8fff278`／`831e51b`，经三轮限范围独立复审后通过规格／质量门禁。独立 128 项工具测试＋10 项既有 Python 测试通过；CLI 含固定 Schema 身份校验、原失败探针与组合资格探针、SHA／全部计数／三个产物／5,323,243 字节台账重放通过。registered／target 3,659、implemented subset 11、verified／capability_verified 0／0、legacy 432、blocked 3,001、needs_review 3,659、unclassified 0。23 项长尾已具体归属 P8，但资格阻塞保留；K2 数据面 8 项独立主机与 unknown 作用域、高级证书与网站规则 P5 归属已核实；P2 当前准入仍为 54 候选。自动提议不是逐项用户资格批准，没有任何 L0-only／排除项获批准。未运行 Gradle／Android／真实云验收。
 
 ## Task 3：Schema 差异与只读 CI
 
@@ -148,4 +150,4 @@
 
 **执行依赖：**P0 Task 1 → Task 2；Task 3 可在 Task 1 后并行，Task 4 与 Task 2 共用 review.py，必须由同一集成负责人合并。
 
-**执行状态：**Task 1 已验收；Task 2–4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
+**执行状态：**Task 1–2 已验收；Task 3–4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
