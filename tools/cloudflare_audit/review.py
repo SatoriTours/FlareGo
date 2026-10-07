@@ -2049,7 +2049,6 @@ def cross_check_schema(schema: dict, catalog_operations: list[dict], review: dic
         errors.append(f"schema operation has no review entry: {operation_id}")
     return errors
 
-
 # --------------------------------------------------------------------------- #
 # Independent protocol ledger (Task 4)
 # --------------------------------------------------------------------------- #
@@ -2066,7 +2065,32 @@ FORBIDDEN_COMBINED_KEYS = (
     "combined_total",
 )
 FORBIDDEN_DENOMINATOR_NAMES = ("total", "combined", "overall", "all")
-NON_REST_DENOMINATORS = ("s3", "graphql", "realtime")
+REQUIRED_DENOMINATOR_NAMES = ("rest", "s3", "graphql", "realtime")
+UNKNOWN_DENOMINATOR_NAMES = ("graphql", "realtime")
+REQUIRED_GLOBAL_BLOCKER_CODES = (
+    "authorized_account_absent",
+    "authorized_schema_capture_absent",
+    "stream_host_credentials_absent",
+)
+S3_SOURCE_NAME = "s3-compat"
+S3_SOURCE_COMMIT = "e3a9cf758c28273178d56918399068c6d2eb8a1d"
+S3_SOURCE_SHA256 = "a3a9f5b86efc022ae7cbe813e49b682f0dbb3dfc7ff1eac5498d3af62c9e75d8"
+S3_COMPAT_PAGE_URL = "https://developers.cloudflare.com/r2/api/s3/api/"
+GRAPHQL_CAPTURE_FIELDS = ("environment", "captured_at", "artifact_sha256", "authorized_by")
+CAPABILITY_RECORD_FIELDS = (
+    "record_id",
+    "environment",
+    "captured_at",
+    "query_scope",
+    "result",
+    "evidence_artifact",
+)
+ADMISSION_BOUNDARY_FIELDS = (
+    "impact_boundary",
+    "confirmation_boundary",
+    "reconciliation_boundary",
+    "verification_boundary",
+)
 ENVIRONMENT_FIELDS = (
     "environment_id",
     "label",
@@ -2076,22 +2100,31 @@ ENVIRONMENT_FIELDS = (
     "permission_categories",
     "cleanup_responsibility",
     "status",
+    "authorization_reference",
     "blockers",
     "notes",
 )
+BLOCKER_FIELDS = ("code", "detail")
 ADMISSION_FIELDS = (
     "operation_id",
     "method",
     "path",
     "source",
     "risk",
+    "risk_review",
     "confirmation_required",
     "verification_boundary",
+    "impact_boundary",
+    "confirmation_boundary",
+    "reconciliation_boundary",
+    "auto_replay",
+    "readback_required",
     "proposed",
 )
 S3_REQUIRED_FIELDS = (
     "owner_role",
     "phase",
+    "source_name",
     "source_commit",
     "source_sha256",
     "source_quote_ref",
@@ -2099,19 +2132,23 @@ S3_REQUIRED_FIELDS = (
     "acceptance_target_level",
     "verification_status",
 )
-SENSITIVE_KEY_SUBSTRINGS = (
-    "secret",
-    "password",
-    "private_key",
-    "credential_path",
-    "credentials_path",
-    "payment",
-    "card_number",
-    "bearer",
-    "authorization",
+S3_FEATURE_COLUMNS = (
+    "vendor_supported_features",
+    "vendor_unsupported_features",
+    "vendor_experimental_features",
+    "feature_groups_reviewed",
 )
-SENSITIVE_KEYS = frozenset(
-    {
+ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _normalize_key(key: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+NORMALIZED_SENSITIVE_KEYS = frozenset(
+    _normalize_key(name)
+    for name in (
         "token",
         "api_token",
         "token_value",
@@ -2124,16 +2161,45 @@ SENSITIVE_KEYS = frozenset(
         "signing_key",
         "credential_value",
         "client_secret",
-    }
+        "secret",
+        "password",
+        "private_key",
+        "credential_path",
+        "credential_file",
+        "credentials_path",
+        "payment",
+        "payment_method",
+        "card_number",
+        "cvv",
+        "cvc",
+        "bearer",
+        "authorization",
+        "s3_secret",
+        "api_key",
+    )
 )
-CREDENTIAL_VALUE_PATTERNS = (
-    re.compile(r"^ey[A-Za-z0-9_-]{8,}\."),
-    re.compile(r"^AKIA[0-9A-Z]{16}$"),
-    re.compile(r"^[0-9a-f]{32}$"),
-    re.compile(r"^[A-Za-z0-9+/]{40,}={0,2}$"),
-    re.compile(r"^(/|~)"),
-    re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"),
-    re.compile(r"^Bearer\s+\S{8,}$", re.IGNORECASE),
+NORMALIZED_SENSITIVE_SUBSTRINGS = (
+    "secret",
+    "password",
+    "privatekey",
+    "credentialpath",
+    "credentialfile",
+    "cardnumber",
+    "paymentmethod",
+    "apikey",
+    "accesstoken",
+    "sessiontoken",
+)
+CREDENTIAL_VALUE_SEARCH_PATTERNS = (
+    re.compile(r"\bBearer\s+\S{8,}", re.IGNORECASE),
+    re.compile(
+        r"(?:^|\s)(?:/|~)[^\s]*(?:credential|secret|token|\.ssh|\.config|\.cloudflare)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bey[A-Za-z0-9_-]{8,}\."),
+    re.compile(r"\b[0-9a-f]{32}\b"),
+    re.compile(r"\b(?:\d[ -]?){13,19}\b"),
 )
 
 
@@ -2172,22 +2238,50 @@ def _sensitive_findings(label: str, node: Any) -> list[str]:
     findings: list[str] = []
     if isinstance(node, dict):
         for key, value in node.items():
-            name = str(key).lower()
-            if name in SENSITIVE_KEYS or any(part in name for part in SENSITIVE_KEY_SUBSTRINGS):
-                findings.append(f"{label}.{key}: sensitive key must not be recorded in the environment registry")
+            normalized = _normalize_key(key)
+            if normalized in NORMALIZED_SENSITIVE_KEYS or any(
+                part in normalized for part in NORMALIZED_SENSITIVE_SUBSTRINGS
+            ):
+                findings.append(
+                    f"{label}.{key}: sensitive key must not be recorded in the environment registry"
+                )
                 continue
             findings.extend(_sensitive_findings(f"{label}.{key}", value))
     elif isinstance(node, list):
         for index, value in enumerate(node):
             findings.extend(_sensitive_findings(f"{label}[{index}]", value))
     elif isinstance(node, str):
-        for pattern in CREDENTIAL_VALUE_PATTERNS:
-            if pattern.match(node):
+        for pattern in CREDENTIAL_VALUE_SEARCH_PATTERNS:
+            if pattern.search(node):
                 findings.append(
                     f"{label}: value looks like credential material or a local path and must not be recorded"
                 )
                 break
     return findings
+
+
+def _pinned_context(errors: list[str]) -> dict:
+    """Read-only pinned context: the committed catalog plus the pinned REST count.
+
+    The two-argument ``validate_protocols`` form must not silently skip reference
+    checking, so it loads this pinned context instead of treating every reference
+    as unknown.
+    """
+    root = Path(__file__).resolve().parents[2]
+    catalog_path = root / "docs/cloudflare-audit/endpoints.csv"
+    snapshot_path = root / "docs/cloudflare-audit/snapshot.json"
+    context: dict[str, Any] = {"operations": [], "rest_operations": None}
+    try:
+        with catalog_path.open(encoding="utf-8-sig", newline="") as handle:
+            context["operations"] = [
+                {"operation_id": row["operation_id"], "method": row["method"], "path": row["path"]}
+                for row in csv.DictReader(handle)
+            ]
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        context["rest_operations"] = (snapshot.get("counts") or {}).get("operations")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        errors.append(f"pinned protocol context is unavailable: {error}")
+    return context
 
 
 def _catalog_index(catalog_operations: list[dict] | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
@@ -2229,6 +2323,77 @@ def _check_operation_reference(
     return operation_id
 
 
+def _environment_index(
+    environments: list, errors: list[str]
+) -> dict[str, dict]:
+    """Index environments, rejecting duplicates, bad shapes and missing authorization."""
+    index: dict[str, dict] = {}
+    for position, entry in enumerate(environments):
+        label = f"protocols.environments[{position}]"
+        item = _protocol_dict(entry, label, errors)
+        for key in item:
+            if key not in ENVIRONMENT_FIELDS:
+                errors.append(
+                    f"{label}.{key} is not part of the environment registry; only labels, plan, "
+                    "allowed action categories, owner, permission categories, cleanup, status and "
+                    "an authorization reference may be recorded"
+                )
+        environment_id = _protocol_text(item.get("environment_id"), f"{label}.environment_id", errors)
+        if environment_id:
+            if environment_id in index:
+                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
+            index[environment_id] = item
+        _protocol_text(item.get("label"), f"{label}.label", errors)
+        _protocol_text(item.get("plan"), f"{label}.plan", errors)
+        _protocol_text(item.get("owner_role"), f"{label}.owner_role", errors)
+        _protocol_text(item.get("cleanup_responsibility"), f"{label}.cleanup_responsibility", errors)
+        status = item.get("status")
+        if status not in ENVIRONMENT_STATUSES:
+            errors.append(
+                f"{label}.status={status!r} must be one of {', '.join(ENVIRONMENT_STATUSES)}"
+            )
+        for field in ("allowed_action_categories", "permission_categories"):
+            values = _protocol_list(item.get(field), f"{label}.{field}", errors)
+            if not values:
+                errors.append(f"{label}.{field} must list at least one category")
+            for value in values:
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"{label}.{field} items must be non-empty strings, got {value!r}")
+        if "notes" in item and not isinstance(item.get("notes"), str):
+            errors.append(f"{label}.notes must be a plain string, got {type(item.get('notes')).__name__}")
+        blockers = _protocol_list(item.get("blockers"), f"{label}.blockers", errors)
+        for blocker_index, blocker in enumerate(blockers):
+            blocker_label = f"{label}.blockers[{blocker_index}]"
+            if not isinstance(blocker, dict):
+                errors.append(f"{blocker_label} must be an object, got {type(blocker).__name__}")
+                continue
+            for key in blocker:
+                if key not in BLOCKER_FIELDS:
+                    errors.append(
+                        f"{blocker_label}.{key} is not an allowed blocker field; only code and detail "
+                        "may be recorded"
+                    )
+            _protocol_text(blocker.get("code"), f"{blocker_label}.code", errors)
+            _protocol_text(blocker.get("detail"), f"{blocker_label}.detail", errors)
+        reference = item.get("authorization_reference")
+        if status == "available":
+            if not isinstance(reference, str) or not reference.strip():
+                errors.append(
+                    f"{label}.authorization_reference is required before an environment can be "
+                    "available; a status change alone is not authorization"
+                )
+            if blockers:
+                errors.append(
+                    f"{label}: an available environment must not keep unresolved blockers"
+                )
+        elif reference not in (None, ""):
+            errors.append(
+                f"{label}.authorization_reference must stay empty while the environment is not available"
+            )
+        errors.extend(_sensitive_findings(label, item))
+    return index
+
+
 def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
     facts: dict[str, Any] = {
         "documented": 0,
@@ -2267,8 +2432,52 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
         else:
             facts["provider_unsupported"] += 1
         for field in S3_REQUIRED_FIELDS:
-            if not row.get(field):
-                errors.append(f"{label} {name}: {field} is required")
+            if not isinstance(row.get(field), str) or not row.get(field).strip():
+                errors.append(f"{label} {name}: {field} must be a non-empty string")
+        for field in S3_FEATURE_COLUMNS:
+            if not isinstance(row.get(field), str):
+                errors.append(
+                    f"{label} {name}: {field} must be a string of ' | ' separated items, got "
+                    f"{type(row.get(field)).__name__}"
+                )
+        groups = row.get("feature_groups_reviewed")
+        if isinstance(groups, str):
+            for group in [item.strip() for item in groups.split(" | ") if item.strip()]:
+                if not group.endswith(":"):
+                    errors.append(
+                        f"{label} {name}: feature_groups_reviewed items must be group headers ending "
+                        f"with ':' (wire parameters and enum values belong in the feature columns), "
+                        f"got {group!r}"
+                    )
+        if row.get("source_name") != S3_SOURCE_NAME:
+            errors.append(
+                f"{label} {name}: source_name must be {S3_SOURCE_NAME!r}, got {row.get('source_name')!r}"
+            )
+        if row.get("source_commit") != S3_SOURCE_COMMIT:
+            errors.append(
+                f"{label} {name}: source_commit must be the pinned {S3_SOURCE_COMMIT!r}"
+            )
+        if row.get("source_sha256") != S3_SOURCE_SHA256:
+            errors.append(
+                f"{label} {name}: source_sha256 must be the pinned {S3_SOURCE_SHA256!r}"
+            )
+        quote_ref = row.get("source_quote_ref")
+        if isinstance(quote_ref, str) and (
+            name not in quote_ref or "Feature column" not in quote_ref
+        ):
+            errors.append(
+                f"{label} {name}: source_quote_ref must point at this operation's Feature column"
+            )
+        if row.get("official_compatibility_page") != S3_COMPAT_PAGE_URL:
+            errors.append(
+                f"{label} {name}: official_compatibility_page must be the pinned compatibility page"
+            )
+        aws_reference = row.get("aws_operation_reference")
+        if not isinstance(aws_reference, str) or f"/API_{name}.html" not in aws_reference:
+            errors.append(
+                f"{label} {name}: aws_operation_reference must reference API_{name}.html so an "
+                "unrecognized operation identity cannot pass"
+            )
         status = row.get("verification_status")
         if status not in S3_VERIFICATION_STATUSES:
             errors.append(
@@ -2292,6 +2501,11 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
                     "they are vendor limitations, not pending FlareGo work"
                 )
         else:
+            if status != "awaiting_authorized_environment":
+                errors.append(
+                    f"{label} {name}: vendor-supported rows must stay "
+                    "verification_status=awaiting_authorized_environment"
+                )
             if row.get("acceptance_target_level") != "L2":
                 errors.append(f"{label} {name}: vendor-supported rows need an explicit L2 target")
             if not row.get("test_prerequisites"):
@@ -2322,14 +2536,20 @@ def _s3_row_facts(rows: Any, errors: list[str]) -> dict:
 
 
 def validate_protocols(
-    protocols: dict, s3_rows: list[dict], catalog_operations: list[dict] | None = None
+    protocols: dict,
+    s3_rows: list[dict],
+    catalog_operations: list[dict] | None = None,
+    *,
+    context: dict | None = None,
 ) -> list[str]:
     """Validate the independent protocol ledger. Read-only; returns readable errors.
 
     REST, S3, GraphQL and realtime keep separate denominators and can never be
-    summed into a combined coverage claim. Missing or opaque evidence fails closed
-    instead of becoming positive acceptance, and provider-unsupported S3 rows stay
-    registered without becoming FlareGo implementation targets.
+    summed into a combined coverage claim. Qualification fails closed: a
+    structured, environment-linked and authorized capture is required before any
+    schema claim, an independent capability acceptance record is required before
+    any query capability claim, and an active global qualification blocker keeps
+    every verified count at zero.
     """
     if not isinstance(protocols, dict):
         return [f"protocols ledger must be an object, got {type(protocols).__name__}"]
@@ -2342,22 +2562,31 @@ def validate_protocols(
                 f"protocols must not declare a combined denominator {key!r}; REST, S3, GraphQL and "
                 "realtime stay separate and must not be summed"
             )
-    catalog = _catalog_index(catalog_operations, errors)
+
+    pinned = dict(context) if isinstance(context, dict) else _pinned_context(errors)
+    operations = catalog_operations if catalog_operations is not None else pinned.get("operations")
+    if catalog_operations is not None and not isinstance(catalog_operations, list):
+        errors.append(
+            f"catalog_operations must be a list of operations, got {type(catalog_operations).__name__}"
+        )
+        operations = None
+    catalog = _catalog_index(operations, errors)
+    rest_operations = pinned.get("rest_operations")
 
     # --- denominators -------------------------------------------------------
     denominators = _protocol_list(protocols.get("denominators"), "protocols.denominators", errors)
-    names: list[str] = []
+    seen_names: list[str] = []
+    by_name: dict[str, dict] = {}
     for index, denominator in enumerate(denominators):
         label = f"protocols.denominators[{index}]"
         entry = _protocol_dict(denominator, label, errors)
         name = _protocol_text(entry.get("name"), f"{label}.name", errors)
         if name:
-            if name in names:
+            if name in seen_names:
                 errors.append(f"{label}.name duplicate denominator {name!r}")
-            names.append(name)
-            if name in FORBIDDEN_DENOMINATOR_NAMES or any(
-                word in name for word in FORBIDDEN_DENOMINATOR_NAMES
-            ):
+            seen_names.append(name)
+            by_name[name] = entry
+            if any(word in name for word in FORBIDDEN_DENOMINATOR_NAMES):
                 errors.append(
                     f"{label}.name {name!r} would combine protocols; keep separate denominators only"
                 )
@@ -2365,15 +2594,33 @@ def validate_protocols(
         _protocol_text(entry.get("source"), f"{label}.source", errors)
         if entry.get("independent") is not True:
             errors.append(f"{label}.independent must be true for every protocol denominator")
-        if name != "rest" and name in NON_REST_DENOMINATORS and entry.get("operation_ids"):
+        count = entry.get("count")
+        if count is None:
+            if entry.get("status") not in ("awaiting_authorized_schema", "awaiting_protocol_evidence"):
+                errors.append(
+                    f"{label}.count may only be null when the denominator status declares the "
+                    "universe unknown"
+                )
+        elif isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            errors.append(
+                f"{label}.count must be a non-negative integer or null, got {count!r}"
+            )
+        if name != "rest" and name in UNKNOWN_DENOMINATOR_NAMES and entry.get("operation_ids"):
             for operation_id in _protocol_list(
                 entry.get("operation_ids"), f"{label}.operation_ids", errors
             ):
-                if catalog is None or operation_id in catalog:
+                if not isinstance(operation_id, str) or not operation_id:
+                    errors.append(
+                        f"{label}.operation_ids items must be non-empty strings, got {operation_id!r}"
+                    )
+                elif catalog is None or operation_id in catalog:
                     errors.append(
                         f"{label}: REST operation {operation_id!r} must not be counted again in the "
                         f"non-REST {name!r} denominator"
                     )
+    for name in REQUIRED_DENOMINATOR_NAMES:
+        if name not in by_name:
+            errors.append(f"protocols.denominators must include the {name!r} denominator exactly once")
 
     # --- S3 ---------------------------------------------------------------
     facts = _s3_row_facts(s3_rows, errors)
@@ -2394,6 +2641,24 @@ def validate_protocols(
             f"protocols.s3.verified={s3.get('verified')!r} does not match the {facts['verified']} rows "
             "with structured verification evidence"
         )
+    s3_denominator = by_name.get("s3") or {}
+    for field, derived in (
+        ("count", facts["documented"]),
+        ("vendor_supported", facts["vendor_supported"]),
+        ("provider_unsupported", facts["provider_unsupported"]),
+    ):
+        if s3_denominator.get(field) != derived:
+            errors.append(
+                f"protocols.denominators s3.{field}={s3_denominator.get(field)!r} must match the "
+                f"{derived} derived from the S3 rows"
+            )
+    rest_denominator = by_name.get("rest") or {}
+    rest_count = rest_denominator.get("count")
+    if rest_operations is not None and rest_count != rest_operations:
+        errors.append(
+            f"protocols.denominators rest.count={rest_count!r} must match the pinned REST fact "
+            f"{rest_operations!r}"
+        )
     source = _protocol_dict(s3.get("source"), "protocols.s3.source", errors)
     for field in ("name", "commit", "sha256", "url"):
         _protocol_text(source.get(field), f"protocols.s3.source.{field}", errors)
@@ -2402,8 +2667,11 @@ def validate_protocols(
         errors.append("protocols.s3.limitations must list the preserved vendor limitations")
     k2 = _protocol_dict(s3.get("k2_stream_host"), "protocols.s3.k2_stream_host", errors)
     host = _protocol_text(k2.get("host"), "protocols.s3.k2_stream_host.host", errors)
-    if host and "k2.cloudflarestorage.com" not in host:
-        errors.append("protocols.s3.k2_stream_host.host must be the dedicated K2 stream host")
+    if host and host != K2_STREAM_HOST:
+        errors.append(
+            f"protocols.s3.k2_stream_host.host must be exactly the pinned stream host "
+            f"{K2_STREAM_HOST!r}, got {host!r}"
+        )
     if k2.get("rest_denominator") is not True:
         errors.append("protocols.s3.k2_stream_host.rest_denominator must be true; those operations are REST")
     k2_operations = _protocol_list(
@@ -2416,6 +2684,11 @@ def validate_protocols(
             errors.append(f"{label}.rest_denominator must be true")
     _protocol_text(k2.get("acceptance"), "protocols.s3.k2_stream_host.acceptance", errors)
 
+    # --- environments (indexed before GraphQL so authorization can be linked) ---
+    environments_index = _environment_index(
+        _protocol_list(protocols.get("environments"), "protocols.environments", errors), errors
+    )
+
     # --- GraphQL ----------------------------------------------------------
     graphql = _protocol_dict(protocols.get("graphql"), "protocols.graphql", errors)
     _protocol_text(graphql.get("endpoint"), "protocols.graphql.endpoint", errors)
@@ -2426,41 +2699,158 @@ def validate_protocols(
             f"protocols.graphql.review_status={status!r} must be one of "
             f"{', '.join(GRAPHQL_REVIEW_STATUSES)}"
         )
-    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
-    introspection = evidence.get("authorized_introspection")
-    if status == "verified":
-        valid_capture = (
-            isinstance(introspection, dict)
-            and bool(introspection)
-            and bool(introspection.get("environment"))
-            and bool(introspection.get("captured_at"))
+    account_scope = graphql.get("account_scope")
+    if account_scope not in ("unknown", "account", "user", "organization"):
+        errors.append(
+            "protocols.graphql.account_scope must be unknown/account/user/organization; the scope "
+            "must be recorded even when it is not verified"
         )
-        if not isinstance(introspection, dict) or not introspection:
+    if graphql.get("plan_limits") not in ("unverified", "verified", "unknown"):
+        errors.append(
+            "protocols.graphql.plan_limits must record the plan-limit verification state "
+            "(unverified/verified/unknown)"
+        )
+    if not _protocol_list(
+        graphql.get("account_scope_blockers"), "protocols.graphql.account_scope_blockers", errors
+    ):
+        errors.append(
+            "protocols.graphql.account_scope_blockers must record the concrete account-scope gap"
+        )
+    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
+    capture = evidence.get("authorized_introspection")
+    capture_ok = False
+    if capture is not None:
+        if not isinstance(capture, dict):
             errors.append(
-                "protocols.graphql schema_evidence.authorized_introspection must be a structured "
-                "capture record before the schema can be verified"
+                "protocols.graphql schema_evidence.authorized_introspection must be an object or null"
             )
-        elif not introspection.get("environment") or not introspection.get("captured_at"):
+        else:
+            capture_ok = True
+            for field in GRAPHQL_CAPTURE_FIELDS:
+                if not isinstance(capture.get(field), str) or not capture.get(field, "").strip():
+                    errors.append(
+                        f"protocols.graphql schema_evidence.authorized_introspection.{field} must be "
+                        "a non-empty string"
+                    )
+                    capture_ok = False
+            captured_at = capture.get("captured_at")
+            if isinstance(captured_at, str) and not ISO_UTC.match(captured_at):
+                errors.append(
+                    "protocols.graphql schema_evidence.authorized_introspection.captured_at must be an "
+                    "ISO-8601 UTC timestamp"
+                )
+                capture_ok = False
+            artifact = capture.get("artifact_sha256")
+            if isinstance(artifact, str) and not HEX64.match(artifact):
+                errors.append(
+                    "protocols.graphql schema_evidence.authorized_introspection.artifact_sha256 must be "
+                    "a 64-character lowercase hex digest"
+                )
+                capture_ok = False
+            environment = capture.get("environment")
+            if isinstance(environment, str) and environment:
+                linked = environments_index.get(environment)
+                if linked is None:
+                    errors.append(
+                        f"protocols.graphql authorized_introspection.environment {environment!r} is not "
+                        "a registered environment"
+                    )
+                    capture_ok = False
+                elif linked.get("status") != "available" or linked.get("blockers"):
+                    errors.append(
+                        f"protocols.graphql environment {environment!r} is not available "
+                        "(status/blockers); an awaiting or blocked environment cannot authorize a capture"
+                    )
+                    capture_ok = False
+    capability_records = _protocol_list(
+        graphql.get("capability_acceptance"), "protocols.graphql.capability_acceptance", errors
+    )
+    valid_records = 0
+    seen_records: list[str] = []
+    for index, record in enumerate(capability_records):
+        label = f"protocols.graphql.capability_acceptance[{index}]"
+        item = _protocol_dict(record, label, errors)
+        record_ok = True
+        for field in CAPABILITY_RECORD_FIELDS:
+            if field not in item:
+                errors.append(f"{label}.{field} is required")
+                record_ok = False
+        record_id = item.get("record_id")
+        if isinstance(record_id, str) and record_id:
+            if record_id in seen_records:
+                errors.append(f"{label}.record_id duplicate {record_id!r}")
+                record_ok = False
+            seen_records.append(record_id)
+        query_scope = item.get("query_scope")
+        if (
+            not isinstance(query_scope, dict)
+            or not query_scope.get("dataset")
+            or not query_scope.get("fields")
+            or not query_scope.get("query_kinds")
+        ):
+            errors.append(f"{label}.query_scope must record dataset, fields and query_kinds")
+            record_ok = False
+        if item.get("result") != "verified":
+            errors.append(f"{label}.result must be 'verified'")
+            record_ok = False
+        artifact = item.get("evidence_artifact")
+        if not isinstance(artifact, str) or not HEX64.match(artifact):
+            errors.append(f"{label}.evidence_artifact must be a 64-character lowercase hex digest")
+            record_ok = False
+        captured_at = item.get("captured_at")
+        if not isinstance(captured_at, str) or not ISO_UTC.match(captured_at):
+            errors.append(f"{label}.captured_at must be an ISO-8601 UTC timestamp")
+            record_ok = False
+        environment = item.get("environment")
+        linked = environments_index.get(environment) if isinstance(environment, str) else None
+        if linked is None:
+            errors.append(f"{label}.environment must link a registered environment")
+            record_ok = False
+        elif linked.get("status") != "available" or linked.get("blockers"):
             errors.append(
-                "protocols.graphql schema_evidence.authorized_introspection needs environment and "
-                "captured_at"
+                f"{label}.environment {environment!r} is not available (status/blockers)"
             )
-        if not graphql.get("verified"):
-            errors.append("protocols.graphql verified status requires a positive verified count")
-        if not valid_capture:
+            record_ok = False
+        if record_ok:
+            valid_records += 1
+    verified = graphql.get("verified")
+    if isinstance(verified, bool) or not isinstance(verified, int) or verified < 0:
+        errors.append("protocols.graphql.verified must be a non-negative integer, not a boolean")
+    elif verified != valid_records:
+        errors.append(
+            f"protocols.graphql.verified={verified} must equal the {valid_records} independently valid "
+            "capability acceptance records"
+        )
+    if status == "verified":
+        if not capture_ok:
+            errors.append(
+                "protocols.graphql review_status=verified requires a valid structured "
+                "schema_evidence.authorized_introspection capture"
+            )
+        if valid_records == 0:
+            errors.append(
+                "protocols.graphql review_status=verified requires independent "
+                "protocols.graphql.capability_acceptance records; a schema capture alone does not "
+                "verify query or field capability"
+            )
+        if account_scope == "unknown":
+            errors.append(
+                "protocols.graphql account_scope must be identified before the schema can be verified"
+            )
+        if not capture_ok:
             for field in ("dataset_count", "field_count"):
                 if graphql.get(field) is not None:
                     errors.append(
                         f"protocols.graphql.{field} must stay unknown (null) while the authorized "
-                        "schema capture is absent"
+                        "schema capture is invalid or absent"
                     )
             if graphql.get("datasets"):
                 errors.append(
                     "protocols.graphql.datasets must stay empty while the authorized schema capture "
-                    "is absent"
+                    "is invalid or absent"
                 )
     else:
-        if introspection is not None:
+        if capture is not None:
             errors.append(
                 "protocols.graphql must not carry an introspection record while awaiting the "
                 "authorized schema"
@@ -2476,8 +2866,13 @@ def validate_protocols(
                     f"protocols.graphql.{field} must stay unknown (null) while awaiting the authorized "
                     "schema; 0 would claim the schema was enumerated"
                 )
-        if graphql.get("verified") not in (0, None) or (graphql.get("verified") or 0) != 0:
+        if verified not in (0, None) or (verified or 0) != 0:
             errors.append("protocols.graphql.verified must be 0 without authorized schema evidence")
+        if account_scope != "unknown" or graphql.get("plan_limits") not in ("unverified", "unknown"):
+            errors.append(
+                "protocols.graphql account_scope and plan_limits must stay unknown/unverified while "
+                "the authorized schema and plan evidence are missing"
+            )
     if not _protocol_list(graphql.get("acceptance_prerequisites"), "protocols.graphql.acceptance_prerequisites", errors):
         errors.append("protocols.graphql.acceptance_prerequisites must list the GraphQL-specific gates")
     for index, family in enumerate(_protocol_list(graphql.get("families"), "protocols.graphql.families", errors)):
@@ -2491,6 +2886,7 @@ def validate_protocols(
     # --- realtime ---------------------------------------------------------
     realtime = _protocol_dict(protocols.get("realtime"), "protocols.realtime", errors)
     protocols_seen: list[str] = []
+    realtime_verified = 0
     for index, entry in enumerate(
         _protocol_list(realtime.get("protocols"), "protocols.realtime.protocols", errors)
     ):
@@ -2522,42 +2918,22 @@ def validate_protocols(
             errors.append(f"{label}.blockers must record the concrete protocol evidence gap")
         if item.get("verified") not in (0, None):
             errors.append(f"{label}.verified must stay 0 without protocol evidence")
-
-    # --- environments -----------------------------------------------------
-    environments_seen: list[str] = []
-    for index, entry in enumerate(
-        _protocol_list(protocols.get("environments"), "protocols.environments", errors)
+        else:
+            realtime_verified += int(item.get("verified") or 0)
+    realtime_denominator = by_name.get("realtime") or {}
+    if realtime_denominator.get("count") is not None and realtime_verified == 0:
+        errors.append(
+            "protocols.denominators realtime.count must stay unknown (null) while no realtime "
+            "acceptance record exists"
+        )
+    graphql_denominator = by_name.get("graphql") or {}
+    if graphql_denominator.get("count") is not None and (
+        not isinstance(verified, int) or isinstance(verified, bool) or verified == 0
     ):
-        label = f"protocols.environments[{index}]"
-        item = _protocol_dict(entry, label, errors)
-        for key in item:
-            if key not in ENVIRONMENT_FIELDS:
-                errors.append(
-                    f"{label}.{key} is not part of the environment registry; only labels, plan, "
-                    "allowed action categories, owner, permission categories, cleanup and status "
-                    "may be recorded"
-                )
-        environment_id = _protocol_text(item.get("environment_id"), f"{label}.environment_id", errors)
-        if environment_id:
-            if environment_id in environments_seen:
-                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
-            environments_seen.append(environment_id)
-        _protocol_text(item.get("label"), f"{label}.label", errors)
-        _protocol_text(item.get("plan"), f"{label}.plan", errors)
-        _protocol_text(item.get("owner_role"), f"{label}.owner_role", errors)
-        _protocol_text(item.get("cleanup_responsibility"), f"{label}.cleanup_responsibility", errors)
-        if item.get("status") not in ENVIRONMENT_STATUSES:
-            errors.append(
-                f"{label}.status={item.get('status')!r} must be one of {', '.join(ENVIRONMENT_STATUSES)}"
-            )
-        for field in ("allowed_action_categories", "permission_categories"):
-            values = _protocol_list(item.get(field), f"{label}.{field}", errors)
-            if not values:
-                errors.append(f"{label}.{field} must list at least one category")
-            for value in values:
-                if not isinstance(value, str) or not value.strip():
-                    errors.append(f"{label}.{field} items must be non-empty strings, got {value!r}")
-        errors.extend(_sensitive_findings(label, item))
+        errors.append(
+            "protocols.denominators graphql.count must stay unknown (null) while no capability "
+            "acceptance record exists"
+        )
 
     # --- P1/P2 admission --------------------------------------------------
     admission = _protocol_dict(protocols.get("p1_p2_admission"), "protocols.p1_p2_admission", errors)
@@ -2579,9 +2955,44 @@ def validate_protocols(
                 identifiers.append(operation_id)
             if item.get("risk") not in ADMISSION_RISKS:
                 errors.append(f"{label}.risk={item.get('risk')!r} must be one of {', '.join(ADMISSION_RISKS)}")
+            if item.get("risk_review") != "pending_manual_review":
+                errors.append(
+                    f"{label}.risk_review must stay 'pending_manual_review'; a proposed HTTP-method "
+                    "hint is not a reviewed risk decision"
+                )
+            method = item.get("method")
+            read_like = method in ("GET", "HEAD")
+            for boundary in ADMISSION_BOUNDARY_FIELDS:
+                _protocol_text(item.get(boundary), f"{label}.{boundary}", errors)
             if not isinstance(item.get("confirmation_required"), bool):
                 errors.append(f"{label}.confirmation_required must be a boolean")
-            _protocol_text(item.get("verification_boundary"), f"{label}.verification_boundary", errors)
+            if not isinstance(item.get("auto_replay"), bool):
+                errors.append(f"{label}.auto_replay must be a boolean")
+            elif item.get("auto_replay"):
+                errors.append(
+                    f"{label}.auto_replay must stay false; no reviewed write policy exists and an "
+                    "unknown write must never be automatically replayed"
+                )
+            if not isinstance(item.get("readback_required"), bool):
+                errors.append(f"{label}.readback_required must be a boolean")
+            if read_like:
+                if item.get("confirmation_required") is True:
+                    errors.append(f"{label}: read operations must not require a write confirmation")
+                if item.get("readback_required") is True:
+                    errors.append(f"{label}: read operations do not need a write read-back step")
+            else:
+                if item.get("confirmation_required") is not True:
+                    errors.append(
+                        f"{label}: write or unknown semantics require explicit user confirmation"
+                    )
+                if item.get("readback_required") is not True:
+                    errors.append(
+                        f"{label}: write or unknown semantics require a cloud read-back step"
+                    )
+                if item.get("risk") == "low":
+                    errors.append(
+                        f"{label}: write or unknown semantics must not be proposed as low risk"
+                    )
             _protocol_text(item.get("source"), f"{label}.source", errors)
             if item.get("proposed") is not True:
                 errors.append(f"{label}.proposed must be true; this is a proposal, not an approval")
@@ -2620,8 +3031,9 @@ def validate_protocols(
             "proposal, not a runtime allowlist"
         )
 
-    # --- global blockers --------------------------------------------------
+    # --- global blockers and qualification gating -------------------------
     blocker_codes: list[str] = []
+    active_blockers: list[str] = []
     for index, blocker in enumerate(_protocol_list(protocols.get("blockers"), "protocols.blockers", errors)):
         label = f"protocols.blockers[{index}]"
         item = _protocol_dict(blocker, label, errors)
@@ -2630,5 +3042,29 @@ def validate_protocols(
             if code in blocker_codes:
                 errors.append(f"{label}.code duplicate global blocker {code!r}")
             blocker_codes.append(code)
+            if not _clearance_complete(item):
+                active_blockers.append(code)
         _protocol_text(item.get("detail"), f"{label}.detail", errors)
+    for code in REQUIRED_GLOBAL_BLOCKER_CODES:
+        if code not in blocker_codes:
+            errors.append(
+                f"protocols.blockers must record {code!r} unless it is explicitly cleared with a "
+                "clearance record; removing the blocker is not clearance"
+            )
+    if active_blockers:
+        if isinstance(verified, int) and not isinstance(verified, bool) and verified > 0:
+            errors.append(
+                "protocols.graphql.verified must be 0 while global qualification blockers are active: "
+                + ", ".join(active_blockers)
+            )
+        if s3.get("verified"):
+            errors.append(
+                "protocols.s3.verified must be 0 while global qualification blockers are active: "
+                + ", ".join(active_blockers)
+            )
+        if realtime_verified:
+            errors.append(
+                "realtime verified counts must be 0 while global qualification blockers are active: "
+                + ", ".join(active_blockers)
+            )
     return errors

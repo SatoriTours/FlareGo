@@ -182,6 +182,8 @@ REST 之外的能力不进入 REST 分母，也不与 REST 相加：
 
 当前协议计数：S3 73 documented／26 vendor-supported／47 provider-unsupported／0 verified；GraphQL dataset／field 未知且 0 verified；realtime 仅登记会话端点与协议阻塞；`capability_verified` 与 `verified_available` 均为 0。P1 新增 5／P1 兼容 11／P2 候选 54，重叠 5，去重后 65，列表相加 70——列表相加不得当成唯一总数。
 
+资格门禁 fail-closed：GraphQL 需要结构化、指向唯一 `available` 环境且有授权引用与 schema artifact 指纹的 introspection 捕获；捕获本身只证明字段发现，不等于查询／字段 L2 能力，因此还需要独立的 `capability_acceptance` 记录（dataset／fields／query_kinds／artifact）才允许 `verified` 计数，且计数必须为非负整数并与有效记录数一致。全局资格阻塞（`authorized_account_absent`／`authorized_schema_capture_absent`／`stream_host_credentials_absent`）必须登记或被显式清除；存在活动阻塞时任何 `verified` 计数必须为 0。环境登记只允许扁平字段（标签／套餐／动作类别／负责人／权限类别／清理责任／状态／授权引用／阻塞／说明），拒绝嵌套对象、归一化后的敏感键别名（`apiToken`／`s3Secret`／`privateKey`／`paymentMethod`…）与内嵌凭据形态（Bearer、绝对凭据路径、32 位账号 ID、卡号）。S3 每行的来源（`source_name`／`source_commit`／`source_sha256`／`source_quote_ref`）必须与固定兼容表一致，vendor-supported 行必须保持 `awaiting_authorized_environment` + L2，不得被标成 provider-unsupported。P1／P2 准入项必须声明 `risk_review=pending_manual_review`、影响／确认／对账边界、`auto_replay=false`，非读取语义必须有确认与回读，不得因 HTTP 方法而自动重放、免确认或免对账。
+
 ## 4. 必须纠正的 API 边界
 
 ### 4.1 Registrar 不再只是“没有真实注册 API”
