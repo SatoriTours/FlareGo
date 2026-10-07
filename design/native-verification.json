@@ -1,0 +1,65 @@
+{
+  "verified_at": "2026-10-07T07:31:57.301745+00:00",
+  "platform": "Android 16 / API 36 local read-only emulator",
+  "core_tests": 21,
+  "http_transport_tests": 3,
+  "android_tests": 4,
+  "failures": 0,
+  "tested_viewports_dp": [
+    {
+      "width": 411,
+      "height": 914
+    },
+    {
+      "width": 320,
+      "height": 711
+    }
+  ],
+  "apk": "app/build/outputs/apk/debug/app-debug.apk",
+  "apk_bytes": 19605582,
+  "apk_sha256": "06f16744379a337780661ef4dc45aec2aae0b2d65e8dc8288c527a8eb941049d",
+  "lint": {
+    "app_errors": 0,
+    "platform_errors": 0,
+    "note": "Pinned reference versions retain upgrade/style warnings; no compatibility suppressions."
+  },
+  "review": {
+    "mode": "one independent read-only reviewer; fixes verified with regression tests",
+    "fixed": [
+      "Workers all-results endpoint",
+      "HTTP write retries and response follow-ups",
+      "Malformed response uncertainty and partial service isolation",
+      "DNS draft preserved after confirmation Return"
+    ]
+  },
+  "flows": [
+    "Collapsed scoped search",
+    "Cloud account drawer/switch",
+    "DNS preview, Return draft retention and confirmed write",
+    "Explicit demo purchase confirmation",
+    "Keystore encryption roundtrip/delete",
+    "SQLDelight reopen/update/disconnect"
+  ],
+  "live_cloud_validation": false,
+  "limitations": [
+    "No user credentials supplied for live Cloudflare validation",
+    "Registrar registration, deployments and object writes use official console",
+    "Other cloud providers and iOS/desktop launchers not implemented"
+  ],
+  "screenshots": [
+    "design/native-dns-confirm.png",
+    "design/native-dns.png",
+    "design/native-drawer.png",
+    "design/native-narrow-dns-confirm.png",
+    "design/native-narrow-dns.png",
+    "design/native-narrow-drawer.png",
+    "design/native-narrow-purchase-confirm.png",
+    "design/native-narrow-resources.png",
+    "design/native-narrow-search.png",
+    "design/native-overview.png",
+    "design/native-purchase-confirm.png",
+    "design/native-resources.png",
+    "design/native-search.png"
+  ],
+  "final_visual_smoke": "2 Android UI tests rerun after final dialog palette update; passed"
+}

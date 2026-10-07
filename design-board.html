@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FlareGo · 主要界面设计稿</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #edf0e7;
+        color: #293d2c;
+        font:
+          14px/1.6 Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      header {
+        padding: 45px 52px 30px;
+        max-width: 1700px;
+        margin: auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .eyebrow {
+        font-size: 10px;
+        letter-spacing: 3px;
+        color: #798e69;
+        font-weight: 600;
+      }
+      h1 {
+        font-weight: 500;
+        font-size: 38px;
+        letter-spacing: -1px;
+        margin: 5px 0 8px;
+      }
+      p {
+        font-size: 12px;
+        color: #8b9782;
+        margin: 0;
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+      }
+      .actions a {
+        padding: 10px 17px;
+        background: #dfe8d4;
+        border: 1px solid #d6e0ca;
+        border-radius: 10px;
+        font-size: 12px;
+      }
+      .actions a:first-child {
+        background: #315b42;
+        color: #eef6e6;
+        border: 0;
+      }
+      .legend {
+        max-width: 1700px;
+        margin: auto;
+        padding: 0 52px 25px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 10px;
+        color: #7d8c72;
+      }
+      .swatch {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 35px 27px;
+        max-width: 1700px;
+        margin: auto;
+        padding: 5px 48px 40px;
+      }
+      .screen {
+        min-width: 0;
+      }
+      .screen-heading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 7px 12px;
+      }
+      .screen-heading .number {
+        color: #a4b094;
+        font:
+          11px ui-monospace,
+          monospace;
+      }
+      .screen-heading h2 {
+        font-weight: 500;
+        font-size: 13px;
+        margin: 0;
+      }
+      .screen-heading small {
+        font-size: 9px;
+        color: #8e9d81;
+        margin-left: auto;
+      }
+      .phone {
+        width: 100%;
+        max-width: 390px;
+        margin: auto;
+        height: 740px;
+        border: 6px solid #fcfdf9;
+        border-radius: 32px;
+        overflow: hidden;
+        box-shadow: 0 10px 25px #4258390d;
+        position: relative;
+        background: #f7f8f4;
+      }
+      .phone iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        display: block;
+      }
+      .phone:after {
+        content: "";
+        position: absolute;
+        pointer-events: none;
+        inset: 0;
+        border: 1px solid #1729190c;
+        border-radius: 26px;
+      }
+      .screen > p {
+        margin: 13px 8px 0;
+        font-size: 10px;
+        color: #89977b;
+        line-height: 1.7;
+      }
+      .flows {
+        margin: 0 auto 40px;
+        max-width: 1604px;
+        padding: 25px 30px;
+        border: 1px solid #d9e3ce;
+        border-radius: 18px;
+        background: #f5f7f0;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 25px;
+      }
+      .flows h3 {
+        font-size: 12px;
+        font-weight: 550;
+        margin: 0 0 8px;
+      }
+      .flows p {
+        font-size: 10px;
+        line-height: 1.9;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        max-width: 1604px;
+        margin: 0 auto 30px;
+        font-size: 10px;
+        color: #97a38a;
+        padding: 0 10px;
+      }
+      @media (max-width: 1150px) {
+        .board {
+          grid-template-columns: repeat(2, 1fr);
+          padding: 15px 30px;
+        }
+        .phone {
+          height: 740px;
+        }
+        .flows {
+          margin: 10px 35px 25px;
+          grid-template-columns: 1fr;
+        }
+        header {
+          padding: 30px;
+          gap: 15px;
+        }
+        .legend {
+          padding: 0 30px 20px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+        footer {
+          padding: 0 35px;
+        }
+      }
+      @media (max-width: 600px) {
+        .board {
+          grid-template-columns: 1fr;
+          padding: 15px 22px;
+        }
+        .phone {
+          height: 730px;
+        }
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 28px 25px;
+        }
+        .legend {
+          flex-wrap: wrap;
+          gap: 12px;
+          padding: 0 25px;
+        }
+        h1 {
+          font-size: 27px;
+        }
+        .flows {
+          margin: 10px 22px 25px;
+        }
+        footer {
+          padding: 0 22px;
+          gap: 20px;
+        }
+      }
+      @media print {
+        body {
+          background: #edf0e7;
+        }
+        .board {
+          grid-template-columns: repeat(4, 1fr);
+        }
+        .actions {
+          display: none;
+        }
+        .phone {
+          height: 740px;
+        }
+        .screen {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <div class="eyebrow">FLAREGO / PRODUCT DESIGN / 01</div>
+        <h1>所有云，一手掌握。</h1>
+        <p>多云资源管理 App · 核心界面与交互设计 · Mobile first</p>
+      </div>
+      <div class="actions">
+        <a href="index.html">打开交互原型 ↗</a
+        ><a href="architecture.html">查看架构蓝图 ↗</a>
+      </div>
+    </header>
+    <div class="legend">
+      <span
+        ><i class="swatch" style="background: #315b42"></i>森林绿 · 操作</span
+      ><span
+        ><i class="swatch" style="background: #d2ee98"></i>浅绿 · 健康状态</span
+      ><span
+        ><i class="swatch" style="background: #ea8b51"></i>暖橙 · 待处理</span
+      ><span>圆角卡片 / 底部导航 / 底部弹层</span
+      ><span style="margin-left: auto">每个画面均可直接点击体验</span>
+    </div>
+    <div class="board" id="board"></div>
+    <section class="flows">
+      <div>
+        <h3>01 / 连接你的第一朵云</h3>
+        <p>
+          账号 → 添加连接 → 验证 Token → 发现账号与权限 → 选择账号 → 同步资源<br />权限不足：补充对应授权，其他可用模块仍然可访问。
+        </p>
+      </div>
+      <div>
+        <h3>02 / 从好名字到可访问的服务</h3>
+        <p>
+          域名 → 搜索 → 选择 → 最新报价 → 确认付款 → 注册任务 → 配置 DNS<br />网络中断：保留任务并核对结果；需补充资料：显示官方入口。
+        </p>
+      </div>
+      <div>
+        <h3>03 / 资源与费用保持可控</h3>
+        <p>
+          资源 → Worker 详情 → 部署版本 → 预览流量变更 → 确认切换 → 操作记录<br />账单
+          → 预估构成 / 已结算账单 → 设置预算 → 导出费用明细。
+        </p>
+      </div>
+    </section>
+    <footer>
+      <span>FlareGo · Design proposal · 2026.10</span
+      ><span>界面内数据、报价、连接均为演示，未调用云 API</span>
+    </footer>
+    <script>
+      const screens = [
+        [
+          "overview",
+          "总览",
+          "Overview",
+          "聚合费用、健康状态与常用资源。快捷入口直达日常操作。",
+        ],
+        [
+          "domains",
+          "域名管理",
+          "Domains",
+          "区分注册商与 DNS 托管。搜索、即将到期筛选与解析入口。",
+        ],
+        [
+          "dns",
+          "DNS 解析",
+          "DNS records",
+          "代理状态与 TTL 清楚呈现。点击记录编辑，保存前预览变更。",
+        ],
+        [
+          "buy",
+          "购买域名",
+          "Registration",
+          "首年价格与续费参考明确展示。点击选择，体验确认和异步结果。",
+        ],
+        [
+          "resources",
+          "云资源",
+          "Resources",
+          "按资源类型组织。统一目录保留 Workers、R2、D1 的产品辨识。",
+        ],
+        [
+          "worker",
+          "Worker 详情",
+          "Edge compute",
+          "核心指标、部署版本和资源绑定。支持模拟切换部署版本。",
+        ],
+        [
+          "billing",
+          "账单与费用",
+          "Billing",
+          "预估、已结算、预算三者分开。费用构成和来源保持可追溯。",
+        ],
+        [
+          "accounts",
+          "云账号",
+          "Connections",
+          "一个厂商可连接多个账号。后续云厂商明确显示接入计划。",
+        ],
+      ];
+      document.querySelector("#board").innerHTML = screens
+        .map(
+          ([id, title, en, desc], i) =>
+            `<section class="screen"><div class="screen-heading"><span class="number">0${i + 1}</span><h2>${title}</h2><small>${en}</small></div><div class="phone"><iframe src="index.html?screen=${id}&frame=1" title="${title}" loading="eager"></iframe></div><p>${desc}</p></section>`,
+        )
+        .join("");
+    </script>
+  </body>
+</html>

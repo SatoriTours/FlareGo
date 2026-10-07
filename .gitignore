@@ -1,0 +1,15 @@
+/.gradle/
+/.kotlin/
+**/build/
+/local.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+/.agents/
+/.codex/
+/.aws/
+/dist/
+**/__pycache__/
+*.pyc
+/.superpowers/

@@ -1,0 +1,10 @@
+{
+  "name": "flarego-design",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FlareGo 多云管理 App 架构与交互设计原型",
+  "scripts": {
+    "dev": "python3 -m http.server 4173 --bind 0.0.0.0",
+    "check": "node --check app.js && node --check scripts/verify.mjs"
+  }
+}

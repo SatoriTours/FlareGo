@@ -1,0 +1,32 @@
+CREATE TABLE connection (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    account_id TEXT NOT NULL
+);
+
+CREATE TABLE operation (
+    sequence INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    connection_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT NOT NULL
+);
+
+allConnections:
+SELECT * FROM connection ORDER BY name;
+
+upsertConnection:
+INSERT OR REPLACE INTO connection(id, name, account_id) VALUES (?, ?, ?);
+
+removeConnection:
+DELETE FROM connection WHERE id = ?;
+
+allOperations:
+SELECT * FROM operation ORDER BY sequence DESC LIMIT 200;
+
+upsertOperation:
+INSERT OR REPLACE INTO operation(id, connection_id, title, status, detail) VALUES (?, ?, ?, ?, ?);
+
+removeOperations:
+DELETE FROM operation WHERE connection_id = ?;
