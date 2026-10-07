@@ -1,0 +1,52 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "cloudflare-audit fixture", "version": "1.0.0"},
+  "paths": {
+    "/alpha": {
+      "get": {
+        "operationId": "alpha-list",
+        "tags": ["Alpha", "Shared"],
+        "summary": "List alpha",
+        "x-fern-availability": "generally-available",
+        "x-cfPlanAvailability": {"free": true, "pro": false},
+        "security": [{"api_token": []}],
+        "requestBody": {"$ref": "#/components/requestBodies/Alpha~1Body~0JSON"},
+        "responses": {
+          "200": {"$ref": "#/components/responses/Alpha~1OK~0Response"}
+        }
+      }
+    },
+    "/beta/{id}": {
+      "delete": {
+        "operationId": "beta-delete",
+        "tags": ["Beta"],
+        "summary": "Delete beta",
+        "responses": {"204": {"description": "gone"}}
+      },
+      "post": {
+        "operationId": "beta-create",
+        "tags": ["Beta"],
+        "summary": "Create beta",
+        "deprecated": true,
+        "x-cfDeprecation": {"display": true},
+        "x-api-token-group": ["Beta Write"],
+        "requestBody": {"content": {"application/json": {"schema": {"type": "object"}}}},
+        "responses": {
+          "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Beta"}}}}
+        }
+      }
+    }
+  },
+  "components": {
+    "requestBodies": {
+      "Alpha/Body~JSON": {"content": {"text/plain": {"schema": {"type": "string"}}}}
+    },
+    "responses": {
+      "Alpha/OK~Response": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Alpha"}}}}
+    },
+    "schemas": {
+      "Alpha": {"type": "object"},
+      "Beta": {"type": "object"}
+    }
+  }
+}
