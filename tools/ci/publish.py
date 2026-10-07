@@ -1,13 +1,21 @@
 """Publish a complete, checksum-bound APK contract after signature verification."""
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 from build_metadata import published, may_publish, current_snapshot, gh_json
+from checksums import write_checksums
+from publish_policy import requested_channel
+
+channel = requested_channel(os.environ.get("GITHUB_EVENT_NAME"), os.environ.get("GITHUB_REF_TYPE"),
+                            os.environ.get("GITHUB_REF_NAME", ""), os.environ.get("INPUT_PUBLISH_SNAPSHOT", "false"))
+if channel is None:
+    raise SystemExit("Publication requires an explicit version tag push or manual snapshot request")
 
 repo = os.environ["GITHUB_REPOSITORY"]
 value = json.loads(Path("dist/build-metadata.json").read_text())
+if value["channel"] != channel or value["commit_sha"] != os.environ["GITHUB_SHA"]:
+    raise SystemExit("Build metadata does not match the requested publication")
 if value["channel"] == "snapshot":
     head = gh_json("api", f"repos/{repo}/branches/main")["commit"]["sha"]
     if not current_snapshot(value["commit_sha"], head):
@@ -16,9 +24,7 @@ if value["channel"] == "snapshot":
 highest, tags = published(repo)
 if not may_publish(value, highest, value["release_tag"] in tags):
     raise SystemExit("Refusing stale build or overwrite of a stable release")
-files = [Path("dist") / value["apk_name"], Path("dist/build-metadata.json")]
-Path("dist/SHA256SUMS").write_text("".join(
-    f"{hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()}  {path.name}\n" for path in files))
+files = write_checksums()
 tag = value["release_tag"]
 notes = f"Signed Android build\n\nCommit: {value['commit_sha']}\nVersion code: {value['version_code']}\nSHA-256: see SHA256SUMS."
 # Keep latest's release draft while replacing files: the updater refuses draft releases.
