@@ -1,0 +1,68 @@
+{
+  "audit_date": "2026-10-07",
+  "flarego_baseline_commit": "bb1366de46c03e482d8d98ab25b7dde4abb93f15",
+  "schema": {
+    "commit": "6b00f157496cd6a1792a613dc94654c51273aeb9",
+    "commit_date": "2026-10-07T14:45:01Z",
+    "url": "https://raw.githubusercontent.com/cloudflare/api-schemas/6b00f157496cd6a1792a613dc94654c51273aeb9/openapi.json",
+    "paths": 2298,
+    "operations": 3659,
+    "sha256": "06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461",
+    "openapi_version": "3.0.3"
+  },
+  "counts": {
+    "path_templates": 2298,
+    "operations": 3659,
+    "distinct_tags": 582,
+    "tag_memberships": 3665,
+    "implemented_subset": 11,
+    "not_implemented": 3648,
+    "explicit_deprecated": 335,
+    "any_deprecation_signal": 432,
+    "additional_deprecation_signals_without_boolean": 97
+  },
+  "source_files": [
+    "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/application/DnsValidation.kt",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/ports/Ports.kt",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/model/Models.kt",
+    "shared-ui/src/commonMain/kotlin/com/flarego/ui/Screens.kt",
+    "android-platform/src/main/kotlin/com/flarego/platform/CloudflareClient.kt",
+    "shared-core/src/commonTest/kotlin/com/flarego/core/CloudflareTest.kt"
+  ],
+  "limitations": [
+    "Manual code mapping of the current real adapter; schema enumeration is automated.",
+    "Endpoint equality is METHOD plus path template, not query parameter or field completeness.",
+    "No authenticated Cloudflare calls, real writes, or cloud-account end-to-end verification.",
+    "Tags are official API tags, not distinct sellable products; six operations have two tags.",
+    "Schema publication, plan flags and SDK/Forge flags do not prove account availability.",
+    "This REST snapshot does not enumerate GraphQL fields, S3 operations, runtime bindings or independent APIs.",
+    "Availability and implementation reviews remain pending; CSV cannot be used as a runtime execution allowlist."
+  ],
+  "supplementary_docs": {
+    "commit": "e3a9cf758c28273178d56918399068c6d2eb8a1d",
+    "commit_date": "2026-10-07T15:18:02Z",
+    "sources": [
+      {
+        "name": "s3-compat",
+        "url": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/r2/api/s3/api.mdx",
+        "sha256": "a3a9f5b86efc022ae7cbe813e49b682f0dbb3dfc7ff1eac5498d3af62c9e75d8"
+      },
+      {
+        "name": "registrar-guide",
+        "url": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/registrar/registrar-api.mdx",
+        "sha256": "5d4e75bfc0ad4bfa93f521ef31e1676d85a35a1ed64d096478a1f1d44b3d5ed9"
+      },
+      {
+        "name": "graphql-overview",
+        "url": "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/analytics/graphql-api/index.mdx",
+        "sha256": "d75107f225c0f742efc888d7de34936ad0355d7e967aa4770fba52e550a009c0"
+      }
+    ]
+  },
+  "s3_counts": {
+    "documented_operations": 73,
+    "cloudflare_supported_operations": 26,
+    "flarego_implemented_operations": 0
+  }
+}

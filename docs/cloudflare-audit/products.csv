@@ -1,0 +1,583 @@
+﻿tag,operations,implemented_subset,not_implemented,deprecated_boolean,any_deprecation_signal
+AI Audit,2,0,2,0,0
+AI Gateway,15,0,15,1,3
+AI Gateway Custom Domains,4,0,4,0,0
+AI Gateway Custom Provider Costs,5,0,5,0,0
+AI Gateway Custom Providers,5,0,5,0,0
+AI Gateway Datasets,5,0,5,0,5
+AI Gateway Dynamic Routes,10,0,10,0,0
+AI Gateway Evaluations,5,0,5,0,5
+AI Gateway Gateways,6,0,6,0,0
+AI Gateway Logs,6,0,6,0,0
+AI Gateway Provider Configs,5,0,5,0,0
+AI Search Account Search,2,0,2,0,0
+AI Search Instances,17,0,17,8,8
+AI Search Instances Items,9,0,9,0,0
+AI Search Instances Jobs,10,0,10,5,5
+AI Search Namespaces,6,0,6,0,0
+AI Search Tokens,5,0,5,0,0
+AI Security for Apps,4,0,4,0,0
+API Shield API Discovery,5,0,5,0,0
+API Shield Client Certificates for a Zone,7,0,7,0,0
+API Shield Endpoint Management,7,0,7,0,0
+API Shield Labels,16,0,16,0,0
+API Shield Schema Validation 2.0,13,0,13,13,13
+API Shield Settings,2,0,2,0,0
+API Shield WAF Expression Templates,1,0,1,1,1
+ART Analytics,3,0,3,0,0
+ASN Intelligence,2,0,2,0,0
+Access Authenticator Device AAGUIDs,1,0,1,0,0
+Access Bookmark applications (Deprecated),5,0,5,5,5
+Access IdP federation grants,4,0,4,0,0
+Access JIT request logs,2,0,2,0,0
+Access SAML encryption certificates,4,0,4,0,0
+Access SCIM update logs,1,0,1,0,0
+Access application-scoped policies,6,0,6,0,5
+Access applications,9,0,9,0,0
+Access authentication logs,1,0,1,0,0
+Access custom pages,6,0,6,0,0
+Access groups,5,0,5,0,0
+Access identity providers,12,0,12,0,0
+Access key configuration,3,0,3,0,0
+Access mTLS authentication,7,0,7,0,0
+Access policy tester,3,0,3,0,0
+Access reusable policies,5,0,5,0,0
+Access service tokens,7,0,7,0,0
+Access short-lived certificate CAs,4,0,4,0,0
+Access tags,5,0,5,0,0
+Access user populations,5,0,5,0,0
+Account,3,0,3,0,0
+Account Billing,10,0,10,0,0
+Account Billing History,1,0,1,0,0
+Account Billing Profile,5,0,5,0,0
+Account Entitlements,1,0,1,0,0
+Account Load Balancer Monitor Groups,7,0,7,0,0
+Account Load Balancer Monitors,9,0,9,0,0
+Account Load Balancer Pools,10,0,10,0,0
+Account Load Balancer Search,1,0,1,0,0
+Account Load Balancers,7,0,7,0,0
+Account Members,5,0,5,0,0
+Account Owned API Tokens,8,0,8,0,0
+Account Payment Methods,6,0,6,0,0
+Account Permission Groups,2,0,2,0,0
+Account Request Tracer,1,0,1,0,0
+Account Resource Groups,5,0,5,0,0
+Account Roles,2,0,2,2,2
+Account Rulesets,16,0,16,0,0
+Account Settings,3,0,3,0,0
+Account Subscriptions,10,0,10,0,0
+Account User Group Members,5,0,5,0,0
+Account User Groups,5,0,5,0,0
+Account-Level Custom Nameservers,3,0,3,0,0
+Account-Level Custom Nameservers Usage for a Zone,2,0,2,2,2
+Accounts,10,1,9,0,0
+Active session,6,0,6,0,0
+Agents,2,0,2,0,0
+Analytics,1,0,1,0,0
+Analytics Engine,2,0,2,0,0
+Analytics SQL,6,0,6,0,0
+Analyze Certificate,1,0,1,0,0
+Applications,15,0,15,0,0
+Approvals,4,0,4,0,0
+Apps,8,0,8,0,0
+Argo Analytics for Geolocation,1,0,1,0,0
+Argo Analytics for Zone,1,0,1,0,0
+Argo Smart Routing,4,0,4,0,0
+Artifacts,19,0,19,0,0
+Attacker,1,0,1,0,0
+Audit Logs,7,0,7,0,0
+AutoRAG Jobs,3,0,3,0,0
+AutoRAG RAG,2,0,2,0,0
+AutoRAG RAG Search,2,0,2,0,0
+Automatic SSL/TLS,2,0,2,0,0
+Available Page Rules settings,1,0,1,1,1
+Basin Catalog Management,5,0,5,0,0
+Billable Usage,2,0,2,0,0
+Billable Usage V2,4,0,4,0,0
+BinDB,2,0,2,0,0
+Bot Settings,2,0,2,0,0
+Botnet Threat Feed,4,0,4,0,0
+Brand Protection,33,0,33,0,0
+Browser Extension Config,5,0,5,0,0
+Browser Extension Inventories,2,0,2,0,0
+Build Tokens,3,0,3,0,0
+Builds,5,0,5,0,0
+CNIs,5,0,5,0,0
+CSAM Scanner Settings,2,0,2,0,0
+CT Alerting,2,0,2,0,0
+Cache Reserve Clear,2,0,2,0,0
+Catalog Sync,8,0,8,0,0
+Category,13,0,13,4,4
+Certificate Packs,6,0,6,0,0
+Changelog,1,0,1,0,0
+Client Versions,2,0,2,0,0
+Client-Side Security,13,0,13,0,0
+Cloud Integrations,9,0,9,0,0
+Cloudflare IPs,1,0,1,0,0
+Cloudflare Images,11,0,11,2,2
+Cloudflare Images Keys,3,0,3,0,0
+Cloudflare Images Sourcing Kit,15,0,15,0,0
+Cloudflare Images Variants,6,0,6,1,1
+Cloudflare Tunnel,20,0,20,0,0
+Cloudflare Tunnel Configuration,4,0,4,0,0
+Collections,13,0,13,0,0
+Collections - Items,2,0,2,0,0
+Communication Preferences,2,0,2,0,0
+Connectivity Services,5,0,5,0,0
+Container Images,1,0,1,0,0
+Container Instances,3,0,3,1,1
+Content Scanning,8,0,8,0,0
+Country,1,0,1,0,0
+Credential Management,4,0,4,2,2
+Credential Sets,6,0,6,0,0
+Credentials,6,0,6,0,0
+Custom CSRs for a Zone,4,0,4,0,0
+Custom CSRs for an Account,4,0,4,0,0
+Custom Hostname Fallback Origin for a Zone,3,0,3,0,0
+Custom Hostname for a Zone,8,0,8,0,0
+Custom Indicator Feeds,12,0,12,0,0
+Custom Nameserver Sets for an Account,4,0,4,0,0
+Custom Origin Trust Store,4,0,4,0,0
+Custom SSL for a Zone,6,0,6,0,0
+Custom assets for a zone,5,0,5,0,0
+Custom assets for an account,5,0,5,0,0
+Custom pages for a zone,4,0,4,0,0
+Custom pages for an account,4,0,4,0,0
+D1,12,1,11,0,0
+DCV Delegation,1,0,1,0,0
+DEX Remote Commands,5,0,5,0,0
+DEX Rules,5,0,5,0,0
+DEX Synthetic Application Monitoring,20,0,20,0,0
+DLP Custom Prompt Topics,5,0,5,0,0
+DLP Data Classes,5,0,5,0,0
+DLP Data Tag Categories,5,0,5,0,0
+DLP Data Tag Category Templates,2,0,2,0,0
+DLP Data Tags,5,0,5,0,0
+DLP Datasets,9,0,9,0,0
+DLP Document Fingerprints,6,0,6,0,0
+DLP Email,8,0,8,0,0
+DLP Entries,7,0,7,0,0
+DLP Integration Entries,3,0,3,0,0
+DLP Predefined Entries,2,0,2,0,0
+DLP Profiles,14,0,14,0,0
+DLP Sensitivity Group Templates,2,0,2,0,0
+DLP Sensitivity Groups,7,0,7,0,0
+DLP Sensitivity Levels,5,0,5,0,0
+DLP Settings,8,0,8,2,2
+DLS Regional Services,6,0,6,0,0
+DNS Analytics,2,0,2,2,2
+DNS Firewall,7,0,7,0,0
+DNS Firewall Analytics,2,0,2,2,2
+DNS Internal Views for an Account,5,0,5,0,0
+DNS Records for a Zone,14,4,10,1,1
+DNS Records for an Account,1,0,1,0,0
+DNS Settings for a Zone,2,0,2,0,0
+DNS Settings for an Account,2,0,2,0,0
+DNSSEC,4,0,4,0,0
+Dashboard - Users,1,0,1,0,0
+Dashboard Assets,3,0,3,0,0
+Data Security,3,0,3,0,0
+Dataset,6,0,6,0,0
+Datasets,1,0,1,0,0
+Definitions,1,0,1,0,0
+Deploy Hooks,6,0,6,0,0
+Deployment Groups,5,0,5,0,0
+Destinations,4,0,4,0,0
+Device Managed Networks,5,0,5,0,0
+Device Posture Integrations,5,0,5,0,0
+Device posture rules,5,0,5,0,0
+Devices,30,0,30,5,5
+Devices Resilience,2,0,2,0,0
+Diagnostics,1,0,1,0,0
+Domain Discovery,5,0,5,0,0
+Domain History,1,0,1,0,0
+Domain Intelligence,2,0,2,0,0
+Domains,4,0,4,0,0
+Durable Objects Namespace,3,0,3,0,0
+Email Auth,3,0,3,0,0
+Email Routing destination addresses,5,0,5,0,0
+Email Routing routing rules,9,0,9,0,0
+Email Routing settings,10,0,10,3,3
+Email Routing suppressions,8,0,8,8,8
+Email Security,21,0,21,1,1
+Email Security Analytics,1,0,1,0,0
+Email Security Settings,53,0,53,1,1
+Email Sending,5,0,5,0,0
+Email Sending subdomains,10,0,10,0,0
+Email Sending suppressions,14,0,14,8,8
+Endpoint Health Checks,5,0,5,0,0
+Environment Variables,3,0,3,0,0
+Evaluation,2,0,2,0,0
+Event,35,0,35,5,5
+Events,1,0,1,0,0
+Extension,4,0,4,0,0
+Feedback,2,0,2,0,0
+Field Extractors,3,0,3,0,0
+Filters,7,0,7,7,7
+Finetune Asset,1,0,1,0,0
+Firewall rules,9,0,9,9,9
+Flags,5,0,5,0,0
+Fraud Detection,2,0,2,0,0
+Gateway CA,3,0,3,0,0
+GitHub Integration,1,0,1,0,0
+Google Tag Gateway,2,0,2,0,0
+Groups,8,0,8,0,0
+Health,1,0,1,0,0
+Health Checks,15,0,15,0,0
+Hyperdrive,8,0,8,0,0
+IP Access rules for a user,5,0,5,0,0
+IP Access rules for a zone,4,0,4,0,0
+IP Access rules for an account,5,0,5,0,0
+IP Address Management Address Maps,11,0,11,0,0
+IP Address Management BGP Prefixes,5,0,5,0,0
+IP Address Management Dynamic Advertisement,2,0,2,2,2
+IP Address Management Leases,1,0,1,0,0
+IP Address Management Prefix Delegation,3,0,3,0,0
+IP Address Management Prefixes,8,0,8,0,0
+IP Address Management Service Bindings,5,0,5,0,0
+IP Intelligence,1,0,1,0,0
+IP List,1,0,1,0,0
+IP Profiles,5,0,5,0,0
+Image Registries,4,0,4,0,0
+Images,2,0,2,0,0
+Indicator,13,0,13,1,1
+Indicator Types,2,0,2,1,1
+Indicators,1,0,1,0,0
+Infrastructure Access Targets,9,0,9,1,1
+Instant Logs jobs for a zone,2,0,2,0,0
+Integrations,7,0,7,0,0
+Interconnects,7,0,7,0,0
+Issues,15,0,15,0,0
+Keyless SSL for a Zone,5,0,5,0,0
+Keys,1,0,1,0,0
+Leaked Credential Checks,7,0,7,0,0
+Lists,11,0,11,0,0
+Live Tail,2,0,2,0,0
+Live streams,11,0,11,0,0
+LivestreamAnalytics,2,0,2,0,0
+Load Balancer Healthcheck Events,1,0,1,0,0
+Load Balancer Monitors,9,0,9,0,0
+Load Balancer Pools,10,0,10,0,0
+Load Balancer Regions,3,0,3,0,0
+Load Balancers,6,0,6,0,0
+Log Explorer Datasets,12,0,12,0,0
+Log Explorer Queries,4,0,4,2,2
+Logcontrol CMB config for an account,3,0,3,0,3
+Logpull,2,0,2,0,0
+Logpush jobs for a zone,12,0,12,0,0
+Logpush jobs for an account,12,0,12,0,0
+Logpush transformers,8,0,8,0,0
+Logs Received,5,0,5,0,2
+MCP Portal,6,0,6,0,0
+MCP Portal Analytics,3,0,3,0,0
+MCP Portal Servers,6,0,6,0,0
+Magic Account Apps,5,0,5,0,0
+Magic BGP Filter Profiles,5,0,5,0,0
+Magic BGP Settings,2,0,2,0,0
+Magic CF1 Site Ramps,4,0,4,0,0
+Magic CF1 Sites,5,0,5,0,0
+Magic Connectors,14,0,14,0,0
+Magic GRE tunnels,6,0,6,0,0
+Magic IPsec tunnels,8,0,8,0,0
+Magic Interconnects,4,0,4,0,0
+Magic Network Monitoring Configuration,6,0,6,0,0
+Magic Network Monitoring Rules,9,0,9,0,0
+Magic Network Monitoring VPC Flow logs,1,0,1,0,0
+Magic PCAP collection,9,0,9,0,0
+Magic Redundancy Groups,5,0,5,0,0
+Magic Site ACLs,6,0,6,0,0
+Magic Site App Configs,5,0,5,0,0
+Magic Site LANs,6,0,6,0,0
+Magic Site NetFlow Config,5,0,5,0,0
+Magic Site WANs,6,0,6,0,0
+Magic Sites,6,0,6,0,0
+Magic Static Routes,7,0,7,0,0
+Maintenance Configuration,4,0,4,2,2
+Managed Transforms,3,0,3,0,0
+Meetings,12,0,12,0,0
+Memory,10,0,10,0,0
+Metrics Export,2,0,2,0,0
+Miscategorization,1,0,1,0,0
+MoQ Relays,8,0,8,0,0
+Monetization,10,0,10,0,0
+NEL Settings,2,0,2,0,0
+Namespace Management,2,0,2,1,1
+Namespaces,4,0,4,0,0
+Notification Alert Types,1,0,1,0,0
+Notification History,1,0,1,0,0
+Notification Mechanism Eligibility,1,0,1,0,0
+Notification Silences,5,0,5,0,0
+Notification destinations with PagerDuty,4,0,4,0,0
+Notification policies,8,0,8,0,0
+Notification webhooks,5,0,5,0,0
+OAuth Clients,8,0,8,0,0
+Observability,6,0,6,0,0
+Observatory,10,0,10,0,0
+On-ramps,12,0,12,0,0
+OrganizationMembers,5,0,5,0,0
+Organizations,10,0,10,0,0
+Origin CA,4,0,4,0,0
+Origin Cloud Regions,15,0,15,8,8
+Origin Post-Quantum,2,0,2,2,2
+Origin TLS,6,0,6,0,0
+Override Codes,1,0,1,0,0
+Page Rules,6,0,6,0,0
+Pages Assets,3,0,3,0,0
+Pages Build Cache,1,0,1,0,0
+Pages Deployment,9,0,9,0,0
+Pages Domains,5,0,5,0,0
+Pages Project,8,0,8,0,0
+Passive DNS by IP,1,0,1,0,0
+Per-Hostname TLS Settings,4,0,4,0,0
+Per-hostname Authenticated Origin Pull,7,0,7,0,0
+Permissions,4,0,4,0,0
+Physical Devices,6,0,6,1,1
+Precursor,2,0,2,0,0
+Prefix Bindings,5,0,5,0,0
+Presets,6,0,6,0,0
+Preview Deployments,5,0,5,0,0
+Previews,6,0,6,0,0
+Priority Intelligence Requirements,16,0,16,0,0
+Priority Intelligence Requirements (PIR),6,0,6,0,0
+Public - Credential Monitor,4,0,4,0,0
+Query,2,0,2,0,0
+Query run,1,0,1,0,0
+Queue,28,0,28,2,2
+R2 Account,1,0,1,0,0
+R2 Bucket,34,1,33,0,0
+R2 Catalog,1,0,1,0,0
+R2 Catalog Management,5,0,5,5,5
+R2 Object,5,0,5,0,0
+R2 Super Slurper,12,0,12,0,0
+RFI,4,0,4,0,0
+RFI Messages,4,0,4,0,0
+Radar AI Bots,5,0,5,2,2
+Radar AI Inference,6,0,6,4,4
+Radar AS112,19,0,19,12,12
+Radar Agent Readiness,1,0,1,0,0
+Radar Annotations,4,0,4,0,0
+Radar Autonomous Systems,6,0,6,0,0
+Radar BGP,19,0,19,0,0
+Radar Bots,5,0,5,0,0
+Radar Certificate Transparency,7,0,7,0,0
+Radar DNS,25,0,25,20,20
+Radar Datasets,3,0,3,0,0
+Radar Domains Ranking,3,0,3,0,0
+Radar Email Routing,14,0,14,12,12
+Radar Email Security,24,0,24,18,18
+Radar Geolocations,2,0,2,0,0
+Radar HTTP,41,0,41,20,20
+Radar IP,1,0,1,0,0
+Radar Internet Services Ranking,3,0,3,0,0
+Radar Layer 3 Attacks,22,0,22,16,16
+Radar Layer 7 Attacks,23,0,23,16,16
+Radar Leaked Credential Checks,6,0,6,4,4
+Radar Locations,2,0,2,0,0
+Radar Markdown for Agents,2,0,2,0,0
+Radar NetFlows,6,0,6,1,1
+Radar Origins,5,0,5,0,0
+Radar Post-Quantum,3,0,3,0,0
+Radar Quality,6,0,6,0,0
+Radar Robots.txt,2,0,2,0,0
+Radar Search,1,0,1,0,0
+Radar TCP Resets and Timeouts,2,0,2,0,0
+Radar Top-Level Domains,4,0,4,0,0
+Radar Traffic Anomalies,3,0,3,0,0
+Radar Verified Bots,2,0,2,2,2
+Radar Web Crawlers,2,0,2,0,0
+Rate Limiting Analytics,1,0,1,1,1
+Rate Plans,1,0,1,0,0
+Rate limits for a zone,5,0,5,5,5
+Realtime SFU Apps,5,0,5,0,0
+Realtime TURN Keys,5,0,5,0,0
+Recordings,6,0,6,0,0
+Regions,2,0,2,0,0
+Registrar Domains,3,0,3,3,3
+Registrar Registration,12,0,12,0,0
+Registrar Transfer,2,0,2,0,0
+Registrations,5,0,5,2,2
+Repository Connections,2,0,2,0,0
+Request for Information (RFI),17,0,17,0,0
+Requests - Dashboard,5,0,5,0,0
+Resource Sharing,21,0,21,0,0
+Resource Tagging,10,0,10,0,0
+Resources,4,0,4,0,0
+Rollouts,1,0,1,0,0
+Rules,25,0,25,0,0
+SCIM Discovery,5,0,5,0,0
+SCIM Groups,6,0,6,0,0
+SCIM Users,6,0,6,0,0
+SSL Verification,2,0,2,0,0
+SSL/TLS Mode Recommendation,1,0,1,1,1
+SSO,6,0,6,0,0
+Saved Queries,5,0,5,0,0
+Scans,10,0,10,0,0
+Schema Validation,7,0,7,0,0
+Schema Validation Settings,8,0,8,0,0
+Secondary DNS (ACL),5,0,5,0,0
+Secondary DNS (Peer),5,0,5,0,0
+Secondary DNS (Primary Zone),8,0,8,0,0
+Secondary DNS (Secondary Zone),5,0,5,0,0
+Secondary DNS (TSIG),5,0,5,0,0
+Secrets Store,12,0,12,0,0
+Security Center Audit Log,4,0,4,0,0
+Security Center Insights,23,0,23,5,5
+Security Center Partners,5,0,5,0,0
+Security Center Scans,4,0,4,0,0
+Sessions,9,0,9,0,0
+Settings,2,0,2,0,0
+Shared,2,0,2,0,0
+Sinkhole Config,10,0,10,0,0
+Slots,2,0,2,0,0
+Smart Shield Settings,2,0,2,0,0
+Smart Tiered Cache,4,0,4,0,0
+Spectrum Analytics,4,0,4,0,0
+Spectrum Applications,6,0,6,0,0
+Stream Audio Tracks,4,0,4,0,0
+Stream Live Inputs,12,0,12,0,0
+Stream MP4 Downloads,5,0,5,0,3
+Stream Signing Keys,3,0,3,0,0
+Stream Subtitles/Captions,6,0,6,0,0
+Stream Video Clipping,1,0,1,0,0
+Stream Videos,10,0,10,0,1
+Stream Watermark Profile,4,0,4,0,0
+Stream Webhook,3,0,3,0,0
+Table Maintenance Configuration,8,0,8,4,4
+Table Management,4,0,4,2,2
+Tag,12,0,12,1,1
+TagCategory,8,0,8,3,3
+Target Environments,6,0,6,0,0
+Target Industry,3,0,3,0,0
+Tenant-Level Custom Nameservers,3,0,3,0,0
+Tenants,5,0,5,0,0
+Threat Signals,31,0,31,0,0
+Tiered Caching,2,0,2,0,0
+Token Validation Token Configuration,7,0,7,0,0
+Token Validation Token Rules,8,0,8,0,0
+Total TLS,2,0,2,0,0
+Triggers,5,0,5,0,0
+Tunnel Routing,9,0,9,3,3
+Tunnel Virtual Network,5,0,5,0,0
+Turnstile,6,0,6,0,0
+URL Intelligence,1,0,1,0,0
+URL Normalization,3,0,3,0,0
+URL Scanner,8,0,8,0,0
+URL Scanner (Deprecated),6,0,6,6,6
+Universal SSL Settings for a Zone,2,0,2,0,0
+Usage,1,0,1,0,0
+Usage Analytics,5,0,5,0,5
+User,3,0,3,0,0
+User API Tokens,8,0,8,0,0
+User Agent Blocking rules,5,0,5,0,0
+User Analytics (Deprecated),1,0,1,1,1
+User Billing History,1,1,0,1,1
+User Billing Profile,1,0,1,1,1
+User Subscription,4,0,4,0,0
+User's Account Memberships,5,0,5,0,0
+User's Invites,3,0,3,0,0
+User's Organizations,3,0,3,3,3
+Values,1,0,1,0,0
+Vectorize,14,0,14,0,0
+Vectorize Beta (Deprecated),10,0,10,10,10
+Versions,6,0,6,0,0
+Vulnerability Discovery,8,0,8,0,0
+WAF overrides,5,0,5,5,5
+WAF packages,3,0,3,3,3
+WAF rule groups,3,0,3,3,3
+WAF rules,3,0,3,3,3
+WARP Change Events,1,0,1,0,0
+WHOIS Record,1,0,1,0,0
+Waiting Room,24,0,24,0,0
+Web Analytics,15,0,15,0,0
+Web3 Hostname,12,0,12,0,0
+Webhooks,7,0,7,0,0
+Worker Cron Trigger,2,0,2,0,0
+Worker Deployments,4,0,4,0,0
+Worker Environment,4,0,4,0,4
+Worker Profiling,1,0,1,0,0
+Worker Routes,5,0,5,0,0
+Worker Script,23,1,22,0,15
+Worker Subdomain,3,0,3,0,0
+Worker Tail Logs,3,0,3,0,0
+Worker Versions,3,0,3,0,3
+Workers,18,0,18,0,0
+Workers AI,8,0,8,0,0
+Workers AI Finetune,5,0,5,0,0
+Workers Account Settings,2,0,2,0,0
+Workers KV Namespace,14,1,13,1,1
+Workers Smart Placement,1,0,1,0,0
+Workers for Platforms,27,0,27,0,0
+Workflows,27,0,27,0,0
+Zaraz,10,0,10,0,0
+Zero Trust Connectivity Settings,2,0,2,0,0
+Zero Trust Gateway DNS destination IPv4 address pairs,1,0,1,0,0
+Zero Trust Gateway PAC files,5,0,5,0,0
+Zero Trust Gateway application and application type mappings,1,0,1,0,0
+Zero Trust Gateway categories,1,0,1,0,0
+Zero Trust Gateway locations,5,0,5,0,0
+Zero Trust Gateway operations,2,0,2,0,0
+Zero Trust Gateway proxy endpoints,5,0,5,0,0
+Zero Trust Gateway rules,9,0,9,0,0
+Zero Trust Hostname Route,5,0,5,0,0
+Zero Trust Risk Scoring,5,0,5,0,0
+Zero Trust Risk Scoring Integrations,6,0,6,0,0
+Zero Trust SSH Settings,3,0,3,0,0
+Zero Trust Subnets,8,0,8,0,0
+Zero Trust accounts,13,0,13,2,2
+Zero Trust applications review status,2,0,2,0,0
+Zero Trust certificates,6,0,6,0,0
+Zero Trust lists,8,0,8,0,0
+Zero Trust organization,6,0,6,0,0
+Zero Trust seats,1,0,1,0,0
+Zero Trust users,11,0,11,0,0
+Zone,10,1,9,0,0
+Zone Analytics (Deprecated),2,0,2,2,2
+Zone Cache Settings,9,0,9,0,0
+Zone Cloud Connector Rules GET,1,0,1,0,0
+Zone Cloud Connector Rules PUT,1,0,1,0,0
+Zone Entitlements,1,0,1,0,0
+Zone Environments,6,0,6,0,0
+Zone Holds,5,0,5,0,0
+Zone Lockdown,5,0,5,0,0
+Zone Rate Plan,3,0,3,0,0
+Zone Rulesets,16,0,16,0,0
+Zone Settings,28,0,28,2,2
+Zone Snippets,8,0,8,0,0
+Zone Subscription,7,0,7,0,0
+Zone-Level Access applications,9,0,9,0,9
+Zone-Level Access groups,5,0,5,0,5
+Zone-Level Access identity providers,5,0,5,0,5
+Zone-Level Access mTLS authentication,7,0,7,0,7
+Zone-Level Access policies,5,0,5,0,5
+Zone-Level Access service tokens,5,0,5,0,5
+Zone-Level Access short-lived certificate CAs,4,0,4,0,4
+Zone-Level Authenticated Origin Pulls,6,0,6,0,0
+Zone-Level Zero Trust organization,4,0,4,0,4
+brand_protection,23,0,23,0,0
+brapi,27,0,27,0,0
+content,1,0,1,0,0
+domain_search,11,0,11,0,0
+dos-flowtrackd-api_other,45,0,45,0,0
+exports,6,0,6,0,0
+finding_types,3,0,3,0,0
+findings,10,0,10,0,0
+logo_match,9,0,9,0,0
+mTLS Certificate Management,5,0,5,0,0
+policies,6,0,6,0,0
+ppc_config,6,0,6,0,0
+ppc_crawlers,1,0,1,0,0
+ppc_stripe,6,0,6,0,0
+ppc_terms,4,0,4,0,0
+ppu_configuration,7,0,7,0,0
+ppu_enabled_domains,1,0,1,0,0
+ppu_pricing,5,0,5,0,0
+ppu_usage_reports,1,0,1,0,0
+ppu_usage_stats,2,0,2,0,0
+remediations,2,0,2,0,0
+reports_other,6,0,6,0,0
+security.txt,3,0,3,0,0
+tseng-abuse-complaint-processor_other,10,0,10,0,0
+warp-teams-device-api_other,1,0,1,0,0
+webhooks,8,0,8,0,0
+workers_k2_other,14,0,14,0,0
+workers_pipelines_other,19,0,19,5,5
