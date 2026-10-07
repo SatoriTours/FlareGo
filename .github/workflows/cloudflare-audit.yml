@@ -1,0 +1,141 @@
+name: Cloudflare audit
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: '可选：cloudflare/api-schemas 的完整 40 位提交，用于生成候选 schema diff（留空只做固定基线检查）'
+        type: string
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      SCHEMA_COMMIT: 6b00f157496cd6a1792a613dc94654c51273aeb9
+      SCHEMA_SHA256: 06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461
+      SCHEMA_URL: https://raw.githubusercontent.com/cloudflare/api-schemas/6b00f157496cd6a1792a613dc94654c51273aeb9/openapi.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report the runner python
+        run: python3 --version
+
+      - name: Fetch the pinned public schema and verify its checksum
+        run: |
+          set -euo pipefail
+          cache_dir="${RUNNER_TEMP}/cf-schema-cache/${SCHEMA_COMMIT}"
+          mkdir -p "$cache_dir"
+          schema_file="${cache_dir}/openapi.json"
+          if [ ! -s "$schema_file" ]; then
+            echo "downloading the pinned public schema (no credentials, no cloud auth headers)"
+            curl --fail --silent --show-error --location "$SCHEMA_URL" --output "${schema_file}.download"
+            mv "${schema_file}.download" "$schema_file"
+          else
+            echo "reusing a cached schema file; its checksum is still verified below"
+          fi
+          sha256sum "$schema_file"
+          printf '%s  %s\n' "$SCHEMA_SHA256" "$schema_file" | sha256sum --check --strict -
+          echo "SCHEMA_FILE=$schema_file" >> "$GITHUB_ENV"
+
+      - name: Run Cloudflare audit unit tests
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/audit-tests.log"
+          python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_*.py' -v 2>&1 | tee "$log"
+          grep -q '^OK' "$log"
+          if grep -q 'NO TESTS RAN' "$log"; then
+            echo "audit test discovery ran no tests" >&2
+            exit 1
+          fi
+
+      - name: Run repository CI unit tests
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/ci-tests.log"
+          python3 -m unittest discover -s tools/ci/tests -p 'test_*.py' -v 2>&1 | tee "$log"
+          grep -q '^OK' "$log"
+          if grep -q 'NO TESTS RAN' "$log"; then
+            echo "repository CI test discovery ran no tests" >&2
+            exit 1
+          fi
+
+      - name: Verify the pinned snapshot is reproducible
+        env:
+          REGEN_DIR: ${{ runner.temp }}/cf-regen
+        run: |
+          set -euo pipefail
+          python3 -m tools.cloudflare_audit.cli generate \
+            --schema "$SCHEMA_FILE" \
+            --manifest docs/cloudflare-audit/snapshot.json \
+            --implemented docs/cloudflare-audit/implemented.json \
+            --output "$REGEN_DIR"
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          regen = pathlib.Path(os.environ["REGEN_DIR"])
+          committed = pathlib.Path("docs/cloudflare-audit")
+          problems = []
+          for name in ("endpoints.csv", "products.csv", "snapshot.json"):
+              generated = (regen / name).read_bytes().replace(b"\r\n", b"\n")
+              checked_in = (committed / name).read_bytes().replace(b"\r\n", b"\n")
+              if generated != checked_in:
+                  problems.append(name)
+          if problems:
+              print("generated artifacts differ from the reviewed baseline: " + ", ".join(problems), file=sys.stderr)
+              sys.exit(1)
+          print("pinned snapshot reproduces the reviewed baseline (CRLF-normalized)")
+          PY
+          git diff --exit-code -- docs/cloudflare-audit
+
+      - name: Check the review ledger against the pinned schema
+        run: |
+          set -euo pipefail
+          python3 -m tools.cloudflare_audit.cli check \
+            --review docs/cloudflare-audit/review.json \
+            --catalog docs/cloudflare-audit/endpoints.csv \
+            --schema "$SCHEMA_FILE"
+
+      - name: Report a candidate schema diff
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_commit != '' }}
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$CANDIDATE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "candidate_commit must be a full 40-character lowercase hex commit" >&2
+            exit 1
+          fi
+          candidate_url="https://raw.githubusercontent.com/cloudflare/api-schemas/${CANDIDATE_COMMIT}/openapi.json"
+          curl --fail --silent --show-error --location "$candidate_url" --output "${RUNNER_TEMP}/candidate.json"
+          sha256sum "${RUNNER_TEMP}/candidate.json"
+          python3 -m tools.cloudflare_audit.cli diff \
+            --old "$SCHEMA_FILE" \
+            --new "${RUNNER_TEMP}/candidate.json" \
+            --output "${RUNNER_TEMP}/candidate-diff.json"
+          cat "${RUNNER_TEMP}/candidate-diff.json"
+          echo "candidate diff is review evidence only; the fixed manifest, ledger and policies are untouched"
+
+      - name: Prove no reviewed artifact was modified
+        if: always()
+        run: |
+          set -euo pipefail
+          git status --porcelain
+          git diff --exit-code

@@ -8,6 +8,7 @@ no credential or Cloudflare request is involved.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from .catalog import (
     pinned_count_problems,
     render_catalog_files,
 )
+from .diff import DIFF_FORMAT, diff_schemas
 from .review import (
     cross_check_schema,
     load_catalog_operations,
@@ -32,6 +34,19 @@ from .review import (
 from .schema import load_schema
 
 MANIFEST_NAME = "snapshot.json"
+
+# Reviewed baseline artifacts the diff report must never overwrite.
+PROTECTED_OUTPUTS = frozenset(
+    {
+        "docs/cloudflare-audit/snapshot.json",
+        "docs/cloudflare-audit/endpoints.csv",
+        "docs/cloudflare-audit/products.csv",
+        "docs/cloudflare-audit/review.json",
+        "docs/cloudflare-audit/implemented.json",
+        "docs/cloudflare-audit/p2-candidate-endpoints.csv",
+    }
+)
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read_json(path: Path) -> dict:
@@ -134,6 +149,64 @@ def propose_ledger(
     return document
 
 
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def diff_schema_files(old_path: Path, new_path: Path, output_path: Path) -> dict:
+    """Diff two local schemas and write a deterministic report. Read-only inputs.
+
+    Refuses to write over the reviewed baseline artifacts or over either input,
+    and writes nothing at all when the inputs cannot be diffed.
+    """
+    old_path = Path(old_path)
+    new_path = Path(new_path)
+    output = Path(output_path)
+    resolved_output = output.resolve()
+    protected = {(REPOSITORY_ROOT / name).resolve() for name in PROTECTED_OUTPUTS}
+    if resolved_output in protected:
+        raise ValueError(
+            f"refusing to overwrite a reviewed baseline artifact: {output}"
+        )
+    for source in (old_path, new_path):
+        if resolved_output == source.resolve():
+            raise ValueError(f"refusing to overwrite an input schema: {output}")
+
+    old_schema = load_schema(old_path, None)
+    new_schema = load_schema(new_path, None)
+    delta = diff_schemas(old_schema, new_schema)
+    report = {
+        "format": DIFF_FORMAT,
+        "old": {
+            "path": str(old_path),
+            "sha256": _file_sha256(old_path),
+            "openapi": old_schema.get("openapi"),
+        },
+        "new": {
+            "path": str(new_path),
+            "sha256": _file_sha256(new_path),
+            "openapi": new_schema.get("openapi"),
+        },
+        "counts": {
+            "added": len(delta["added"]),
+            "removed": len(delta["removed"]),
+            "changed": len(delta["changed"]),
+        },
+        **delta,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        temporary.replace(output)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python3 -m tools.cloudflare_audit.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -168,6 +241,13 @@ def main(argv: list[str] | None = None) -> int:
         help="approved P2 candidate list (docs/cloudflare-audit/p2-candidate-endpoints.csv)",
     )
 
+    diff_parser = subparsers.add_parser(
+        "diff", help="compare two local schemas and write a review report (read-only)"
+    )
+    diff_parser.add_argument("--old", type=Path, required=True)
+    diff_parser.add_argument("--new", type=Path, required=True)
+    diff_parser.add_argument("--output", type=Path, required=True)
+
     args = parser.parse_args(argv)
 
     try:
@@ -185,6 +265,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
             print(json.dumps(result["summary"], ensure_ascii=False, indent=2, default=dict))
+        elif args.command == "diff":
+            report = diff_schema_files(args.old, args.new, args.output)
+            print(json.dumps(report["counts"], ensure_ascii=False, indent=2))
         else:
             document = propose_ledger(
                 args.catalog, args.implemented, args.output, args.snapshot, args.p2_candidates
