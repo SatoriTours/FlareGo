@@ -47,9 +47,9 @@
 
 ### 连接 Cloudflare
 
-1. 在 Cloudflare 控制台获取 Account ID，并创建限定账号和 Zone 范围的 API Token。
-2. 打开 FlareGo 的「账号」，点击「连接 Cloudflare 账号」或标题栏的 `+`。
-3. 输入账号名称、Account ID 和 API Token；验证通过后保存连接。
+1. 打开 FlareGo 的「账号」，点击「连接 Cloudflare 账号」或标题栏的 `+`。
+2. 点击「获取 API Token」，浏览器会打开 [Cloudflare API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)。选择 `Create Token` → `Create Custom Token`，按需配置权限并限定账号和 Zone 范围；Token 仅显示一次，请及时复制，不要使用 Global API Key。「查找 Account ID」可打开官方获取说明。
+3. 返回 App，输入账号名称、Account ID 和 API Token；验证通过后保存连接。
 4. 点击闪电 Logo，从抽屉选择对应账号，再进入域名、资源或账单页。
 
 Account ID 是 32 位十六进制字符串。建议从读取权限开始：账号访问可使用 `Account Settings Read`，域名列表需要 Zone 读取权限；修改 DNS 时再添加 DNS 写权限。Workers、R2、D1、KV 按需授予对应读取权限。权限名称和范围以 [Cloudflare 权限文档](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) 及 [账号接口要求](https://developers.cloudflare.com/api/resources/accounts/methods/get/) 为准。
@@ -77,6 +77,7 @@ Account ID 是 32 位十六进制字符串。建议从读取权限开始：账�
 
 - API Token 使用 Android Keystore 与 AES/GCM 加密保存，不进入 SQL 数据库或应用日志。
 - 账号元数据和操作记录保存在本机 SQLDelight 数据库；Token 输入页禁止系统截图，系统备份与设备迁移已禁用。
+- 未提交的连接草稿只暂存在内存，Activity 重建后仍可继续填写；取消或验证成功后清空，进程结束后不会恢复未提交的 Token。
 - 云请求固定发送到 Cloudflare HTTPS API，不携带 Token 跟随重定向。
 - 写请求禁止自动重试。出现超时或断连时保留待核对结果，再读取云端状态，避免重复提交。
 - DNS 变更先预览再确认；切换账号后，旧请求结果不会覆盖新账号的数据。

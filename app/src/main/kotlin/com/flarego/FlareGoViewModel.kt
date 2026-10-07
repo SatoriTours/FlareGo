@@ -10,6 +10,7 @@ import com.flarego.core.model.*
 import com.flarego.core.ports.SessionFactory
 import com.flarego.core.updates.*
 import com.flarego.platform.*
+import com.flarego.ui.ConnectionDraft
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
 
     private val store = AndroidLocalStore(application)
     private val vault = TokenVault(application)
+    val connectionDraft = ConnectionDraft()
     val controller =
         AppController(
             viewModelScope,
@@ -81,6 +83,11 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
         controller.invalidateSession(connection.id)
         controller.reloadConnections(demoConnections + store.connections())
         controller.selectConnection(connection)
+    }
+
+    override fun onCleared() {
+        connectionDraft.clear()
+        super.onCleared()
     }
 
     fun disconnect(connection: Connection) {

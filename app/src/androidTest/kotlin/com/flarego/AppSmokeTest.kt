@@ -1,10 +1,19 @@
 package com.flarego
 
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
 import android.graphics.Bitmap
+import android.view.WindowManager
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -58,6 +67,85 @@ class AppSmokeTest {
         compose.onNodeWithText("确认提交").performClick()
         compose.onNodeWithText("关闭").performClick()
         compose.onNodeWithText("192.0.2.99").assertIsDisplayed()
+    }
+
+    @Test
+    fun connectionDraftSurvivesActivityRecreationAndIsClearedOnCancel() {
+        val secret = "fixture-recreation-token-not-real"
+        compose.onNodeWithTag("nav-accounts").performClick()
+        compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.onNode(hasSetTextAction() and hasText("账号名称"))
+            .performScrollTo().performTextInput("恢复测试")
+        compose.onNode(hasSetTextAction() and hasText("Account ID"))
+            .performScrollTo().performTextInput("a".repeat(32))
+        compose.onNode(hasSetTextAction() and hasText("API Token"))
+            .performScrollTo().performTextInput(secret)
+
+        compose.activityRule.scenario.recreate()
+
+        compose.onNode(hasSetTextAction() and hasText("账号名称"))
+            .performScrollTo().assertTextContains("恢复测试")
+        compose.onNode(hasSetTextAction() and hasText("Account ID"))
+            .performScrollTo().assertTextContains("a".repeat(32))
+        val tokenField = compose.onNode(hasSetTextAction() and hasText("API Token"))
+            .performScrollTo()
+        assertEquals(
+            "•".repeat(secret.length),
+            tokenField.fetchSemanticsNode().config[SemanticsProperties.EditableText].text,
+        )
+        compose.runOnIdle {
+            val model = ViewModelProvider(compose.activity)[FlareGoViewModel::class.java]
+            assertEquals(secret, model.connectionDraft.token)
+            assertTrue(
+                compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+            )
+        }
+        compose.onNodeWithText("取消").performClick()
+        compose.runOnIdle {
+            assertFalse(
+                compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+            )
+        }
+        compose.onNodeWithContentDescription("连接账号").performClick()
+        listOf("账号名称", "Account ID", "API Token").forEach { label ->
+            val field = compose.onNode(hasSetTextAction() and hasText(label)).performScrollTo()
+            assertEquals("", field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+        }
+    }
+
+    @Test
+    fun connectionHelpLaunchesBrowserIntentsFromTheApp() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val opened = mutableListOf<String>()
+        // Intercept only the external browser boundary; exercise the real app and URI handler.
+        val monitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.action != Intent.ACTION_VIEW) return null
+                opened.add(intent.dataString.orEmpty())
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {
+            compose.onNodeWithTag("nav-accounts").performClick()
+            compose.onNodeWithContentDescription("连接账号").performClick()
+            compose.onNodeWithText("获取 API Token").performScrollTo().performClick()
+            compose.onNodeWithText("查找 Account ID").performScrollTo().performClick()
+            compose.runOnIdle {
+                assertEquals(
+                    listOf(
+                        "https://dash.cloudflare.com/profile/api-tokens",
+                        "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
+                    ),
+                    opened,
+                )
+            }
+            compose.onNodeWithText("验证并连接").assertIsDisplayed().assertIsNotEnabled()
+            compose.onNodeWithText("取消").performClick()
+            compose.onNodeWithText("获取 API Token").assertDoesNotExist()
+        } finally {
+            instrumentation.removeMonitor(monitor)
+        }
     }
 
     @Test

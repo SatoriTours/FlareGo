@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 },
                 updater = current.updater,
+                connectionDraft = current.connectionDraft,
             )
         }
     }

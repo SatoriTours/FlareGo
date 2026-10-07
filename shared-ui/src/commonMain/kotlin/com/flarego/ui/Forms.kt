@@ -5,13 +5,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.safeMessage
 import com.flarego.core.application.validateDns
 import com.flarego.core.model.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -24,88 +27,139 @@ private fun FormBody(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-fun ConnectionDialog(onDismiss: () -> Unit, connect: suspend (String, String, String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var account by remember { mutableStateOf("") }
-    var token by remember { mutableStateOf("") }
+fun ConnectionDialog(
+    onDismiss: () -> Unit,
+    connect: suspend (String, String, String) -> Unit,
+    draft: ConnectionDraft = remember { ConnectionDraft() },
+) {
     var error by remember { mutableStateOf<String?>(null) }
+    var accountInvalid by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
+    val dismiss = {
+        draft.clear()
+        onDismiss()
+    }
+    val openHelp: (String) -> Unit = { url ->
+        try {
+            uriHandler.openUri(url)
+        } catch (_: Exception) {
+            error = "无法打开浏览器，请安装或启用浏览器后重试"
+        }
+    }
     AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
+        onDismissRequest = { if (!busy) dismiss() },
         title = { Text("连接 Cloudflare") },
         text = {
             FormBody {
                 Text(
-                    "填写账号 ID 和 API Token。Token 将加密保存在本机。",
+                    "在官方页面选择「Create Token」→「Create Custom Token」，限定账号／域名范围并配置所需权限，复制 Token 回来填写。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { openHelp("https://dash.cloudflare.com/profile/api-tokens") },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("获取 API Token")
+                }
                 OutlinedTextField(
-                    name,
-                    { name = it },
+                    draft.name,
+                    { draft.name = it },
                     label = { Text("账号名称") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
                 OutlinedTextField(
-                    account,
-                    { account = it },
+                    draft.accountId,
+                    {
+                        draft.accountId = it
+                        if (accountInvalid) error = null
+                        accountInvalid = false
+                    },
                     label = { Text("Account ID") },
+                    isError = accountInvalid,
+                    supportingText =
+                        if (accountInvalid) ({ Text("请输入 32 位十六进制 Account ID") }) else null,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Muted("Account ID 是 32 位账号标识，不是 Zone ID。可在域名概览的 API 区域复制。")
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            openHelp(
+                                "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/"
+                            )
+                        },
+                    ) {
+                        Text("查找 Account ID")
+                    }
+                }
                 OutlinedTextField(
-                    token,
-                    { token = it },
+                    draft.token,
+                    { draft.token = it },
                     label = { Text("API Token") },
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
                 Muted(
-                    "需要 Account Read 和 Zone Read；DNS 编辑需 DNS Write。Workers、R2、D1、KV 读取权限按需授予。账单需要用户级 Billing Read。"
+                    "Token 仅显示一次，请创建后及时复制；不要使用 Global API Key。Token 将加密保存在本机。"
                 )
+                Muted(
+                    "账号验证需 Account Settings · Read，域名列表需 Zone · Read；DNS 查询需 DNS · Read，编辑需 DNS · Edit。Workers、R2、D1、KV 读取权限按需授予；账单需要用户级 Billing · Read。"
+                )
+            }
+        },
+        confirmButton = {
+            // Keep feedback outside the scrollable form, next to the submission controls.
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 error?.let {
                     Text(
                         it,
+                        modifier = Modifier.testTag("connection-error"),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = !busy && name.isNotBlank() && account.isNotBlank() && token.isNotBlank(),
-                onClick = {
-                    busy = true
-                    error = null
-                    scope.launch {
-                        try {
-                            connect(name, account, token)
-                            token = ""
-                            onDismiss()
-                        } catch (e: Exception) {
-                            error = safeMessage(e)
-                        } finally {
-                            busy = false
-                        }
+                Row(Modifier.align(Alignment.End)) {
+                    TextButton(enabled = !busy, onClick = dismiss) { Text("取消") }
+                    TextButton(
+                        enabled =
+                            !busy && draft.name.isNotBlank() &&
+                                draft.accountId.isNotBlank() && draft.token.isNotBlank(),
+                        onClick = {
+                            if (!draft.accountId.trim().matches(Regex("[a-fA-F0-9]{32}"))) {
+                                accountInvalid = true
+                                error = "Account ID 必须为 32 位十六进制字符"
+                            } else {
+                                busy = true
+                                error = null
+                                scope.launch {
+                                    try {
+                                        connect(draft.name, draft.accountId, draft.token)
+                                        dismiss()
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (e: Exception) {
+                                        error = safeMessage(e)
+                                    } finally {
+                                        busy = false
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        Text(if (busy) "验证中…" else "验证并连接")
                     }
-                },
-            ) {
-                Text(if (busy) "验证中…" else "验证并连接")
-            }
-        },
-        dismissButton = {
-            TextButton(
-                enabled = !busy,
-                onClick = {
-                    token = ""
-                    onDismiss()
-                },
-            ) {
-                Text("取消")
+                }
             }
         },
     )

@@ -62,12 +62,15 @@ fun FlareGoApp(
     openConsole: (Page) -> Unit,
     sensitiveScreen: (Boolean) -> Unit = {},
     updater: UpdateController? = null,
+    connectionDraft: ConnectionDraft = remember { ConnectionDraft() },
 ) {
     val state by controller.state.collectAsState()
     val updateState = updater?.state?.collectAsState()?.value
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
-    var dialog by remember { mutableStateOf<DialogState?>(null) }
+    var dialog by remember(connectionDraft) {
+        mutableStateOf<DialogState?>(if (connectionDraft.isOpen) DialogState.Connect else null)
+    }
     var searchOpen by
         remember(state.page, state.selected.id) {
             mutableStateOf(state.page == Page.BUY && state.selected.demo)
@@ -93,7 +96,14 @@ fun FlareGoApp(
     val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS)
     val searchEnabled =
         state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
-    val dismiss = { dialog = null }
+    val dismiss = {
+        if (dialog is DialogState.Connect) connectionDraft.clear()
+        dialog = null
+    }
+    val openConnection = {
+        connectionDraft.isOpen = true
+        dialog = DialogState.Connect
+    }
 
     FlareGoTheme {
         ModalNavigationDrawer(
@@ -132,7 +142,7 @@ fun FlareGoApp(
                                 modifier =
                                     Modifier.fillMaxWidth().clickable {
                                         keyboard?.hide()
-                                        dialog = null
+                                        dismiss()
                                         controller.selectConnection(connection)
                                         scope.launch { drawer.close() }
                                     },
@@ -159,7 +169,7 @@ fun FlareGoApp(
                         OutlinedButton(
                             onClick = {
                                 scope.launch { drawer.close() }
-                                dialog = DialogState.Connect
+                                openConnection()
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -297,7 +307,7 @@ fun FlareGoApp(
                                         Icon(Icons.Default.Add, "新增 DNS 记录")
                                     }
                                 Page.ACCOUNTS ->
-                                    IconButton(onClick = { dialog = DialogState.Connect }) {
+                                    IconButton(onClick = openConnection) {
                                         Icon(Icons.Default.Add, "连接账号")
                                     }
                                 else ->
@@ -424,7 +434,7 @@ fun FlareGoApp(
                             Page.ACCOUNTS ->
                                 AccountsScreen(
                                     state,
-                                    { dialog = DialogState.Connect },
+                                    openConnection,
                                     { dialog = DialogState.Disconnect(it) },
                                     { updater?.let { UpdatePanel(it) } },
                                 )
@@ -443,7 +453,7 @@ fun FlareGoApp(
             }
         }
         when (val modal = dialog) {
-            DialogState.Connect -> ConnectionDialog(dismiss, connect)
+            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft)
             DialogState.Create ->
                 CreateResourceDialog(dismiss) {
                     dialog = null
