@@ -1289,6 +1289,92 @@ class IdentityShapeTest(unittest.TestCase):
             )
 
 
+class ComposedGateTest(unittest.TestCase):
+    """S1: existing structure-error signals must reach the summary gate.
+
+    Uses the synthetic positive fixture from :class:`BlockerIntegrityTest` so the
+    unique complete clearance stays provably able to pass.
+    """
+
+    def setUp(self):
+        fixture = BlockerIntegrityTest()
+        self.operation = fixture.permitted_operation()
+        self.cleared = fixture.cleared_review({"permitted": fixture.passing_entry()})
+
+    def mixed_permission_cases(self):
+        return (
+            {"x-api-token-group": True, "x-cfPermissionsRequired": {"enum": ["#organization:edit"]}},
+            {"x-api-token-group": ["Zone Settings Read"], "x-cfPermissionsRequired": {"enum": [None]}},
+            {"x-api-token-group": [], "x-cfPermissionsRequired": {"enum": ["#organization:edit"]}},
+            {"x-api-token-group": ["Zone Settings Read"], "x-cfPermissionsRequired": {"enum": []}},
+        )
+
+    def test_mixed_valid_and_invalid_permission_fields_block_qualification(self):
+        for metadata in self.mixed_permission_cases():
+            raw = operation(
+                "permitted", "GET", self.operation["path"], self.operation["tags"], metadata
+            )
+            row = catalog_row(
+                "permitted", "GET", self.operation["path"], self.operation["tags"],
+                token_permissions_raw=json.dumps(metadata),
+            )
+            for label, value in (("raw", raw), ("csv", row)):
+                normalized = normalize_operations([value])[0]
+                self.assertTrue(normalized["permissions_present"], (metadata, label))
+                self.assertTrue(normalized["permission_shape_errors"], (metadata, label))
+                report = summarize_review([value], self.cleared)
+                self.assertGreaterEqual(report["blocked"], 1, (metadata, label))
+                self.assertEqual(0, report["verified"], (metadata, label))
+                self.assertEqual(0, report["capability_verified"], (metadata, label))
+                self.assertIn("permission_metadata_invalid_shape", report["blockers"], (metadata, label))
+                self.assertTrue(validate_review([value], self.cleared), (metadata, label))
+                proposal = propose_review([value], {"operations": {}})
+                blockers = proposal["operations"]["permitted"]["evidence"]["blockers"]
+                self.assertIn("permission_metadata_invalid_shape", blockers, (metadata, label))
+                errors = validate_review([value], proposal)
+                self.assertTrue(
+                    any("invalid shape" in error for error in errors), (metadata, label, errors)
+                )
+                self.assertEqual(
+                    0, summarize_review([value], proposal)["capability_verified"], (metadata, label)
+                )
+                self.assertEqual(0, summarize_review([value], proposal)["verified"], (metadata, label))
+
+    def test_malformed_global_blocker_records_block_clearance(self):
+        malformed = (None, "bad-record", {"code": []}, {"detail": "no code"})
+        for record in malformed:
+            for position in ("append", "prepend"):
+                document = copy.deepcopy(self.cleared)
+                if position == "append":
+                    document["blockers"].append(record)
+                else:
+                    document["blockers"].insert(0, record)
+                self.assertTrue(account_blocker_active(document), (record, position))
+                report = summarize_review([self.operation], document)
+                self.assertEqual(0, report["verified"], (record, position))
+                self.assertEqual(0, report["capability_verified"], (record, position))
+                self.assertTrue(validate_review([self.operation], document), (record, position))
+        self.assertFalse(account_blocker_active(self.cleared))
+        self.assertEqual(1, summarize_review([self.operation], self.cleared)["verified"])
+
+    def test_single_valid_or_null_permission_field_keeps_existing_semantics(self):
+        for metadata in (
+            {"x-cfPermissionsRequired": {"enum": ["#organization:edit"]}},
+            {"x-api-token-group": None, "x-cfPermissionsRequired": {"enum": ["#organization:edit"]}},
+            {"x-api-token-group": ["Zone Settings Read"], "x-cfPermissionsRequired": None},
+        ):
+            rows = [
+                catalog_row(
+                    "permitted", "GET", self.operation["path"], self.operation["tags"],
+                    token_permissions_raw=json.dumps(metadata),
+                )
+            ]
+            normalized = normalize_operations(rows)[0]
+            self.assertTrue(normalized["permissions_present"], metadata)
+            self.assertEqual([], normalized["permission_shape_errors"], metadata)
+            self.assertEqual(0, summarize_review(rows, self.cleared)["blocked"], metadata)
+
+
 class RealLedgerTest(unittest.TestCase):
     """Checks the committed ledger against the committed catalog (offline)."""
 
@@ -1421,6 +1507,7 @@ class RealLedgerTest(unittest.TestCase):
         absent = sum(1 for op in normalized if not op["permissions_present"])
         report = summarize_review(self.operations, self.review)
         self.assertEqual(report["blockers"]["permission_metadata_absent"], absent)
+        self.assertNotIn("permission_metadata_invalid_shape", report["blockers"])
 
     def test_p2_candidate_file_matches_the_ledger(self):
         candidates = load_p2_candidates(P2_CANDIDATES)

@@ -74,6 +74,7 @@ REVIEW_FIELDS = (
 )
 
 BLOCKER_PERMISSION_ABSENT = "permission_metadata_absent"
+BLOCKER_PERMISSION_SHAPE = "permission_metadata_invalid_shape"
 BLOCKER_AVAILABILITY_CONFLICT = "availability_conflict"
 BLOCKER_DEPRECATION_CONFLICT = "deprecation_conflict"
 BLOCKER_FORGE_HIDDEN = "forge_hidden_flag_requires_review"
@@ -1247,13 +1248,17 @@ def derived_blockers(operation: dict) -> list[str]:
     """Blockers derived from pinned facts, independent of hand-written evidence.
 
     A ledger edit cannot whitelist an operation by deleting ``evidence.blockers``:
-    missing permission metadata, a Forge-hidden-only flag, an unreviewed write, an
-    unclassified product or a route family whose qualification is still pending
-    still block because the fact is re-derived here.
+    missing or malformed permission metadata, a Forge-hidden-only flag, an
+    unreviewed write, an unclassified product or a route family whose
+    qualification is still pending all block because the fact is re-derived here.
     """
     blockers: list[str] = []
     if not operation["permissions_present"]:
         blockers.append(BLOCKER_PERMISSION_ABSENT)
+    if operation.get("permission_shape_errors"):
+        # One valid permission field must never mask a sibling field whose inner
+        # shape is invalid; that invalidity is itself a fact-derived blocker.
+        blockers.append(BLOCKER_PERMISSION_SHAPE)
     if operation["availability"] == "generally-available" and _RESTRICTED_HINT.search(
         operation["summary"]
     ):
@@ -1316,13 +1321,33 @@ def _clearance_complete(blocker: dict) -> bool:
     return has_reference and has_record
 
 
+def _blockers_structure_errors(review: dict) -> list[str]:
+    """Structure errors of ``review.blockers`` shared by validation and qualification.
+
+    Both entry points must agree: a list that contains structurally damaged
+    records can never be interpreted as an account-gate clearance.
+    """
+    blockers = review.get("blockers") if isinstance(review, dict) else None
+    if not isinstance(blockers, list):
+        return ["review.blockers must be a list of global blocker records"]
+    errors: list[str] = []
+    for blocker in blockers:
+        if not isinstance(blocker, dict) or not isinstance(blocker.get("code"), str):
+            errors.append(
+                f"review.blockers items must be objects with a string code, got {blocker!r}"
+            )
+    return errors
+
+
 def account_blocker_active(review: dict) -> bool:
     """True while authorized-account evidence is missing, empty or uncleared.
 
-    Absence, omission and malformed records are unknown/blocked, never clearance.
-    Clearance needs exactly one record with an explicit reference plus a clearance
-    record; duplicate or conflicting records can never clear the gate.
+    Absence, omission, structural damage and malformed records are unknown/blocked,
+    never clearance. Clearance needs exactly one well-formed record with an explicit
+    reference plus a clearance record; duplicate or conflicting records cannot clear.
     """
+    if _blockers_structure_errors(review):
+        return True
     matches = _account_blocker_matches(review)
     if len(matches) != 1:
         return True
@@ -1331,13 +1356,7 @@ def account_blocker_active(review: dict) -> bool:
 
 def global_blocker_errors(review: dict) -> list[str]:
     """Readable structure errors for the global account-blocker records."""
-    errors: list[str] = []
-    blockers = review.get("blockers") if isinstance(review, dict) else None
-    if not isinstance(blockers, list):
-        return ["review.blockers must be a list of global blocker records"]
-    for blocker in blockers:
-        if not isinstance(blocker, dict) or not isinstance(blocker.get("code"), str):
-            errors.append("review.blockers items must be objects with a string code")
+    errors = list(_blockers_structure_errors(review))
     matches = _account_blocker_matches(review)
     if len(matches) > 1:
         errors.append(
