@@ -7,10 +7,12 @@ checksum-matching. No network access, no credentials, no cloud calls.
 import copy
 import hashlib
 import json
+import os
 import pathlib
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 from tools.cloudflare_audit import cli
 from tools.cloudflare_audit.diff import (
@@ -143,6 +145,27 @@ def reorder(value):
 
 def changed_fields(delta: dict, operation_id: str) -> list[str]:
     return delta["changed"][operation_id]["fields"]
+
+
+def pinned_schema_status() -> tuple[pathlib.Path, str]:
+    """Resolve the pinned schema and its usability state.
+
+    A checksum-verified ``SCHEMA_FILE`` provided by CI is authoritative: a
+    missing or mismatching file is an error, never a silent skip. Only a locally
+    absent fallback copy may be skipped transparently.
+    """
+    expected = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["schema"]["sha256"]
+    from_env = os.environ.get("SCHEMA_FILE")
+    if from_env:
+        path = pathlib.Path(from_env)
+        if not path.exists():
+            return path, "ci_missing"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return path, "ok" if digest == expected else "ci_checksum_mismatch"
+    if not PINNED_SCHEMA.exists():
+        return PINNED_SCHEMA, "missing"
+    digest = hashlib.sha256(PINNED_SCHEMA.read_bytes()).hexdigest()
+    return PINNED_SCHEMA, "ok" if digest == expected else "local_checksum_mismatch"
 
 
 class DiffBasicsTest(unittest.TestCase):
@@ -359,6 +382,82 @@ class ParameterContextTest(unittest.TestCase):
             {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
         )
         delta = diff_schemas(self.old_schema, schema)
+        self.assertIn("parameters", changed_fields(delta, "things-list"))
+
+
+    def test_parameter_alias_cycle_fails_readably(self):
+        old = base_schema()
+        old["components"]["parameters"]["LoopA"] = {"$ref": "#/components/parameters/LoopB"}
+        old["components"]["parameters"]["LoopB"] = {"$ref": "#/components/parameters/LoopA"}
+        old["paths"]["/things"]["get"]["parameters"] = [{"$ref": "#/components/parameters/LoopA"}]
+        with self.assertRaises(ValueError):
+            diff_schemas(old, copy.deepcopy(old))
+
+    def test_bad_parameter_alias_pointer_fails(self):
+        old = base_schema()
+        old["paths"]["/things"]["get"]["parameters"] = [{"$ref": "#/components/parameters/Missing"}]
+        with self.assertRaises(ValueError):
+            diff_schemas(old, copy.deepcopy(old))
+
+    def test_indirect_parameter_alias_override_is_resolved(self):
+        old = base_schema()
+        old["components"]["parameters"]["Alias"] = {"$ref": "#/components/parameters/AccountId"}
+        old["paths"]["/things"]["parameters"] = [
+            {"name": "account_id", "in": "query", "schema": {"type": "string"}}
+        ]
+        old["paths"]["/things"]["get"]["parameters"] = [{"$ref": "#/components/parameters/Alias"}]
+        new = copy.deepcopy(old)
+        new["paths"]["/things"]["parameters"][0]["schema"]["type"] = "integer"
+        delta = diff_schemas(old, new)
+        self.assertIn("parameters", changed_fields(delta, "example-create"))
+        self.assertNotIn("things-list", delta["changed"])
+
+    def test_multi_level_parameter_alias_is_resolved(self):
+        old = base_schema()
+        old["components"]["parameters"]["Alias"] = {"$ref": "#/components/parameters/Alias2"}
+        old["components"]["parameters"]["Alias2"] = {"$ref": "#/components/parameters/AccountId"}
+        old["paths"]["/things"]["parameters"] = [
+            {"name": "account_id", "in": "query", "schema": {"type": "string"}}
+        ]
+        old["paths"]["/things"]["get"]["parameters"] = [{"$ref": "#/components/parameters/Alias"}]
+        new = copy.deepcopy(old)
+        new["paths"]["/things"]["parameters"][0]["schema"]["type"] = "integer"
+        delta = diff_schemas(old, new)
+        self.assertIn("parameters", changed_fields(delta, "example-create"))
+        self.assertNotIn("things-list", delta["changed"])
+
+    def test_ref_path_parameter_with_inline_operation_override(self):
+        old = base_schema()
+        old["paths"]["/things"]["get"]["parameters"] = [
+            {"name": "account_id", "in": "query", "schema": {"type": "string"}}
+        ]
+        new = copy.deepcopy(old)
+        new["components"]["parameters"]["AccountId"]["schema"]["type"] = "integer"
+        delta = diff_schemas(old, new)
+        self.assertIn("parameters", changed_fields(delta, "example-create"))
+        self.assertNotIn("things-list", delta["changed"])
+
+    def test_inline_path_parameter_with_ref_operation_override(self):
+        old = base_schema()
+        old["paths"]["/things"]["parameters"] = [
+            {"name": "account_id", "in": "query", "schema": {"type": "string"}}
+        ]
+        old["paths"]["/things"]["get"]["parameters"] = [
+            {"$ref": "#/components/parameters/AccountId"}
+        ]
+        new = copy.deepcopy(old)
+        new["paths"]["/things"]["parameters"][0]["schema"]["type"] = "integer"
+        delta = diff_schemas(old, new)
+        self.assertIn("parameters", changed_fields(delta, "example-create"))
+        self.assertNotIn("things-list", delta["changed"])
+
+    def test_used_parameter_change_is_still_detected_with_aliases(self):
+        old = base_schema()
+        old["components"]["parameters"]["Alias"] = {"$ref": "#/components/parameters/AccountId"}
+        old["paths"]["/things"]["get"]["parameters"] = [{"$ref": "#/components/parameters/Alias"}]
+        new = copy.deepcopy(old)
+        new["components"]["parameters"]["AccountId"]["schema"]["type"] = "integer"
+        delta = diff_schemas(old, new)
         self.assertIn("parameters", changed_fields(delta, "things-list"))
 
 
@@ -581,22 +680,277 @@ class WorkflowContractTest(unittest.TestCase):
     def test_workflow_verifies_checksum_and_does_not_write_back(self):
         self.assertIn("sha256sum", self.text)
         self.assertIn("git diff --exit-code", self.text)
-        self.assertIn("git status --porcelain", self.text)
         self.assertIn("cli check", self.text)
         self.assertIn("cli generate", self.text)
+
+    def test_workflow_cache_key_includes_the_pinned_sha(self):
+        self.assertIn("cf-schema-cache/${SCHEMA_COMMIT}-${SCHEMA_SHA256}", self.text)
+        self.assertIn("sha256sum --check --strict", self.text)
+
+    def test_workflow_candidate_guard_is_whole_string(self):
+        self.assertIn("fullmatch", self.text)
+        self.assertIn("[0-9a-f]{40}", self.text)
+        self.assertNotIn("grep -Eq '^[0-9a-f]{40}$'", self.text)
+
+    def test_workflow_no_write_gate_uses_content_snapshots(self):
+        self.assertIn("tree-before", self.text)
+        self.assertIn("tree-after", self.text)
+        self.assertIn("git status --porcelain --untracked-files=all", self.text)
+        self.assertEqual(1, self.text.count("git diff --exit-code"))
+
+    def test_workflow_exports_the_verified_schema_path_before_the_tests(self):
+        self.assertIn("SCHEMA_FILE", self.text)
+        self.assertIn("GITHUB_ENV", self.text)
+        self.assertLess(
+            self.text.index("SCHEMA_FILE=$schema_file"),
+            self.text.index("discover -s tools/cloudflare_audit/tests"),
+        )
+
+
+class AddedRemovedReferenceTest(unittest.TestCase):
+    """I2: added/removed-only operations must validate their reachable refs."""
+
+    def setUp(self):
+        self.old_schema = base_schema()
+
+    def added_operation_schema(self, reference: str) -> dict:
+        schema = copy.deepcopy(self.old_schema)
+        schema["paths"]["/new"] = {
+            "post": {
+                "operationId": "added-broken",
+                "summary": "Added",
+                "requestBody": {"content": {"application/json": {"schema": {"$ref": reference}}}},
+                "responses": {"200": {"description": "ok"}},
+            }
+        }
+        return schema
+
+    def test_added_only_operation_with_bad_nested_ref_fails(self):
+        for reference in (
+            "#/components/schemas/Missing",
+            "#/components/schemas/Thing/nope",
+            "./other.json#/components/schemas/Thing",
+            "https://example.invalid/schema.json#/Thing",
+        ):
+            with self.assertRaises(ValueError, msg=reference):
+                diff_schemas(self.old_schema, self.added_operation_schema(reference))
+
+    def test_removed_only_operation_with_bad_nested_ref_fails(self):
+        for reference in (
+            "#/components/schemas/Missing",
+            "https://example.invalid/schema.json#/Thing",
+        ):
+            with self.assertRaises(ValueError, msg=reference):
+                diff_schemas(self.added_operation_schema(reference), self.old_schema)
+
+    def test_added_only_operation_with_valid_refs_is_added(self):
+        schema = self.added_operation_schema("#/components/schemas/Thing")
+        delta = diff_schemas(self.old_schema, schema)
+        self.assertEqual(["added-broken"], list(delta["added"]))
+        self.assertEqual({}, delta["changed"])
+        self.assertEqual({}, delta["removed"])
+        reverse = diff_schemas(schema, self.old_schema)
+        self.assertEqual(["added-broken"], list(reverse["removed"]))
+        self.assertEqual({}, reverse["changed"])
+
+    def test_bad_ref_in_a_new_method_fails(self):
+        schema = copy.deepcopy(self.old_schema)
+        schema["paths"]["/things"]["delete"] = {
+            "operationId": "things-delete-all",
+            "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Missing"}}}},
+            "responses": {"204": {"description": "gone"}},
+        }
+        with self.assertRaises(ValueError):
+            diff_schemas(self.old_schema, schema)
+
+    def test_bad_ref_after_rename_fails(self):
+        schema = copy.deepcopy(self.old_schema)
+        item = schema["paths"]["/things"]["post"]
+        item["requestBody"] = {
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Missing"}}}
+        }
+        item["operationId"] = "thing-create"
+        with self.assertRaises(ValueError):
+            diff_schemas(self.old_schema, schema)
+
+    def test_unreferenced_component_stays_irrelevant(self):
+        schema = copy.deepcopy(self.old_schema)
+        schema["components"]["schemas"]["Unused"]["properties"]["note"]["type"] = "integer"
+        delta = diff_schemas(self.old_schema, schema)
+        self.assertEqual({}, delta["added"])
+        self.assertEqual({}, delta["removed"])
+        self.assertEqual({}, delta["changed"])
+
+
+class DiffOutputSafetyTest(unittest.TestCase):
+    """I1: atomic staging and complete reviewed-baseline protection."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = pathlib.Path(self.directory.name)
+        self.old_path = self.root / "old.json"
+        self.new_path = self.root / "new.json"
+        self.old_path.write_text(json.dumps(base_schema()), encoding="utf-8")
+        changed = copy.deepcopy(base_schema())
+        changed["components"]["schemas"]["Thing"]["properties"]["id"]["type"] = "integer"
+        self.new_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    def run_diff(self, old, new, output):
+        return cli.main(["diff", "--old", str(old), "--new", str(new), "--output", str(output)])
+
+    def test_existing_staging_file_is_never_clobbered(self):
+        output = self.root / "report.json"
+        staging = self.root / "report.json.tmp"
+        staging.write_text("synthetic pre-existing staging file", encoding="utf-8")
+        before = staging.read_bytes()
+        self.assertEqual(0, self.run_diff(self.old_path, self.new_path, output))
+        self.assertTrue(output.exists())
+        self.assertEqual(before, staging.read_bytes())
+        self.assertEqual(3, json.loads(output.read_text(encoding="utf-8"))["counts"]["changed"])
+
+    def test_staging_symlink_target_is_never_modified(self):
+        output = self.root / "report.json"
+        staging = self.root / "report.json.tmp"
+        target = self.root / "sentinel.txt"
+        target.write_text("synthetic sentinel", encoding="utf-8")
+        staging.symlink_to(target)
+        before = target.read_bytes()
+        self.assertEqual(0, self.run_diff(self.old_path, self.new_path, output))
+        self.assertEqual(before, target.read_bytes())
+        self.assertTrue(staging.is_symlink())
+
+    def test_input_named_like_a_staging_path_is_preserved(self):
+        output = self.root / "report.json"
+        old = self.root / "report.json.tmp"
+        old.write_text(json.dumps(base_schema()), encoding="utf-8")
+        before = old.read_bytes()
+        self.assertEqual(0, self.run_diff(old, self.new_path, output))
+        self.assertTrue(old.exists())
+        self.assertEqual(before, old.read_bytes())
+
+    def test_refuses_any_output_inside_the_reviewed_audit_baseline(self):
+        fake_root = self.root / "repo"
+        baseline = fake_root / "docs/cloudflare-audit"
+        names = ("r2-s3-operations.csv", "protocols.json", "snapshot.json", "nested/new.json")
+        for name in names:
+            path = baseline / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic reviewed artifact", encoding="utf-8")
+        with mock.patch.object(cli, "REPOSITORY_ROOT", fake_root):
+            for name in names:
+                target = baseline / name
+                before = target.read_bytes()
+                with self.assertRaises(ValueError, msg=name):
+                    cli.diff_schema_files(self.old_path, self.new_path, target)
+                self.assertEqual(before, target.read_bytes())
+                self.assertNotEqual(0, self.run_diff(self.old_path, self.new_path, target))
+                self.assertEqual(before, target.read_bytes())
+
+    def test_symlinked_output_into_the_baseline_is_refused(self):
+        fake_root = self.root / "repo"
+        baseline = fake_root / "docs/cloudflare-audit"
+        baseline.mkdir(parents=True)
+        reviewed = baseline / "review.json"
+        reviewed.write_text("synthetic reviewed ledger", encoding="utf-8")
+        link = self.root / "link.json"
+        link.symlink_to(reviewed)
+        before = reviewed.read_bytes()
+        with mock.patch.object(cli, "REPOSITORY_ROOT", fake_root):
+            with self.assertRaises(ValueError):
+                cli.diff_schema_files(self.old_path, self.new_path, link)
+        self.assertEqual(before, reviewed.read_bytes())
+
+    def test_symlinked_input_is_protected(self):
+        link = self.root / "link.json"
+        link.symlink_to(self.old_path)
+        before = self.old_path.read_bytes()
+        with self.assertRaises(ValueError):
+            cli.diff_schema_files(self.old_path, self.new_path, link)
+        self.assertEqual(before, self.old_path.read_bytes())
+
+    def test_failed_diff_leaves_no_output_or_temporary(self):
+        schema = copy.deepcopy(base_schema())
+        schema["components"]["requestBodies"]["ThingBody"]["content"]["application/json"]["schema"] = {
+            "$ref": "#/components/schemas/Missing"
+        }
+        bad = self.root / "bad.json"
+        bad.write_text(json.dumps(schema), encoding="utf-8")
+        output = self.root / "out.json"
+        with self.assertRaises(ValueError):
+            cli.diff_schema_files(self.old_path, bad, output)
+        self.assertFalse(output.exists())
+        expected = {self.old_path.name, self.new_path.name, bad.name}
+        self.assertEqual(expected, {path.name for path in self.root.iterdir()})
+
+    def test_write_failure_removes_only_its_own_temporary(self):
+        output = self.root / "out.json"
+        with mock.patch.object(cli.os, "replace", side_effect=OSError("synthetic failure")):
+            with self.assertRaises(OSError):
+                cli.diff_schema_files(self.old_path, self.new_path, output)
+        self.assertFalse(output.exists())
+        self.assertEqual(
+            [], [path.name for path in self.root.iterdir() if path.name.endswith(".tmp")]
+        )
+
+    def test_output_directory_is_refused_without_temporary(self):
+        output = self.root / "outdir"
+        output.mkdir()
+        with self.assertRaises(ValueError):
+            cli.diff_schema_files(self.old_path, self.new_path, output)
+        self.assertTrue(output.is_dir())
+        self.assertEqual([], [path.name for path in self.root.iterdir() if path.name.startswith(".outdir")])
+
+
+class PinnedSchemaStatusTest(unittest.TestCase):
+    """I4: a CI-provided pinned schema must run, never silently skip."""
+
+    def test_ci_schema_file_is_used_and_checksum_verified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = pathlib.Path(directory) / "openapi.json"
+            fake.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"SCHEMA_FILE": str(fake)}):
+                path, state = pinned_schema_status()
+            self.assertEqual(fake, path)
+            self.assertEqual("ci_checksum_mismatch", state)
+
+    def test_missing_ci_schema_file_is_not_a_silent_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "missing.json"
+            with mock.patch.dict(os.environ, {"SCHEMA_FILE": str(missing)}):
+                path, state = pinned_schema_status()
+            self.assertEqual("ci_missing", state)
+
+    def test_ci_path_pointing_at_the_real_pin_is_ok(self):
+        candidate = os.environ.get("SCHEMA_FILE")
+        if not candidate:
+            if not PINNED_SCHEMA.exists():
+                self.skipTest("no pinned schema available locally or from CI")
+            candidate = str(PINNED_SCHEMA)
+        with mock.patch.dict(os.environ, {"SCHEMA_FILE": candidate}):
+            path, state = pinned_schema_status()
+        self.assertEqual(pathlib.Path(candidate), path)
+        self.assertEqual("ok", state)
+
+    def test_local_fallback_state_is_reported(self):
+        environment = {key: value for key, value in os.environ.items() if key != "SCHEMA_FILE"}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            path, state = pinned_schema_status()
+        self.assertIn(state, ("ok", "missing", "local_checksum_mismatch"))
+        self.assertEqual(PINNED_SCHEMA, path)
 
 
 class RealSchemaTest(unittest.TestCase):
     """Real pinned-schema checks; skipped when the local copy is absent."""
 
     def setUp(self):
-        if not PINNED_SCHEMA.exists():
-            self.skipTest("pinned local schema not present")
-        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-        digest = hashlib.sha256(PINNED_SCHEMA.read_bytes()).hexdigest()
-        if digest != snapshot["schema"]["sha256"]:
-            self.skipTest("pinned local schema checksum mismatch")
-        self.schema = json.loads(PINNED_SCHEMA.read_text(encoding="utf-8"))
+        path, state = pinned_schema_status()
+        if state == "ok":
+            self.schema = json.loads(path.read_text(encoding="utf-8"))
+            return
+        if state in ("missing", "local_checksum_mismatch"):
+            self.skipTest(f"pinned schema not available locally ({state})")
+        self.fail(f"CI-provided SCHEMA_FILE is not usable ({state}: {path})")
 
     def test_fixed_schema_same_version_has_empty_diff(self):
         delta = diff_schemas(self.schema, copy.deepcopy(self.schema))

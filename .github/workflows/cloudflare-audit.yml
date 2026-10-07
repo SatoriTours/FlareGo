@@ -33,13 +33,35 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Snapshot the reviewed tree before any audit step
+        run: |
+          set -euo pipefail
+          git status --porcelain --untracked-files=all > "$RUNNER_TEMP/status-before.txt"
+          python3 - "$RUNNER_TEMP/tree-before.txt" <<'PY'
+          import hashlib
+          import pathlib
+          import subprocess
+          import sys
+
+          tracked = subprocess.run(
+              ["git", "ls-files", "-z"], capture_output=True, check=True
+          ).stdout.split(b"\0")
+          lines = []
+          for raw in sorted(item for item in tracked if item):
+              path = pathlib.Path(raw.decode())
+              digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "<missing>"
+              lines.append(f"{digest}  {path}")
+          pathlib.Path(sys.argv[1]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"snapshotted {len(lines)} tracked files")
+          PY
+
       - name: Report the runner python
         run: python3 --version
 
       - name: Fetch the pinned public schema and verify its checksum
         run: |
           set -euo pipefail
-          cache_dir="${RUNNER_TEMP}/cf-schema-cache/${SCHEMA_COMMIT}"
+          cache_dir="${RUNNER_TEMP}/cf-schema-cache/${SCHEMA_COMMIT}-${SCHEMA_SHA256}"
           mkdir -p "$cache_dir"
           schema_file="${cache_dir}/openapi.json"
           if [ ! -s "$schema_file" ]; then
@@ -47,7 +69,7 @@ jobs:
             curl --fail --silent --show-error --location "$SCHEMA_URL" --output "${schema_file}.download"
             mv "${schema_file}.download" "$schema_file"
           else
-            echo "reusing a cached schema file; its checksum is still verified below"
+            echo "reusing a same-job cached schema file; its checksum is still verified below"
           fi
           sha256sum "$schema_file"
           printf '%s  %s\n' "$SCHEMA_SHA256" "$schema_file" | sha256sum --check --strict -
@@ -119,8 +141,8 @@ jobs:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$CANDIDATE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "candidate_commit must be a full 40-character lowercase hex commit" >&2
+          if ! python3 -c "import re, sys; sys.exit(0 if re.fullmatch(r'[0-9a-f]{40}', sys.argv[1]) else 1)" "$CANDIDATE_COMMIT"; then
+            echo "candidate_commit must be exactly 40 lowercase hex characters" >&2
             exit 1
           fi
           candidate_url="https://raw.githubusercontent.com/cloudflare/api-schemas/${CANDIDATE_COMMIT}/openapi.json"
@@ -137,5 +159,45 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          git status --porcelain
-          git diff --exit-code
+          echo "whole-project status at the end of the job:"
+          git status --porcelain --untracked-files=all | tee "$RUNNER_TEMP/status-after.txt"
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          runner = pathlib.Path(os.environ["RUNNER_TEMP"])
+
+          def tree_snapshot():
+              tracked = subprocess.run(
+                  ["git", "ls-files", "-z"], capture_output=True, check=True
+              ).stdout.split(b"\0")
+              lines = []
+              for raw in sorted(item for item in tracked if item):
+                  path = pathlib.Path(raw.decode())
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "<missing>"
+                  lines.append(f"{digest}  {path}")
+              return lines
+
+          before = (runner / "tree-before.txt").read_text(encoding="utf-8").splitlines()
+          after = tree_snapshot()
+          (runner / "tree-after.txt").write_text("\n".join(after) + "\n", encoding="utf-8")
+          problems = []
+          if before != after:
+              changed = sorted(set(before) ^ set(after))
+              problems.append("tracked file contents changed during the job: " + ", ".join(changed[:10]))
+          if (runner / "status-before.txt").read_text(encoding="utf-8") != (
+              runner / "status-after.txt"
+          ).read_text(encoding="utf-8"):
+              problems.append("repository status changed during the job")
+          if problems:
+              for problem in problems:
+                  print("error: " + problem, file=sys.stderr)
+              sys.exit(1)
+          print(
+              "no reviewed artifact changed during the job "
+              "(any pre-existing dirt is preserved, contents are byte-identical)"
+          )
+          PY

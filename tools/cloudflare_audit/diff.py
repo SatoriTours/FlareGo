@@ -16,7 +16,14 @@ from __future__ import annotations
 from typing import Any
 
 from .review import K2_STREAM_HOST
-from .schema import HTTP_METHODS, SchemaError, enumerate_operations, resolve_json_pointer, resolve_path_item
+from .schema import (
+    HTTP_METHODS,
+    SchemaError,
+    dereference,
+    enumerate_operations,
+    resolve_json_pointer,
+    resolve_path_item,
+)
 
 DIFF_FORMAT = "flarego.cloudflare-audit.diff/1"
 
@@ -112,9 +119,19 @@ def effective_servers(schema: dict, path_item: dict, operation: dict) -> list:
 
 
 def _parameter_key(schema: dict, parameter: Any) -> tuple[str, str] | None:
+    """Return the ``(name, in)`` identity, following the whole local ref chain.
+
+    Indirect aliases (``Alias -> AccountId``) must resolve to the real identity so
+    operation overrides are detected correctly. A missing pointer or a pure alias
+    cycle fails readably instead of silently losing the override.
+    """
+    if not isinstance(parameter, dict):
+        return None
     resolved = parameter
-    if isinstance(parameter, dict) and isinstance(parameter.get("$ref"), str):
-        resolved = resolve_json_pointer(schema, parameter["$ref"])
+    if isinstance(parameter.get("$ref"), str):
+        resolved = dereference(
+            schema, parameter, context=f"parameter reference {parameter['$ref']!r}"
+        )
     if not isinstance(resolved, dict):
         return None
     name, location = resolved.get("name"), resolved.get("in")
@@ -243,26 +260,45 @@ def diff_schemas(old: dict, new: dict) -> dict:
     Operations are indexed by ``operationId``; the METHOD+path binding is part of
     the fingerprint, so a kept ID with a changed route or method is ``changed``
     while a changed ID is reported as ``removed`` plus ``added``.
+
+    Every enumerated operation on both sides is fingerprinted before any result is
+    returned, so the reachable reference graph of added-only and removed-only
+    operations is validated fail-closed too, while unreferenced components stay
+    irrelevant.
     """
     old_operations = _operation_index(old)
     new_operations = _operation_index(new)
-    old_ids, new_ids = set(old_operations), set(new_operations)
-
-    added = {operation_id: _describe(new_operations[operation_id]) for operation_id in sorted(new_ids - old_ids)}
-    removed = {operation_id: _describe(old_operations[operation_id]) for operation_id in sorted(old_ids - new_ids)}
 
     old_cache: dict = {}
     new_cache: dict = {}
+    old_fingerprints = {
+        operation_id: fingerprint_operation(
+            old, operation["path_item"], operation, cache=old_cache
+        )
+        for operation_id, operation in old_operations.items()
+    }
+    new_fingerprints = {
+        operation_id: fingerprint_operation(
+            new, operation["path_item"], operation, cache=new_cache
+        )
+        for operation_id, operation in new_operations.items()
+    }
+
+    old_ids, new_ids = set(old_operations), set(new_operations)
+    added = {
+        operation_id: _describe(new_operations[operation_id])
+        for operation_id in sorted(new_ids - old_ids)
+    }
+    removed = {
+        operation_id: _describe(old_operations[operation_id])
+        for operation_id in sorted(old_ids - new_ids)
+    }
     changed: dict[str, dict] = {}
     for operation_id in sorted(old_ids & new_ids):
         old_operation = old_operations[operation_id]
         new_operation = new_operations[operation_id]
-        old_fingerprint = fingerprint_operation(
-            old, old_operation["path_item"], old_operation, cache=old_cache
-        )
-        new_fingerprint = fingerprint_operation(
-            new, new_operation["path_item"], new_operation, cache=new_cache
-        )
+        old_fingerprint = old_fingerprints[operation_id]
+        new_fingerprint = new_fingerprints[operation_id]
         fields = [
             field
             for field in FIELD_ORDER
