@@ -966,6 +966,67 @@ class CloudflareProtocolTest {
         }
     }
 
+
+    @Test
+    fun c1ControlCodePointsAreRejectedInPathAndQuery(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val transport = testTransport(server)
+            for (code in 0x80..0x9F) {
+                val encoded = encodePath(code.toChar().toString())
+                for (location in listOf("path", "query")) {
+                    val label = "$location U+%04X".format(code)
+                    val path = if (location == "path") "/accounts/$encoded" else "/accounts/a?name=$encoded"
+                    val failure = assertFailsWith<CloudFailure>(label) { transport.execute(HttpRequest("GET", path)) }
+                    assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, label)
+                }
+            }
+            assertEquals(0, server.requestCount, "no C1 control may reach the wire")
+        }
+    }
+
+    @Test
+    fun c0DelAndMultilayerEncodedControlsAreRejected(): Unit = runBlocking {
+        val unsafe =
+            listOf(
+                "/accounts/a%00",
+                "/accounts/a%1f",
+                "/accounts/a%7f",
+                "/accounts/a?name=%0d%0a",
+                "/accounts/a%25C2%2580",
+                "/accounts/a%252525C2%252580",
+                "/accounts/a%250d%250a",
+                "/accounts/a?name=%25C2%259F",
+            )
+        MockWebServer().use { server ->
+            server.start()
+            val transport = testTransport(server)
+            for (path in unsafe) {
+                val failure = assertFailsWith<CloudFailure>(path) { transport.execute(HttpRequest("GET", path)) }
+                assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun canonicalUnicodeIdentitiesStayAcceptedAndPreserved(): Unit = runBlocking {
+        for (identity in listOf("é", "汉字", "🙂", "e\u0301", "a b", "plain-id%GG")) {
+            val encoded = encodePath(identity)
+            MockWebServer().use { server ->
+                server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+                server.start()
+                val response =
+                    testTransport(server).execute(HttpRequest("GET", "/accounts/$encoded?cursor=next%2B%2F%3D"))
+                assertEquals(200, response.status, identity)
+                val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+                assertNotNull(recorded, identity)
+                assertEquals("/client/v4/accounts/$encoded", recorded.requestUrl!!.encodedPath, identity)
+                assertEquals("cursor=next%2B%2F%3D", recorded.requestUrl!!.encodedQuery, identity)
+            }
+        }
+    }
+
     private suspend fun assertInvalidInput(label: String, block: suspend () -> Any) {
         val failure: CloudFailure =
             try {

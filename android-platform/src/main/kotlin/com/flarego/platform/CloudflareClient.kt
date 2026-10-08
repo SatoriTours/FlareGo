@@ -293,9 +293,14 @@ private fun Char.isRawUrlCharacter(): Boolean = code in 0x21..0x7E
 /**
  * Decoded URL text: any legal Unicode character is opaque identity (a canonical
  * UTF-8 multi-byte character is not a control byte and its continuation bytes are
- * never inspected individually); only real control characters are rejected.
+ * never inspected individually), but a code point that is itself a control
+ * character is rejected like any other control: C0 (U+0000..U+001F), DEL
+ * (U+007F) and C1 (U+0080..U+009F). This matches `Character.isISOControl`; a
+ * canonical UTF-8 encoding of a C1 code point still decodes to a real control.
  */
-private fun Char.isDecodedUrlCharacter(): Boolean = code >= 0x20 && code != 0x7F
+private fun Char.isDecodedUrlCharacter(): Boolean = !isIsoControlCodePoint()
+
+private fun Char.isIsoControlCodePoint(): Boolean = code <= 0x1F || code in 0x7F..0x9F
 
 private fun requireValidEscapes(value: String) {
     var index = 0
