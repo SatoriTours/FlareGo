@@ -98,28 +98,59 @@ private fun requireSafePollPath(path: String, scope: CloudScope) {
         if (character.code !in 0x21..0x7E || character == '\\' || character == '#') throw invalidInputFailure()
     }
     if (!hasValidEscapes(path)) throw invalidInputFailure()
-    val rawSegments = path.split('/').size
-    var decoded = path
-    var rounds = 0
+    // Separate the original URI components first: a query value must never hide a dot
+    // segment, and a decoded `%3F` must never be re-read as a fresh separator that
+    // hides the rest of the path from the structural checks.
+    val rawPath = path.substringBefore('?')
+    val rawQuery = path.substringAfter('?', "")
+    if (rawPath.length < 2) throw invalidInputFailure()
+    requireRawPathShape(rawPath)
+    val pathSegmentCount = rawPath.split('/').size
+    var decodedPath = rawPath
+    var pathRounds = 0
     while (true) {
-        requireSafeDecodedPath(decoded, rawSegments)
-        val next = decodeValidEscapes(decoded) ?: break
-        decoded = next
-        if (++rounds > path.length) throw invalidInputFailure()
+        requireDecodedPathShape(decodedPath, pathSegmentCount)
+        val next = decodeValidEscapes(decodedPath) ?: break
+        decodedPath = next
+        if (++pathRounds > rawPath.length) throw invalidInputFailure()
     }
-    // The fully decoded form is compared against the raw scope identifiers, so no
-    // re-encoding is involved and identity stays verbatim.
-    requireOwnScope(decoded, scope)
+    requireOwnScope(decodedPath, scope)
+    requireOpaqueQueryShape(rawQuery)
 }
 
-private fun requireSafeDecodedPath(path: String, rawSegmentCount: Int) {
-    if (!path.startsWith("/") || path.contains("//")) throw invalidInputFailure()
-    if (path.split('/').size != rawSegmentCount) throw invalidInputFailure()
-    for (segment in path.split('/')) {
+private fun requireRawPathShape(rawPath: String) {
+    if (!rawPath.startsWith("/") || rawPath.startsWith("//")) throw invalidInputFailure()
+    for (segment in rawPath.split('/')) {
         if (segment == "." || segment == "..") throw invalidInputFailure()
     }
-    for (character in path) {
+}
+
+private fun requireDecodedPathShape(decodedPath: String, rawSegmentCount: Int) {
+    if (!decodedPath.startsWith("/") || decodedPath.contains("//")) throw invalidInputFailure()
+    if (decodedPath.split('/').size != rawSegmentCount) throw invalidInputFailure()
+    for (segment in decodedPath.split('/')) {
+        if (segment == "." || segment == "..") throw invalidInputFailure()
+    }
+    for (character in decodedPath) {
         if (character.code !in 0x20..0x7E || character == '\\' || character == '#') throw invalidInputFailure()
+    }
+}
+
+/**
+ * Query values are opaque data: they may legitimately contain dots and separators,
+ * and only real control code points are rejected at every decoded level.
+ */
+private fun requireOpaqueQueryShape(rawQuery: String) {
+    if (rawQuery.isEmpty()) return
+    var decoded = rawQuery
+    var rounds = 0
+    while (true) {
+        for (character in decoded) {
+            if (character.code <= 0x1F || character.code in 0x7F..0x9F) throw invalidInputFailure()
+        }
+        val next = decodeValidEscapes(decoded) ?: break
+        decoded = next
+        if (++rounds > rawQuery.length) throw invalidInputFailure()
     }
 }
 

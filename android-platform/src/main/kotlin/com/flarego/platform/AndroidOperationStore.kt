@@ -115,15 +115,18 @@ class AndroidOperationStore internal constructor(private val database: FlareGoDa
      * rolls the task back too, so a task is never stored without its summary.
      */
     override fun putWithSummary(task: OperationTask, summary: Operation) {
+        // The caller summary only proves identity and state agreement; the row that is
+        // written is the canonical state-derived summary, never caller title/detail.
         OperationTaskPersistence.requireSummaryMatches(task, summary)
+        val canonical = OperationTaskPersistence.summaryFor(task)
         database.transaction {
             put(task)
             operations.upsertOperation(
-                summary.id,
-                summary.connectionId,
-                summary.title,
-                summary.status.name,
-                summary.detail,
+                canonical.id,
+                canonical.connectionId,
+                canonical.title,
+                canonical.status.name,
+                canonical.detail,
             )
         }
     }

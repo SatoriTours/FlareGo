@@ -226,11 +226,13 @@ class OperationTaskTest {
     // ---------------------------------------------------------------- stored row codec
 
     @Test
-    fun storedRowRoundTripPreservesFixedFields() {
+    fun storedRowRoundTripPreservesMetadataAndNormalisesText() {
         val scopes = listOf(account, zone, user, organization)
         for (scope in scopes) {
             val original = task(scope = scope, resourceRef = ResourceRef(scope, "dns_record", "record-1"))
-            assertEquals(original, OperationTaskPersistence.fromRow(OperationTaskPersistence.toRow(original)), scope.toString())
+            val decoded = OperationTaskPersistence.fromRow(OperationTaskPersistence.toRow(original))
+            // Metadata is preserved verbatim; the persisted detail is the fixed public text.
+            assertEquals(original.copy(safeDetail = OperationTaskPersistence.summaryDetailFor(original.state)), decoded, scope.toString())
         }
         val minimal =
             task(
@@ -241,10 +243,87 @@ class OperationTaskTest {
                 pollPath = "/user/tokens/verify",
             )
         val decoded = OperationTaskPersistence.fromRow(OperationTaskPersistence.toRow(minimal))
-        assertEquals(minimal, decoded)
         assertNull(decoded.resourceRef)
         assertNull(decoded.desiredHash)
         assertNull(decoded.providerRequestId)
+        assertEquals(OperationTaskPersistence.summaryDetailFor(minimal.state), decoded.safeDetail)
+    }
+
+    @Test
+    fun callerDetailNeverReachesTheStoredRowOrTheRecoveredTask() {
+        val marker = "synthetic-caller-detail"
+        for (state in TaskState.entries) {
+            val row = OperationTaskPersistence.toRow(task(state = state, safeDetail = marker))
+            assertFalse(row.safeDetail.contains(marker), "caller detail reached the stored row: ${state.name}")
+            assertEquals(OperationTaskPersistence.summaryDetailFor(state), row.safeDetail, state.name)
+
+            val recovered = OperationTaskPersistence.fromRow(row.copy(safeDetail = marker))
+            assertFalse(recovered.safeDetail.contains(marker), "stored text reached the recovered task: ${state.name}")
+            assertEquals(OperationTaskPersistence.summaryDetailFor(recovered.state), recovered.safeDetail, state.name)
+        }
+    }
+
+    @Test
+    fun aFutureStoredStateUsesTheUnknownPublicText() {
+        val marker = "synthetic-stored-detail"
+        val row = OperationTaskPersistence.toRow(task()).copy(state = "FUTURE_STATE", safeDetail = marker)
+        val recovered = OperationTaskPersistence.fromRow(row)
+        assertEquals(TaskState.UNKNOWN, recovered.state)
+        assertEquals(OperationTaskPersistence.summaryDetailFor(TaskState.UNKNOWN), recovered.safeDetail)
+        assertFalse(recovered.safeDetail.contains(marker))
+    }
+
+    @Test
+    fun canonicalSummaryIgnoresCallerTextAndTheContractStoreUsesIt() {
+        val marker = "synthetic-caller-summary"
+        for (state in TaskState.entries) {
+            val input = task(state = state, safeDetail = marker)
+            val caller = Operation("task-1", "connection-1", marker, OperationTaskPersistence.summaryStatusFor(state), marker)
+            // Identity and state must agree, but caller text is never the canonical summary.
+            OperationTaskPersistence.requireSummaryMatches(input, caller)
+            val canonical = OperationTaskPersistence.summaryFor(input)
+            assertFalse(canonical.title.contains(marker), state.name)
+            assertFalse(canonical.detail.contains(marker), state.name)
+        }
+        val store = InMemoryOperationStore()
+        val input = task(state = TaskState.SUCCEEDED, safeDetail = marker)
+        store.putWithSummary(input, Operation("task-1", "connection-1", marker, OperationStatus.SUCCESS, marker))
+        val stored = store.summaries().single()
+        assertEquals(OperationTaskPersistence.summaryFor(input), stored)
+        assertFalse(stored.title.contains(marker))
+        assertFalse(stored.detail.contains(marker))
+    }
+
+    // ---------------------------------------------------------------- R2 path/query split
+
+    @Test
+    fun dotTraversalBeforeAQueryIsRejected() {
+        val cases = mutableListOf<String>()
+        for (segment in listOf(".", "..")) {
+            for (query in listOf("?cursor=x", "?cursor=..", "?x=1&y=2")) {
+                cases += "/accounts/account-1/$segment$query"
+            }
+        }
+        for (segment in listOf("%2e", "%2E%2e", "%252e%252e")) {
+            for (query in listOf("?cursor=x", "?x=1&y=2")) {
+                cases += "/accounts/account-1/$segment$query"
+            }
+        }
+        // A decoded %3F must never be treated as a fresh query separator that hides the rest.
+        cases += "/accounts/account-1/%3F/../c"
+        cases += "/accounts/account-1/%253F/%2e%2e/c"
+        for (path in cases) {
+            val failure = assertFailsWith<CloudFailure>(path) { task(pollPath = path) }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+            assertNull(failure.cause, path)
+        }
+    }
+
+    @Test
+    fun opaqueQueryDataIsPreservedVerbatim() {
+        for (path in listOf("/accounts/account-1/jobs?cursor=..", "/accounts/account-1/jobs?cursor=abc.def", "/accounts/account-1/jobs?x=1&y=2", "/accounts/account-1/jobs")) {
+            assertEquals(path, task(pollPath = path).pollPath, path)
+        }
     }
 
     @Test
@@ -355,8 +434,14 @@ private class InMemoryOperationStore : OperationStore {
         tasks.entries.removeAll { it.value.connectionId == connectionId }
     }
 
+    private val summaries = mutableListOf<Operation>()
+
     override fun putWithSummary(task: OperationTask, summary: Operation) {
         OperationTaskPersistence.requireSummaryMatches(task, summary)
         tasks[task.id] = task
+        // Mirrors the real store contract: only the canonical state-derived summary is kept.
+        summaries += OperationTaskPersistence.summaryFor(task)
     }
+
+    fun summaries(): List<Operation> = summaries.toList()
 }

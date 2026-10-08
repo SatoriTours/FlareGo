@@ -36,14 +36,17 @@ class OperationMigrationTest {
     private fun task(
         id: String = "task-1",
         connectionId: String = "connection-1",
+        accountId: String = "account-1",
         state: TaskState = TaskState.QUEUED,
         updatedAtMs: Long = 2_000,
     ) = OperationTask(
         id,
         connectionId,
-        account,
+        // The scope and reference always belong to their own connection: the production
+        // constructor verifies this and the fixture must not weaken it.
+        AccountScope(connectionId, accountId),
         "dns-records-for-a-zone-create-dns-record",
-        ResourceRef(account, "dns_record", "record-1"),
+        ResourceRef(AccountScope(connectionId, accountId), "dns_record", "record-1"),
         "a".repeat(64),
         "b".repeat(64),
         state,
@@ -110,6 +113,7 @@ class OperationMigrationTest {
         val owner = owner()
         assertEquals(setOf("connection-1"), owner.localStore.connections().map { it.id }.toSet())
         assertEquals(3, owner.localStore.operations().size)
+        // The first real driver queries above have now initialised/migrated the file.
         assertEquals(
             listOf(OperationStatus.SUCCESS, OperationStatus.FAILED, OperationStatus.UNKNOWN).toSet(),
             owner.localStore.operations().map { it.status }.toSet(),
@@ -123,6 +127,8 @@ class OperationMigrationTest {
     @Test
     fun freshDatabaseCreatesTheTaskTable() {
         val owner = owner()
+        // Initialise (and migrate) through the real driver before any raw check.
+        assertTrue(owner.operationStore.list("connection-none").isEmpty())
         assertTrue(rawTableNames().contains("task"))
         val stored = task()
         owner.operationStore.put(stored)
@@ -140,12 +146,16 @@ class OperationMigrationTest {
         val database = SQLiteDatabase.openDatabase(context.getDatabasePath(databaseName).path, null, SQLiteDatabase.OPEN_READWRITE)
         try {
             database.execSQL("UPDATE operation SET status = 'FUTURE_STATUS' WHERE id = 'future-op'")
+            // 'SUCCEEDED' is a task-state name, not a legacy operation status: the legacy
+            // parser must read it as UNKNOWN rather than gaining a new alias.
             database.execSQL("UPDATE operation SET status = 'SUCCEEDED' WHERE id = 'legacy-0'")
         } finally {
             database.close()
         }
-        assertEquals(OperationStatus.UNKNOWN, owner.localStore.operations().single { it.id == "future-op" }.status)
-        assertEquals(OperationStatus.SUCCESS, owner.localStore.operations().single { it.id == "legacy-0" }.status)
+        val operations = owner.localStore.operations().associateBy { it.id }
+        assertEquals(OperationStatus.UNKNOWN, operations.getValue("future-op").status)
+        assertEquals(OperationStatus.UNKNOWN, operations.getValue("legacy-0").status)
+        assertEquals(OperationStatus.FAILED, operations.getValue("legacy-1").status)
 
         owner.operationStore.put(task(id = "future-task"))
         val raw = SQLiteDatabase.openDatabase(context.getDatabasePath(databaseName).path, null, SQLiteDatabase.OPEN_READWRITE)
@@ -183,30 +193,63 @@ class OperationMigrationTest {
         assertTrue(owner.localStore.operations().none { it.id == stored.id })
     }
 
+    /**
+     * Fault injection on the store's own transaction: a SQLite trigger makes the
+     * summary write fail. `putWithSummary` is called directly (no outer transaction),
+     * so this proves the store rolls its task write back with its summary write.
+     */
     @Test
-    fun aFailureInsideOneTransactionRollsBackBothRows() {
+    fun putWithSummaryRollsBackItsOwnTransactionWhenTheSummaryWriteFails() {
         val owner = owner()
         val stored = task()
+        val canonical = OperationTaskPersistence.summaryFor(stored)
+        owner.driver.execute(
+            null,
+            "CREATE TRIGGER fail_summary BEFORE INSERT ON operation BEGIN SELECT RAISE(ABORT, 'synthetic fault'); END",
+            0,
+        )
         try {
-            owner.database.transaction {
-                owner.operationStore.put(stored)
-                owner.localStore.putOperation(
-                    Operation(stored.id, stored.connectionId, "t", OperationStatus.UNKNOWN, "d")
-                )
-                throw IllegalStateException("synthetic transaction failure")
+            try {
+                owner.operationStore.putWithSummary(stored, canonical)
+                fail("the injected summary fault must propagate")
+            } catch (_: Exception) {
             }
-            fail("the synthetic failure must propagate")
-        } catch (_: IllegalStateException) {
+            assertNull(owner.operationStore.get(stored.id), "the task write must roll back with the summary write")
+            assertTrue(owner.localStore.operations().none { it.id == stored.id }, "no summary row may remain")
+        } finally {
+            owner.driver.execute(null, "DROP TRIGGER IF EXISTS fail_summary", 0)
         }
-        assertNull(owner.operationStore.get(stored.id))
-        assertTrue(owner.localStore.operations().none { it.id == stored.id })
+        // With the fault cleared the same call succeeds, so the rollback was the fault.
+        owner.operationStore.putWithSummary(stored, canonical)
+        assertNotNull(owner.operationStore.get(stored.id))
+    }
+
+    /** The persisted summary is the canonical state text, never caller title/detail. */
+    @Test
+    fun theStoredSummaryIsCanonicalStateTextRatherThanCallerText() {
+        val marker = "synthetic-caller-text"
+        val owner = owner()
+        val stored = task(state = TaskState.SUCCEEDED)
+        val caller = Operation(stored.id, stored.connectionId, marker, OperationStatus.SUCCESS, marker)
+        owner.operationStore.putWithSummary(stored, caller)
+        val summary = owner.localStore.operations().single { it.id == stored.id }
+        assertEquals(OperationStatus.SUCCESS, summary.status)
+        assertEquals(OperationTaskPersistence.summaryTitleFor(TaskState.SUCCEEDED), summary.title)
+        assertEquals(OperationTaskPersistence.summaryDetailFor(TaskState.SUCCEEDED), summary.detail)
+        assertFalse(summary.title.contains(marker))
+        assertFalse(summary.detail.contains(marker))
+        // The stored task detail is the fixed public text rather than the caller's.
+        assertEquals(
+            OperationTaskPersistence.summaryDetailFor(TaskState.SUCCEEDED),
+            owner.operationStore.get(stored.id)!!.safeDetail,
+        )
     }
 
     @Test
     fun removingAConnectionClearsOnlyItsOwnTasks() {
         val owner = owner()
-        owner.operationStore.put(task(id = "task-1", connectionId = "connection-1"))
-        owner.operationStore.put(task(id = "task-2", connectionId = "connection-2"))
+        owner.operationStore.put(task(id = "task-1", connectionId = "connection-1", accountId = "account-1"))
+        owner.operationStore.put(task(id = "task-2", connectionId = "connection-2", accountId = "account-2"))
         owner.localStore.removeConnection("connection-1")
         assertNull(owner.operationStore.get("task-1"))
         assertEquals("task-2", owner.operationStore.get("task-2")!!.id)
@@ -223,15 +266,13 @@ class OperationMigrationTest {
         val reopened = owner()
         assertEquals("task-1", reopened.operationStore.get("task-1")!!.id)
         // The compatibility constructor still opens the production file on its own.
+        // It creates its own driver which AndroidLocalStore does not expose for closing,
+        // so this legacy path keeps the pre-existing lifecycle limitation (documented in
+        // the report); the shared-owner path above is the production wiring.
         val legacy = AndroidLocalStore(context)
-        try {
-            assertNotNull(legacy.operations())
-        } finally {
-            legacy.removeConnection("connection-does-not-exist")
-        }
+        assertNotNull(legacy.operations())
         val connection = Connection("connection-legacy", "Legacy", "account-legacy")
-        val legacyOwner = owner()
-        legacyOwner.localStore.putConnection(connection)
-        assertTrue(legacyOwner.localStore.connections().any { it.id == connection.id })
+        owner().localStore.putConnection(connection)
+        assertTrue(owner().localStore.connections().any { it.id == connection.id })
     }
 }

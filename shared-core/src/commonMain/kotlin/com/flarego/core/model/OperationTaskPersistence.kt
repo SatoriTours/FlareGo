@@ -64,7 +64,9 @@ object OperationTaskPersistence {
             task.requestFingerprint,
             task.desiredHash,
             task.state.name,
-            task.safeDetail,
+            // Only the fixed state-derived public text is persisted; caller text,
+            // provider text and stored raw detail never reach the row.
+            summaryDetailFor(task.state),
             task.providerRequestId,
             task.pollPath,
             task.createdAtMs,
@@ -80,6 +82,7 @@ object OperationTaskPersistence {
     fun fromRow(row: StoredOperationTaskRow): OperationTask {
         val scope = scopeOfStrict(row)
         val resourceRef = resourceRefOfStrict(row, scope)
+        val state = TaskState.parse(row.state)
         return OperationTask(
             row.id,
             row.connectionId,
@@ -88,8 +91,10 @@ object OperationTaskPersistence {
             resourceRef,
             row.requestFingerprint,
             row.desiredHash,
-            TaskState.parse(row.state),
-            row.safeDetail,
+            state,
+            // The recovered text is derived from the parsed state (a future state reads
+            // as UNKNOWN), never restored from the stored column.
+            summaryDetailFor(state),
             row.providerRequestId,
             row.pollPath,
             row.createdAtMs,
