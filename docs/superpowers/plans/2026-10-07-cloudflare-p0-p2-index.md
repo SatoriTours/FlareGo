@@ -77,7 +77,7 @@ P0完成资格／字段审查后，以可执行产品工作包估算；用DNS、
 - [x] P0 工程门禁通过：固定分母／全量归属／协议资格门禁及 65 项工程风险审核；字段／套餐／权限未知仍显式阻塞，无用户批准 L0-only／排除，不宣称真实可用。
 - [x] 验收分层已明确：离线 mock／契约、平台／emulator、sandbox／真实授权证据分别登记，不相互代替；当前未运行 Gradle／Android／native／真实试点，危险写入仍逐动作授权。
 
-**P0 交付状态：**Task1–4 规格／质量通过（最后修复 `9711224`），独立 333＋10 测试、固定 pin／catalog／ledger 字节重放、实际 committed checkout 的 126 协议测试通过（仅额外 raw-MD 比较 skip1，73 全集主体执行）。[P0 工程风险审核](../../cloudflare-audit/p0-admission-risk-review.md)覆盖 65 唯一接口／35 读／30 写，未来 3,594 不扩准入，真实 L2 仍 0。P1／P2 尚未实施，先做 P1 独立 JVM 测试工具预检以遵守当前不运行 Gradle／Android／native 的限制；工具不可用则报告验证阻塞，不跳过测试冒称通过。
+**P0 交付状态：**Task1–4 规格／质量通过（最后修复 `9711224`），独立 333＋10 测试、固定 pin／catalog／ledger 字节重放、实际 committed checkout 的 126 协议测试通过（仅额外 raw-MD 比较 skip1，73 全集主体执行）。[P0 工程风险审核](../../cloudflare-audit/p0-admission-risk-review.md)覆盖 65 唯一接口／35 读／30 写，未来 3,594 不扩准入，真实 L2 仍 0。P1 Task1 已通过工程验收（`debe2a4`）：20 新测试／46 JVM 全套、333＋10 Python 测试通过，窄 JVM 证明不替代 Gradle／Android／native。Task2–9／P2 尚未实施，下一步预检纯 JVM HTTP/MockWebServer；工具不可用则报告验证阻塞，不跳过测试冒称通过。
 
 ## 规划阶段验证与未执行项（历史记录）
 

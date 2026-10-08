@@ -8,7 +8,7 @@
 
 **Tech Stack:** Kotlin 2.3.20、Compose Multiplatform 1.10.1、SQLDelight 2.3.2、OkHttp 4.12.0、coroutines 1.10.2、kotlinx.serialization-json 1.8.1；JDK 17；不增加后端。
 
-**Spec:** `docs/cloudflare-coverage-audit.md` §4.2／4.4、§5–§9；P0 台账计划为前置依赖。本计划仍待用户评审与执行方式确认。
+**Spec:** `docs/cloudflare-coverage-audit.md` §4.2／4.4、§5–§9；P0 台账计划为前置依赖。用户已随 P0–P2 总览批准连续实施；P0 工程出口已通过。当前禁用 Gradle／Android／native，纯 common/JVM 可用预检通过的缓存 Kotlin 编译器和 JUnit 验证；平台、迁移、原生与真实账号验收仍单列，不能据此冒称通过。
 
 ## Global Constraints
 
@@ -59,15 +59,17 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `CapabilityStatus(key, scope, implementation, availability, reason, observedAtMs)`；实现与账号可用性正交。
 - `class CloudFailure(code: CloudFailureCode, publicMessage: String, uncertain: Boolean = false, requestId: String? = null) : Exception(publicMessage)`；code 包含 SCOPE_MISMATCH／PERMISSION_REQUIRED／NOT_FOUND／CREDENTIAL_EXPIRED／RATE_LIMITED／UNAVAILABLE／INVALID_RESPONSE／CONFLICT／UNKNOWN_RESULT／INVALID_INPUT／UNSUPPORTED_CAPABILITY。适配为现有 CloudException，页面不收到供应商响应原文。
 
-- [ ] **Step 1：写失败测试。** `scopeWithSameExternalIdDoesNotCrossAccounts` 断言两个 AccountScope 下同 resource ID 不相等；`registeredDoesNotMeanAvailable` 断言 implementation=REGISTERED 且 availability=UNKNOWN；`zoneFromAnotherConnectionIsRejected` 断言 SCOPE_MISMATCH。
+- [x] **Step 1：写失败测试。** `scopeWithSameExternalIdDoesNotCrossAccounts` 断言两个 AccountScope 下同 resource ID 不相等；`registeredDoesNotMeanAvailable` 断言 implementation=REGISTERED 且 availability=UNKNOWN；`zoneFromAnotherConnectionIsRejected` 断言 SCOPE_MISMATCH。
   ```kotlin
   assertNotEquals(ResourceRef(a, "worker", "same"), ResourceRef(b, "worker", "same"))
   assertEquals(CapabilityAvailability.UNKNOWN, status.availability)
   ```
-- [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ScopeCapabilityTest'`。
-- [ ] **Step 3：实现最小模型。** core 不 import Android；IDs 原样保留，显示名不得用于唯一性；枚举映射有未知安全值。
-- [ ] **Step 4：运行 GREEN。** 重跑目标测试及现有 `AppControllerTest`；均通过。
-- [ ] **Step 5：提交。** `git commit -m "feat: model scoped Cloudflare capabilities and failures"`，只 stage 本 task 文件。
+- [x] **Step 2：运行 RED。** 名义 Gradle 命令未执行；采用已独立验证的缓存 Kotlin 2.3.20／JUnit JVM runner。新类型缺失和编译 typo 仅算 SETUP；编译通过后的 20 项目标测试出现 10 个实际断言失败，46 全套同样 10 失败；纯值对象控制例首次即通过，如实区分。
+- [x] **Step 3：实现最小模型。** core 不 import Android；IDs 原样保留，显示名不得用于唯一性；枚举映射有未知安全值。
+- [x] **Step 4：运行 GREEN。** 独立目标 20＋全套 46（原 26＋新 20）通过，实际 14 main＋5 test 源编译；5 个额外临时 oracle 测试通过（25／51），实际 BASE 控制器回放 3 个断言失败、当前 GREEN。333 审计＋10 CI 通过，固定 pin／catalog／5,323,243 字节 ledger／REST blobs／协议 CSV 未改。仅既有 9 个 UpdateTest opt-in 警告，未运行 Gradle／Android／native。
+- [x] **Step 5：提交。** `debe2a426a08d345554e6c11a32f2d0ee340d9e7`，只 stage 六个许可路径。
+
+**Task1 独立验收：**规格／质量通过（`4e526af→debe2a4`）。四 scope／完整资源身份／本地所有权与云权限分离、能力实现与可用性正交、未知枚举安全值、分页未知量、稳定错误兼容均验证。AppController 除 safeMessage 外仅增加 typed uncertain 判别，防止未知写入错误记为 FAILED，不改生命周期／导航。宿主 JDK21＋target/release17、compiler-only reflect2.2.10 是已披露的窄 JVM 验证，不是 Gradle/KMP/Android／迁移验收；无新 Cloudflare API 支持／真实 L2 宣称。延期非阻塞文案：枚举解析注释与 case/trim 实际行为不一致、通用数值提示未区分 total=0 合法边界。Task2 尚未实施，先检查纯 JVM HTTP/MockWebServer 可验证性。
 
 ## Task 2：多媒体请求、响应与安全传输
 
@@ -265,4 +267,4 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - P0台账对应行从NONE变PROTOCOL需契约测试；OPERABLE须真实授权账号证据。基础通过不代表部署／对象操作已经实现。
 - 验收需确认原11项、演示、账号草稿、凭据持久化、应用更新与签名规则不回归；本计划不发布版本。
 
-**未执行说明：**上述代码、迁移、测试与提交都尚未实施。P2 必须使用这里固定的 scope／page／gateway／operations 契约。
+**执行状态：**Task1 工程验收通过；Task2–9、迁移／平台／原生／真实账号验收尚未实施。P2 必须使用这里固定的 scope／page／gateway／operations 契约。

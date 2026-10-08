@@ -420,7 +420,7 @@ P0 的两类门禁分开评估，不互相替代：
 
 P1／P2 的 5／11／54 项提议清单与边界登记在 `protocols.json`，原协调会话已完成[逐项工程风险审核](cloudflare-audit/p0-admission-risk-review.md)：并集 65，35 读／30 写；其余 3,594 项不因宽泛产品归属提前准入。审核只准许按已批计划开发，不是用户真实云资格／危险动作许可，不把提议 JSON 改成运行时白名单。未知 setting key、套餐与权限仍阻塞。
 
-P0 Task1–4 及工程出口已独立验收：最后修复 `9711224`，333 项审计＋10 项 CI 测试通过；固定 SHA／全部计数／3 产物字节／5,323,243 字节 ledger 重放不变。实际 committed checkout 的 126 协议测试通过，强制 S3 73 全集门禁执行，仅额外 ignored 原 MD 比较跳过 1；本地证据不是远程 Actions。真实账号验收仍 0，无新产品功能宣称。P1／P2 尚未实施，下一步在不运行 Gradle／Android／native 的限制下检查独立 JVM 测试可行性。
+P0 Task1–4 及工程出口已独立验收：最后修复 `9711224`，333 项审计＋10 项 CI 测试通过；固定 SHA／全部计数／3 产物字节／5,323,243 字节 ledger 重放不变。实际 committed checkout 的 126 协议测试通过，强制 S3 73 全集门禁执行，仅额外 ignored 原 MD 比较跳过 1；本地证据不是远程 Actions。真实账号验收仍 0，无新产品功能宣称。P1 Task1 的 scope／capability／error／page 模型已工程验收（`debe2a4`）：独立 20 新测试／46 JVM 全套、333＋10 Python 测试通过，未增加真实云 API 支持／资格。Task2–9／P2 尚未实施，下一步在不运行 Gradle／Android／native 的限制下预检纯 JVM HTTP/MockWebServer。
 
 推荐采用 **C：协议基础层＋产品模块＋受控原生能力页**，目标为全部合格管理 API 到 L2、高频产品到 L3，保留向全部 L3 扩展的独立子项目路线。
 
