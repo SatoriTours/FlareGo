@@ -129,16 +129,19 @@ fun encodePath(value: String): String =
 
 /**
  * Validates a media type against the HTTP grammar: `type "/" subtype` of tokens
- * plus optional `;` parameters whose value is a token or a quoted string. A
- * space inside the type, a missing subtype or an unbalanced quote is rejected.
- * The rejected value is never echoed.
+ * plus optional `;` parameters whose value is a token or a quoted string. The
+ * split is quote-aware, so a semicolon inside a quoted parameter stays part of
+ * that value; surrounding whitespace, whitespace around `=`, a missing subtype,
+ * an unterminated quote or an invalid token is rejected. The rejected value is
+ * never echoed.
  */
 private fun requireMediaType(value: String): String {
-    if (value.isBlank() || value.length > 255) throw invalidInputFailure()
+    if (value.isEmpty() || value.length > 255) throw invalidInputFailure()
+    if (value != value.trim()) throw invalidInputFailure()
     if (value.any { it.code !in 0x20..0x7E }) throw invalidInputFailure()
-    val segments = value.split(';')
-    val type = segments.first().trim()
-    if (type.count { it == '/' } != 1) throw invalidInputFailure()
+    val segments = splitMediaParameters(value)
+    val type = segments.first()
+    if (type.any { it == ' ' } || type.count { it == '/' } != 1) throw invalidInputFailure()
     val slash = type.indexOf('/')
     if (!isMediaToken(type.substring(0, slash)) || !isMediaToken(type.substring(slash + 1))) {
         throw invalidInputFailure()
@@ -147,20 +150,67 @@ private fun requireMediaType(value: String): String {
     return value
 }
 
+/** Splits on `;` outside quoted strings; an unterminated quote is invalid. */
+private fun splitMediaParameters(value: String): List<String> {
+    val segments = mutableListOf<String>()
+    val current = StringBuilder()
+    var quoted = false
+    var index = 0
+    while (index < value.length) {
+        val character = value[index]
+        when {
+            character == '\\' && quoted && index + 1 < value.length -> {
+                current.append(character).append(value[index + 1])
+                index += 2
+            }
+            character == '"' -> {
+                quoted = !quoted
+                current.append(character)
+                index++
+            }
+            character == ';' && !quoted -> {
+                segments.add(current.toString())
+                current.setLength(0)
+                index++
+            }
+            else -> {
+                current.append(character)
+                index++
+            }
+        }
+    }
+    if (quoted) throw invalidInputFailure()
+    segments.add(current.toString())
+    return segments
+}
+
 private fun requireMediaParameter(value: String) {
-    val parameter = value.trim()
+    // Only the optional whitespace after `;` is allowed; whitespace around `=` is not.
+    val parameter = value.trimStart(' ')
     val equals = parameter.indexOf('=')
     if (equals <= 0) throw invalidInputFailure()
-    if (!isMediaToken(parameter.substring(0, equals).trim())) throw invalidInputFailure()
-    val parameterValue = parameter.substring(equals + 1).trim()
+    if (!isMediaToken(parameter.substring(0, equals))) throw invalidInputFailure()
+    val parameterValue = parameter.substring(equals + 1)
     if (parameterValue.isEmpty()) throw invalidInputFailure()
-    if (parameterValue.startsWith("\"")) {
-        if (parameterValue.length < 2 || !parameterValue.endsWith("\"")) throw invalidInputFailure()
-        val quoted = parameterValue.substring(1, parameterValue.length - 1)
-        if (quoted.any { it.code !in 0x20..0x7E || it == '"' }) throw invalidInputFailure()
-    } else if (!isMediaToken(parameterValue)) {
-        throw invalidInputFailure()
+    if (parameterValue.startsWith("\"")) requireMediaQuotedString(parameterValue)
+    else if (!isMediaToken(parameterValue)) throw invalidInputFailure()
+}
+
+/** A quoted-string parameter value, with `\"`/`\\` pairs allowed and a closing quote required. */
+private fun requireMediaQuotedString(value: String) {
+    var index = 1
+    while (index < value.length) {
+        when {
+            value[index] == '\\' -> index += 2
+            value[index] == '"' -> {
+                if (index != value.length - 1) throw invalidInputFailure()
+                return
+            }
+            value[index].code !in 0x20..0x7E -> throw invalidInputFailure()
+            else -> index++
+        }
     }
+    throw invalidInputFailure()
 }
 
 private fun isMediaToken(value: String): Boolean =

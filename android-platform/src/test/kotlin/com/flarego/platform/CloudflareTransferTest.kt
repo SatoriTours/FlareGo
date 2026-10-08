@@ -368,6 +368,42 @@ class CloudflareTransferTest {
         }
     }
 
+
+    @Test
+    fun sendGateMediaTypeRejectionClosesOwnedResources(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val source = RecordingSource(emptyList())
+            val sink = CountingCloseSink()
+            // The core parser accepts this RFC quoted value, but the fixed transport
+            // parser cannot, so ownership has already been transferred when the send
+            // gate rejects it.
+            val payload = HttpBody.Stream(source, 0L, "text/plain; note=\"a\\\"b\"")
+            val failure =
+                assertFailsWith<CloudFailure> {
+                    testTransfers(server).download(HttpRequest("POST", "/accounts/a/x", payload), sink)
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+            assertEquals(1, source.closed.get(), "a send-gate rejection must still close the owned source")
+            assertEquals(1, sink.closed.get(), "a send-gate rejection must still close the sink")
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun constructorRejectionHappensBeforeOwnershipTransfer(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val source = RecordingSource(emptyList())
+            val sink = CountingCloseSink()
+            assertFailsWith<CloudFailure> { HttpBody.Stream(source, 0L, " application/json") }
+            // Nothing was handed to the transport, so nothing is closed on its behalf.
+            assertEquals(0, source.closed.get())
+            assertEquals(0, sink.closed.get())
+            assertEquals(0, server.requestCount)
+        }
+    }
+
     @Test
     fun transferRejectsUnsafeRequestWithoutSendingIt(): Unit = runBlocking {
         MockWebServer().use { server ->

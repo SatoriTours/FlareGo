@@ -23,6 +23,7 @@ import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
+import com.flarego.core.cloudflare.encodePath
 
 
 /** A source whose blocked read is released by close(), per the ownership contract. */
@@ -782,6 +783,186 @@ class CloudflareProtocolTest {
             assertEquals(1, entered.get())
             assertEquals(1, source.closed.get(), "an already cancelled entry must still close owned sources")
             assertEquals(0, server.requestCount)
+        }
+    }
+
+
+    @Test
+    fun unicodeOpaqueIdentifiersAndQueryArePreserved(): Unit = runBlocking {
+        val escaped = encodePath("é")
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val response = testTransport(server).execute(HttpRequest("GET", "/accounts/$escaped"))
+            assertEquals(200, response.status)
+            val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(recorded)
+            assertEquals("/client/v4/accounts/$escaped", recorded.requestUrl!!.encodedPath)
+        }
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            testTransport(server).execute(HttpRequest("GET", "/accounts/a?name=$escaped"))
+            val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(recorded)
+            assertEquals("name=$escaped", recorded.requestUrl!!.encodedQuery)
+            assertEquals("/client/v4/accounts/a", recorded.requestUrl!!.encodedPath)
+        }
+        // ASCII identity, literal percent and a real cursor stay preserved next to it
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            testTransport(server)
+                .execute(HttpRequest("GET", "/accounts/plain-id%25GG?cursor=next%2B%2F%3D"))
+            val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(recorded)
+            assertEquals("/client/v4/accounts/plain-id%25GG", recorded.requestUrl!!.encodedPath)
+            assertEquals("cursor=next%2B%2F%3D", recorded.requestUrl!!.encodedQuery)
+        }
+    }
+
+    @Test
+    fun unicodeDoesNotBypassPathStructureOrByteValidation() = runBlocking {
+        val unsafe =
+            listOf(
+                "/accounts/${encodePath("é")}/../zones",
+                "/accounts/${encodePath("é")}/%2e%2e/zones",
+                "/accounts/%C3",
+                "/accounts/%80",
+                "/accounts/%ED%A0%80",
+                "/accounts/%C0%AF",
+            )
+        MockWebServer().use { server ->
+            server.start()
+            val transport = testTransport(server)
+            for (path in unsafe) {
+                val failure = assertFailsWith<CloudFailure>(path) { transport.execute(HttpRequest("GET", path)) }
+                assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    private suspend fun assertMimeIsRejectedOrSent(kind: String, value: String, label: String) {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            var rejected: CloudFailure? = null
+            try {
+                val payload =
+                    when (kind) {
+                        "text" -> HttpBody.Text("x", value)
+                        "bytes" -> HttpBody.Bytes(byteArrayOf(1), value)
+                        "stream" -> HttpBody.Stream(RecordingSource(emptyList()), 0L, value)
+                        else ->
+                            HttpBody.Multipart(
+                                listOf(MultipartPart("field", null, value, HttpBody.Text("x", "text/plain")))
+                            )
+                    }
+                testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", payload))
+            } catch (thrown: CloudFailure) {
+                rejected = thrown
+            }
+            if (rejected != null) {
+                assertEquals(CloudFailureCode.INVALID_INPUT, rejected.code, label)
+                assertEquals(0, server.requestCount, "$label: a rejected media type must not be sent")
+            } else {
+                val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+                assertNotNull(recorded, label)
+                if (kind == "part") {
+                    val body = String(recorded.body.readByteArray(), Charsets.ISO_8859_1).lowercase()
+                    assertTrue(body.contains("content-type:"), "$label: the part content type must not be dropped")
+                } else {
+                    assertTrue(recorded.getHeader("Content-Type") != null, "$label: the body content type must not be dropped")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun textMediaTypeIsNeverSilentlyDropped(): Unit = runBlocking {
+        for (value in listOf(" application/json", "application/json ", "application/json; charset =utf-8")) {
+            assertMimeIsRejectedOrSent("text", value, "text\"$value\"")
+        }
+    }
+
+    @Test
+    fun bytesMediaTypeIsNeverSilentlyDropped(): Unit = runBlocking {
+        for (value in listOf(" application/json", "application/json ", "application/json; charset =utf-8")) {
+            assertMimeIsRejectedOrSent("bytes", value, "bytes\"$value\"")
+        }
+    }
+
+    @Test
+    fun streamMediaTypeIsNeverSilentlyDropped(): Unit = runBlocking {
+        for (value in listOf(" application/json", "application/json ", "application/json; charset =utf-8")) {
+            assertMimeIsRejectedOrSent("stream", value, "stream\"$value\"")
+        }
+    }
+
+    @Test
+    fun partMediaTypeIsNeverSilentlyDropped(): Unit = runBlocking {
+        for (value in listOf(" application/json", "application/json ", "application/json; charset =utf-8")) {
+            assertMimeIsRejectedOrSent("part", value, "part\"$value\"")
+        }
+    }
+
+    @Test
+    fun quotedParameterMediaTypeIsAcceptedAndSent(): Unit = runBlocking {
+        val value = "text/plain; note=\"a;b\""
+        val request = cloudflareRequest("fixture", HttpRequest("POST", "/accounts/a/x", HttpBody.Text("x", value)))
+        assertNotNull(request.body!!.contentType(), "a quoted semicolon must stay a valid media type")
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val response = testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Text("x", value)))
+            assertEquals(200, response.status)
+            val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(recorded)
+            assertTrue(recorded.getHeader("Content-Type") != null, "the quoted parameter media type must be sent")
+        }
+        // an empty quoted value is legal and must also be sent
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val empty = "text/plain; note=\"\""
+            assertEquals(200, testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Text("x", empty))).status)
+            val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(recorded)
+            assertTrue(recorded.getHeader("Content-Type") != null)
+        }
+    }
+
+    @Test
+    fun quotedPairMediaTypeIsRejectedBeforeSending(): Unit = runBlocking {
+        // The fixed transport parser (OkHttp 4.12) has no quoted-pair support, so a
+        // value it cannot parse must fail closed before the request is sent instead of
+        // being sent without its content type.
+        val escapedPair = "text/plain; note=\"a\\\"b\""
+        MockWebServer().use { server ->
+            server.start()
+            val failure =
+                assertFailsWith<CloudFailure> {
+                    testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Text("x", escapedPair)))
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun brokenQuotedMediaTypesAreRejected() {
+        val invalid =
+            listOf(
+                "text/plain; note=\"a;b",
+                "text/plain; note=\"a\"b\"",
+                "text/plain; note=a b",
+                "text/plain; note=",
+            )
+        for (value in invalid) {
+            val failure = assertFailsWith<CloudFailure>(value) { HttpBody.Text("x", value) }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, value)
+            assertFalse(failure.publicMessage.contains(value), value)
         }
     }
 

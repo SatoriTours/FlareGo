@@ -7,7 +7,11 @@ import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
 import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.ByteSource
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.TimeUnit
@@ -241,8 +245,7 @@ private fun requireApiPath(raw: String): String {
     var decoded = rawPath
     var rounds = 0
     while (decoded.contains('%')) {
-        val next = decodeKnownEscapes(decoded)
-        if (next == decoded) break
+        val next = decodeStage(decoded) ?: break
         // Never accept an ambiguous budget: every decoded stage is checked.
         requireSafePath(next)
         decoded = next
@@ -252,8 +255,7 @@ private fun requireApiPath(raw: String): String {
     var decodedQuery = rawQuery
     var queryRounds = 0
     while (decodedQuery.contains('%')) {
-        val next = decodeKnownEscapes(decodedQuery)
-        if (next == decodedQuery) break
+        val next = decodeStage(decodedQuery) ?: break
         requireSafeQuery(next)
         decodedQuery = next
         queryRounds++
@@ -288,8 +290,12 @@ private fun requireSafeQuery(queryPart: String) {
 /** Raw URL text: printable ASCII without space, controls or non-ASCII. */
 private fun Char.isRawUrlCharacter(): Boolean = code in 0x21..0x7E
 
-/** Decoded URL text: printable ASCII, controls rejected. */
-private fun Char.isDecodedUrlCharacter(): Boolean = code in 0x20..0x7E
+/**
+ * Decoded URL text: any legal Unicode character is opaque identity (a canonical
+ * UTF-8 multi-byte character is not a control byte and its continuation bytes are
+ * never inspected individually); only real control characters are rejected.
+ */
+private fun Char.isDecodedUrlCharacter(): Boolean = code >= 0x20 && code != 0x7F
 
 private fun requireValidEscapes(value: String) {
     var index = 0
@@ -305,14 +311,17 @@ private fun requireValidEscapes(value: String) {
 }
 
 /**
- * Decodes one level of *valid* percent escapes only. A `%` that is not followed
- * by two hex digits is a literal percent (an opaque identifier may contain one)
- * and is copied verbatim, so no parse exception can escape and the identifier is
- * preserved.
+ * Decodes one level of *valid* percent escapes into bytes and re-reads those
+ * bytes as strict UTF-8. A `%` that is not followed by two hex digits is a
+ * literal percent (an opaque identifier may contain one) and is copied verbatim,
+ * so no parse exception can escape and the identifier is preserved. A malformed
+ * UTF-8 sequence (truncated, overlong, surrogate or stray continuation) is
+ * rejected. Returns null when there is no valid escape left to decode.
  */
-private fun decodeKnownEscapes(value: String): String {
-    val decoded = StringBuilder(value.length)
+private fun decodeStage(value: String): String? {
+    val bytes = ByteArrayOutputStream(value.length)
     var index = 0
+    var decoded = false
     while (index < value.length) {
         val character = value[index]
         if (character == '%' &&
@@ -320,14 +329,25 @@ private fun decodeKnownEscapes(value: String): String {
             value[index + 1].isHexDigit() &&
             value[index + 2].isHexDigit()
         ) {
-            decoded.append(value.substring(index + 1, index + 3).toInt(16).toChar())
+            bytes.write(value.substring(index + 1, index + 3).toInt(16))
             index += 3
+            decoded = true
         } else {
-            decoded.append(character)
+            bytes.write(character.toString().encodeToByteArray())
             index++
         }
     }
-    return decoded.toString()
+    if (!decoded) return null
+    return try {
+        Charsets.UTF_8
+            .newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes.toByteArray()))
+            .toString()
+    } catch (_: CharacterCodingException) {
+        throw invalidInput()
+    }
 }
 
 private fun Char.isHexDigit(): Boolean =
@@ -365,7 +385,7 @@ private fun requireBusinessHeaders(
 }
 
 private fun requireMatchingContentType(value: String, payload: HttpBody) {
-    requireParseableMediaType(value)
+    requireSendableMediaType(value)
     when (payload) {
         is HttpBody.Empty -> return
         is HttpBody.Multipart -> throw invalidInput()
@@ -376,13 +396,16 @@ private fun requireMatchingContentType(value: String, payload: HttpBody) {
 }
 
 /**
- * Platform-side fail-closed parse of a user-supplied media type. The core layer
- * already proves the syntax; this is the last gate before OkHttp parses it, so a
- * value OkHttp would reject can never reach the request builder or echo itself
- * through an `IllegalArgumentException`.
+ * The single platform-side send gate for every media type that reaches the wire:
+ * typed bodies, multipart parts and the business `Content-Type` header all pass
+ * through here. The core layer already proves the syntax; this is the last gate
+ * before OkHttp parses the value, so a value OkHttp cannot parse can never be sent
+ * with its content type silently dropped, and it never echoes itself through an
+ * `IllegalArgumentException`.
  */
-private fun requireParseableMediaType(value: String) {
+private fun requireSendableMediaType(value: String): String {
     if (value.toMediaTypeOrNull() == null) throw invalidInput()
+    return value
 }
 
 private fun requireSameMediaType(value: String, declared: String) {
@@ -392,9 +415,9 @@ private fun requireSameMediaType(value: String, declared: String) {
 private fun HttpBody.toRequestBody(isActive: () -> Boolean): RequestBody =
     when (this) {
         is HttpBody.Empty -> EmptyBody
-        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), contentType)
-        is HttpBody.Bytes -> BytesBody(value, contentType)
-        is HttpBody.Stream -> StreamBody(source, length, contentType, isActive)
+        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), requireSendableMediaType(contentType))
+        is HttpBody.Bytes -> BytesBody(value, requireSendableMediaType(contentType))
+        is HttpBody.Stream -> StreamBody(source, length, requireSendableMediaType(contentType), isActive)
         is HttpBody.Multipart -> multipartBody(parts, isActive)
     }
 
@@ -475,9 +498,9 @@ private fun multipartBody(parts: List<MultipartPart>, isActive: () -> Boolean): 
 
 private fun HttpBody.toPartBody(part: MultipartPart, isActive: () -> Boolean): RequestBody =
     when (this) {
-        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), part.contentType)
-        is HttpBody.Bytes -> BytesBody(value, part.contentType)
-        is HttpBody.Stream -> StreamBody(source, length, part.contentType, isActive)
+        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), requireSendableMediaType(part.contentType))
+        is HttpBody.Bytes -> BytesBody(value, requireSendableMediaType(part.contentType))
+        is HttpBody.Stream -> StreamBody(source, length, requireSendableMediaType(part.contentType), isActive)
         else -> throw invalidInput()
     }
 
