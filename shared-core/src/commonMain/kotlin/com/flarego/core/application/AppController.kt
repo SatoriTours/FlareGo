@@ -1,5 +1,6 @@
 package com.flarego.core.application
 
+import com.flarego.core.application.operations.DnsOperationLifecycle
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import kotlin.random.Random
@@ -12,6 +13,8 @@ class AppController(
     private val factory: SessionFactory,
     private val store: LocalStore,
     connections: List<Connection>,
+    /** Optional opt-in confirmed-write path for DNS writes; the legacy path is unchanged. */
+    private val dnsOperations: DnsOperationLifecycle? = null,
 ) {
     private val mutable =
         MutableStateFlow(
@@ -154,26 +157,73 @@ class AppController(
         }
     }
 
-    suspend fun saveDns(domain: Domain, recordId: String?, draft: DnsDraft): Operation =
-        scope
-            .async {
-                mutate(
-                    domain,
-                    "${if (recordId == null) "新增" else "修改"} ${draft.type} · ${draft.name}",
-                ) { api ->
-                    api.save(domain.id, recordId, validateDns(domain, draft))
+    suspend fun saveDns(domain: Domain, recordId: String?, draft: DnsDraft): Operation {
+        val title = "${if (recordId == null) "新增" else "修改"} ${draft.type} · ${draft.name}"
+        val operations = dnsOperations
+        if (operations != null && operationsActive()) {
+            val connection = state.value.selected
+            // A user input error becomes a recorded failure, exactly as the legacy path.
+            val validated = try { validateDns(domain, draft) } catch (failure: Exception) { return recordedFailure(connection, title, failure) }
+            val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
+            val task =
+                try {
+                    if (recordId == null) operations.create(zone, validated)
+                    else operations.update(zone, recordId, validated)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    return recordedFailure(connection, title, failure)
                 }
-            }
-            .await()
+            return task.toOperation(connection)
+        }
+        return scope.async { mutate(domain, title) { api -> api.save(domain.id, recordId, validateDns(domain, draft)) } }.await()
+    }
 
-    suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation =
-        scope
+    private fun operationsActive(): Boolean = !state.value.selected.demo
+
+    private fun recordedFailure(connection: Connection, title: String, failure: Exception): Operation {
+        // An opt-in failure is only FAILED when nothing was sent and the failure is
+        // certain; anything else stays UNKNOWN so a possible send is never denied.
+        val status =
+            if (failure is CloudException && failure.uncertain) OperationStatus.UNKNOWN
+            else OperationStatus.FAILED
+        val operation = Operation(Random.nextLong().toString(16), connection.id, title, status, safeMessage(failure))
+        store.putOperation(operation)
+        mutable.update { it.copy(operations = store.operations()) }
+        return operation
+    }
+
+    private fun OperationTask.toOperation(connection: Connection): Operation {
+        val summary = OperationTaskPersistence.summaryFor(this)
+        val operation = Operation(summary.id, connection.id, summary.title, summary.status, summary.detail)
+        store.putOperation(operation)
+        mutable.update { it.copy(operations = store.operations()) }
+        return operation
+    }
+
+    suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation {
+        val operations = dnsOperations
+        if (operations != null && operationsActive()) {
+            val connection = state.value.selected
+            val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
+            val task =
+                try {
+                    operations.delete(zone, record.id, record)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure)
+                }
+            return task.toOperation(connection)
+        }
+        return scope
             .async {
                 mutate(domain, "删除 ${record.type} · ${record.name}") { api ->
                     api.delete(domain.id, record.id)
                 }
             }
             .await()
+    }
 
     private suspend fun mutate(
         domain: Domain,
