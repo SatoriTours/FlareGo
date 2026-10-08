@@ -2357,11 +2357,11 @@ SENSITIVE_VALUE_PATTERNS = (
     # authorities ("scheme://") are excluded, while quoting/parentheses do not
     # hide an embedded local path.
     re.compile(
-        r"(?:^|[\s:=('\"\[{,])/(?!/)[^\s'\"()\[\]{}]*"
+        r"(?:^|[\s:=('\"\[{,`])/(?!/)[^\s'\"()\[\]{}`]*"
         r"(?:\.aws|\.ssh|\.config|\.cloudflare|\.netrc|credential|secret|token)",
         re.IGNORECASE,
     ),
-    re.compile(r"(?:^|[\s:=('\"\[{,])~[^\s'\"()\[\]{}]*", re.IGNORECASE),
+    re.compile(r"(?:^|[\s:=('\"\[{,`])~[^\s'\"()\[\]{}`]*", re.IGNORECASE),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bey[A-Za-z0-9_-]{8,}\."),
     re.compile(r"\b[0-9a-f]{32}\b"),
@@ -2517,45 +2517,97 @@ def _pinned_universe(errors: list[str]) -> dict:
         "s3_universe": dict(S3_SOURCE_INVENTORY),
         "source_refs": dict(NORMATIVE_SOURCE_REFS),
     }
-    operations: list[dict] = []
+    operations: list[dict] | None = []
+    valid = True
     try:
         with catalog_path.open(encoding="utf-8-sig", newline="") as handle:
-            operations = [
+            raw_operations = [
                 {"operation_id": row["operation_id"], "method": row["method"], "path": row["path"]}
                 for row in csv.DictReader(handle)
             ]
+        operations = _normalize_catalog(raw_operations, errors)
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         if not isinstance(snapshot, dict):
             raise ValueError("snapshot must be an object")
         counts = snapshot.get("counts")
-        if not isinstance(counts, dict) or isinstance(counts.get("operations"), bool) or not isinstance(
-            counts.get("operations"), int
+        declared = counts.get("operations") if isinstance(counts, dict) else None
+        if isinstance(declared, bool) or not isinstance(declared, int) or declared <= 0:
+            raise ValueError("snapshot.counts.operations must be a positive integer")
+        if operations is not None and declared != len(
+            {operation["operation_id"] for operation in operations}
         ):
-            raise ValueError("snapshot.counts.operations must be an integer")
-        universe["rest_operations"] = counts["operations"]
+            errors.append(
+                "context.pinned_count_mismatch: snapshot.counts.operations must equal the unique "
+                "normalized committed catalog operation count"
+            )
+            valid = False
+        else:
+            universe["rest_operations"] = declared
         docs = snapshot.get("supplementary_docs")
-        if isinstance(docs, dict):
-            commit = docs.get("commit")
-            for source in docs.get("sources") or []:
-                if not isinstance(source, dict):
-                    continue
-                if source.get("name") == S3_SOURCE_NAME:
-                    if source.get("sha256") != S3_SOURCE_SHA256 or commit != S3_SOURCE_COMMIT:
-                        errors.append(
-                            "context.pinned_source_conflict: snapshot S3 supplementary source metadata "
-                            "does not match the frozen source contract"
-                        )
-                if source.get("name") == "graphql-overview" and source.get("url") != GRAPHQL_OVERVIEW_URL:
+        if docs is not None:
+            if not isinstance(docs, dict):
+                errors.append(
+                    "context.pinned_source_conflict: snapshot supplementary_docs must be an object when present"
+                )
+                valid = False
+            else:
+                commit = docs.get("commit")
+                if commit is not None and commit != S3_SOURCE_COMMIT:
                     errors.append(
-                        "context.pinned_source_conflict: snapshot GraphQL overview source metadata does "
-                        "not match the frozen source contract"
+                        "context.pinned_source_conflict: snapshot supplementary commit does not match the "
+                        "frozen source contract"
                     )
+                    valid = False
+                sources = docs.get("sources")
+                if sources is not None:
+                    if not isinstance(sources, list):
+                        errors.append(
+                            "context.pinned_source_conflict: snapshot supplementary_docs.sources must be a "
+                            "list when present"
+                        )
+                        valid = False
+                    else:
+                        for index, source in enumerate(sources):
+                            if not isinstance(source, dict):
+                                errors.append(
+                                    "context.pinned_source_conflict: snapshot supplementary source entries "
+                                    "must be objects"
+                                )
+                                valid = False
+                                continue
+                            for field in ("name", "url", "sha256"):
+                                if not isinstance(source.get(field), str) or not source.get(field).strip():
+                                    errors.append(
+                                        "context.pinned_source_conflict: snapshot supplementary source entries "
+                                        "must carry non-empty name/url/sha256 strings"
+                                    )
+                                    valid = False
+                            if source.get("name") == S3_SOURCE_NAME:
+                                if (
+                                    source.get("sha256") != S3_SOURCE_SHA256
+                                    or source.get("url") != S3_SOURCE_URL
+                                    or commit != S3_SOURCE_COMMIT
+                                ):
+                                    errors.append(
+                                        "context.pinned_source_conflict: snapshot S3 supplementary source "
+                                        "metadata does not match the frozen source contract"
+                                    )
+                                    valid = False
+                            if source.get("name") == "graphql-overview" and source.get("url") != GRAPHQL_OVERVIEW_URL:
+                                errors.append(
+                                    "context.pinned_source_conflict: snapshot GraphQL overview source metadata "
+                                    "does not match the frozen source contract"
+                                )
+                                valid = False
     except (OSError, ValueError, KeyError, TypeError) as error:
         errors.append(f"context.pinned_unavailable: pinned protocol context is unusable ({type(error).__name__})")
+        valid = False
     if not operations:
         errors.append("context.pinned_unavailable: committed catalog has no operations")
-        operations = None
-    universe["operations"] = operations
+        valid = False
+    universe["operations"] = operations if valid else None
+    if not valid:
+        universe["rest_operations"] = None
     return universe
 
 
@@ -2566,26 +2618,12 @@ def _protocol_universe(
     if context is None:
         pinned = _pinned_universe(errors)
         if catalog_operations is not None:
-            supplied = _normalize_catalog(catalog_operations, errors)
-            if supplied is not None and pinned.get("operations"):
-                pinned_ids = {operation["operation_id"] for operation in pinned["operations"]}
-                supplied_ids = {operation["operation_id"] for operation in supplied}
-                if supplied_ids != pinned_ids:
-                    errors.append(
-                        "context.catalog_mismatch: supplied catalog must match the pinned normative "
-                        "universe exactly (missing or additional identities)"
-                    )
-                elif {
-                    operation["operation_id"]: (operation["method"], operation["path"])
-                    for operation in supplied
-                } != {
-                    operation["operation_id"]: (operation["method"], operation["path"])
-                    for operation in pinned["operations"]
-                }:
-                    errors.append(
-                        "context.catalog_mismatch: supplied catalog METHOD+path bindings must match the "
-                        "pinned normative universe"
-                    )
+            _compare_universes(
+                _normalize_catalog(catalog_operations, errors),
+                pinned.get("operations"),
+                errors,
+                "context.catalog_mismatch",
+            )
         return pinned
     if not isinstance(context, dict):
         errors.append(f"context.invalid: context must be an object, got {_shape(context)}")
@@ -2602,14 +2640,20 @@ def _protocol_universe(
                 errors.append(
                     f"context.pinned_mismatch: declared {field} must match the canonical pinned facts"
                 )
+        if "operations" in context:
+            _compare_universes(
+                _normalize_catalog(context.get("operations"), errors),
+                pinned.get("operations"),
+                errors,
+                "context.pinned_mismatch",
+            )
         if catalog_operations is not None:
-            supplied = _normalize_catalog(catalog_operations, errors)
-            if supplied is not None and pinned.get("operations") and {
-                operation["operation_id"] for operation in supplied
-            } != {operation["operation_id"] for operation in pinned["operations"]}:
-                errors.append(
-                    "context.catalog_mismatch: supplied catalog must match the pinned normative universe"
-                )
+            _compare_universes(
+                _normalize_catalog(catalog_operations, errors),
+                pinned.get("operations"),
+                errors,
+                "context.catalog_mismatch",
+            )
         return pinned
     if kind != "caller_owned":
         errors.append(
@@ -2632,6 +2676,7 @@ def _protocol_universe(
             "context.rest_count_mismatch: context.rest_operations must equal the unique normalized "
             "operation count of the caller-owned catalog"
         )
+        rest_operations = None
     subset = context.get("s3_subset")
     universe_subset: dict[str, tuple[bool, str]] = {}
     if not isinstance(subset, list) or not subset:
@@ -2669,14 +2714,12 @@ def _protocol_universe(
             else:
                 resolved_refs[name] = value
     if catalog_operations is not None:
-        supplied = _normalize_catalog(catalog_operations, errors)
-        if supplied is not None and operations is not None and {
-            operation["operation_id"] for operation in supplied
-        } != {operation["operation_id"] for operation in operations}:
-            errors.append(
-                "context.catalog_conflict: the third-argument catalog and the caller-owned context must "
-                "describe the same operation universe"
-            )
+        _compare_universes(
+            _normalize_catalog(catalog_operations, errors),
+            operations,
+            errors,
+            "context.catalog_conflict",
+        )
     if (
         operations is None
         or rest_operations is None
@@ -2691,6 +2734,27 @@ def _protocol_universe(
         "s3_universe": universe_subset,
         "source_refs": resolved_refs,
     }
+
+
+def _identity_map(operations: list[dict] | None) -> dict[str, tuple[str, str]]:
+    if not operations:
+        return {}
+    return {
+        operation["operation_id"]: (operation["method"], operation["path"]) for operation in operations
+    }
+
+
+def _compare_universes(
+    supplied: list[dict] | None, expected: list[dict] | None, errors: list[str], code: str
+) -> None:
+    """Compare the complete identity -> METHOD+path mapping, in every context mode."""
+    if supplied is None or not expected:
+        return
+    if _identity_map(supplied) != _identity_map(expected):
+        errors.append(
+            f"{code}: supplied catalog must match the authoritative universe identity and METHOD+path "
+            "bindings exactly"
+        )
 
 
 def _catalog_index(universe: dict | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
@@ -3076,11 +3140,6 @@ def _plan_evidence_facts(
     captured_at = _protocol_date(
         plan.get("captured_at"), f"{label}.captured_at", "qualification.plan_evidence_invalid", errors
     )
-    if captured_at and capture is not None and captured_at < capture["captured_at"]:
-        errors.append(
-            f"qualification.plan_evidence_order: {label}.captured_at must not predate the schema capture"
-        )
-        valid = False
     artifact = _protocol_hex64(
         plan.get("artifact_sha256"), f"{label}.artifact_sha256", "qualification.plan_evidence_invalid", errors
     )
@@ -3547,7 +3606,10 @@ def validate_protocols(
     # --- S3 section and denominator consistency ---------------------------
     s3 = _protocol_dict(protocols.get("s3"), "protocols.s3", "s3.invalid", errors)
     for field in ("documented", "vendor_supported", "provider_unsupported"):
-        if s3.get(field) != facts[field]:
+        declared = s3.get(field)
+        if declared is not None:
+            _protocol_count(declared, f"protocols.s3.{field}", "s3.count_mismatch", errors)
+        if declared != facts[field]:
             errors.append(
                 f"s3.count_mismatch: protocols.s3.{field} must equal the authoritative universe count "
                 f"{facts[field]}"
@@ -3563,7 +3625,12 @@ def validate_protocols(
         ("vendor_supported", facts["vendor_supported"]),
         ("provider_unsupported", facts["provider_unsupported"]),
     ):
-        if s3_denominator.get(field) != derived:
+        declared = s3_denominator.get(field)
+        if declared is not None:
+            _protocol_count(
+                declared, f"protocols.denominators s3.{field}", "denominator.count_mismatch", errors
+            )
+        if declared != derived:
             errors.append(
                 f"denominator.count_mismatch: protocols.denominators s3.{field} must equal the "
                 f"authoritative universe count {derived}"
@@ -3639,6 +3706,11 @@ def validate_protocols(
         derived_status = "awaiting_query_acceptance"
     else:
         derived_status = "verified"
+    if derived_status == "verified" and account_scope == "unknown":
+        errors.append(
+            "qualification.account_scope_unknown: protocols.graphql account_scope must be identified "
+            "before a positive capability can be qualified"
+        )
     declared_status = graphql.get("review_status")
     if declared_status not in GRAPHQL_REVIEW_STATUSES:
         errors.append(
@@ -3740,6 +3812,10 @@ def validate_protocols(
             for field, expected in (("dataset_count", capture["dataset_count"]), ("field_count", capture["field_count"])):
                 value = graphql.get(field)
                 if value is None:
+                    errors.append(
+                        f"qualification.matrix_mismatch: protocols.graphql.{field} must record the captured "
+                        f"discovered count {expected} once a schema capture is validated"
+                    )
                     continue
                 count = _protocol_count(
                     value, f"protocols.graphql.{field}", "qualification.graphql_invalid", errors
@@ -3780,10 +3856,10 @@ def validate_protocols(
     graphql_denominator = by_name.get("graphql") or {}
     graphql_count = graphql_denominator.get("count")
     if graphql_count is None:
-        if graphql_denominator.get("status") not in (None, "awaiting_authorized_schema", "awaiting_query_acceptance"):
+        if graphql_denominator.get("status") != derived_status:
             errors.append(
-                "denominator.status_mismatch: protocols.denominators graphql.status must describe the "
-                "validated fact state when the count is unknown"
+                "denominator.status_mismatch: protocols.denominators graphql.status must match the "
+                "validated fact state even when the count is unknown"
             )
     else:
         count = _protocol_count(
@@ -3814,7 +3890,12 @@ def validate_protocols(
             )
     # REST denominator count comes from the authoritative universe.
     rest_denominator = by_name.get("rest") or {}
-    if universe is not None and rest_denominator.get("count") != universe["rest_operations"]:
+    rest_declared = rest_denominator.get("count")
+    if rest_declared is not None:
+        _protocol_count(
+            rest_declared, "protocols.denominators rest.count", "denominator.count_mismatch", errors
+        )
+    if universe is not None and rest_declared != universe["rest_operations"]:
         errors.append(
             f"denominator.count_mismatch: protocols.denominators rest.count must equal the authoritative "
             f"REST universe count {universe['rest_operations']}"

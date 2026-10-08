@@ -12,6 +12,7 @@ import json
 import pathlib
 import re
 import unittest
+from unittest import mock
 
 from tools.cloudflare_audit.review import (
     P1_APPROVED_NEW_REQUESTS,
@@ -360,6 +361,11 @@ def authorized_capture(protocols: dict, *, with_capability: bool = True, environ
                 "query_kinds": list(QUERY_KINDS),
             },
         },
+    )
+    protocols["denominators"][2].update(
+        unit="fields",
+        count=1,
+        status="verified" if with_capability else "awaiting_query_acceptance",
     )
     if with_capability:
         protocols["graphql"]["capability_acceptance"] = [
@@ -1514,6 +1520,170 @@ class ClosedPipelineTest(unittest.TestCase):
             mutate(protocols)
             errors = self.errors(protocols)
             self.assertTrue(any(code in error for error in errors), (name, code, errors))
+
+
+class Fix4ClosureTest(unittest.TestCase):
+    """Fix4: exact residual cases from the scoped review (R1-R3)."""
+
+    def setUp(self):
+        self.s3_rows = [s3_row("ListBuckets"), s3_row("GetBucketAcl", supported=False)]
+        self.context = caller_context()
+
+    def errors(self, protocols, context=None, catalog=None, rows=None):
+        return validate_protocols(
+            protocols,
+            rows if rows is not None else self.s3_rows,
+            catalog,
+            context=self.context if context is None else context,
+        )
+
+    def positive(self):
+        protocols = cleared_protocols()
+        authorized_capture(protocols)
+        return protocols
+
+    # --- R1 --------------------------------------------------------------
+
+    def test_positive_requires_known_account_scope(self):
+        protocols = self.positive()
+        protocols["graphql"]["account_scope"] = "unknown"
+        errors = self.errors(protocols)
+        self.assertTrue(any("qualification.account_scope_unknown" in error for error in errors), errors)
+
+    def test_captured_discovered_counts_must_be_declared(self):
+        protocols = self.positive()
+        protocols["graphql"].update(dataset_count=None, field_count=None)
+        errors = self.errors(protocols)
+        self.assertTrue(any("qualification.matrix_mismatch" in error for error in errors), errors)
+
+    def test_plan_evidence_may_predate_the_capture(self):
+        protocols = self.positive()
+        approval = "synthetic-scope-approval"
+        protocols["environments"][1]["authorization_reference"] = approval
+        protocols["graphql"]["schema_evidence"]["authorized_introspection"]["authorized_by"] = approval
+        protocols["graphql"]["plan_evidence"].update(
+            authorized_by=approval, captured_at="2026-10-07T00:00:00Z"
+        )
+        for blocker in protocols["blockers"]:
+            blocker["cleared_by"] = approval
+            blocker["clearance_record"].update(reference=approval, date="2026-10-07")
+        self.assertEqual([], self.errors(protocols))
+
+    def test_query_still_cannot_predate_capture_or_plan(self):
+        protocols = self.positive()
+        protocols["graphql"]["capability_acceptance"][0]["captured_at"] = "2026-10-07T00:00:00Z"
+        errors = self.errors(protocols)
+        self.assertTrue(any("qualification.record_order" in error for error in errors), errors)
+
+    # --- R2 --------------------------------------------------------------
+
+    def test_catalog_bindings_are_compared_in_every_mode(self):
+        conflicting = copy.deepcopy(catalog_operations())
+        conflicting[0].update(method="DELETE", path="/synthetic-wrong-binding")
+        protocols = self.positive()
+        errors = self.errors(protocols, catalog=conflicting)
+        self.assertTrue(any("context.catalog_conflict" in error for error in errors), errors)
+        errors = self.errors(protocols, context={"kind": "pinned"}, catalog=conflicting)
+        self.assertTrue(any("context.catalog_mismatch" in error for error in errors), errors)
+        self.assertEqual([], self.errors(protocols, catalog=catalog_operations()))
+
+    def test_pinned_context_operations_declaration_must_match(self):
+        protocols = self.positive()
+        errors = self.errors(
+            protocols,
+            context={
+                "kind": "pinned",
+                "operations": [{"operation_id": "ghost", "method": "GET", "path": "/ghost"}],
+            },
+        )
+        self.assertTrue(any("context.pinned_mismatch" in error for error in errors), errors)
+
+    def test_pinned_count_must_equal_the_unique_catalog_count(self):
+        protocols = json.loads(PROTOCOLS.read_text(encoding="utf-8"))
+        rows = list(csv.DictReader(S3_CSV.open(encoding="utf-8-sig", newline="")))
+        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        snapshot["counts"]["operations"] = 3732
+        text = json.dumps(snapshot)
+        original = pathlib.Path.read_text
+
+        def read_text(path, *args, **kwargs):
+            return text if pathlib.Path(path).name == "snapshot.json" else original(path, *args, **kwargs)
+
+        protocols["denominators"][0]["count"] = 3732
+        with mock.patch.object(pathlib.Path, "read_text", read_text):
+            errors = validate_protocols(protocols, rows)
+        self.assertTrue(any("context.pinned_count_mismatch" in error for error in errors), errors)
+
+    def test_null_graphql_count_status_must_match_the_fact_state(self):
+        protocols = self.positive()
+        protocols["denominators"][2].update(
+            unit="datasets_and_fields", count=None, status="awaiting_authorized_schema"
+        )
+        errors = self.errors(protocols)
+        self.assertTrue(any("denominator.status_mismatch" in error for error in errors), errors)
+        protocols = self.positive()
+        protocols["denominators"][2].update(unit="datasets_and_fields", count=None, status="verified")
+        self.assertEqual([], self.errors(protocols))
+
+    def test_declared_numeric_counters_must_be_strict_ints(self):
+        protocols = self.positive()
+        protocols["denominators"][0]["count"] = 5.0
+        self.assertTrue(any("denominator.count_mismatch" in error for error in self.errors(protocols)))
+        protocols = self.positive()
+        protocols["denominators"][1]["count"] = 2.0
+        self.assertTrue(any("denominator.count_mismatch" in error for error in self.errors(protocols)))
+
+    def test_present_supplemental_metadata_must_be_valid(self):
+        protocols = self.positive()
+        rows = self.s3_rows
+        original = pathlib.Path.read_text
+        for name, change in (
+            ("supplementary_docs", lambda s: s.update(supplementary_docs=["opaque"])),
+            ("sources", lambda s: s["supplementary_docs"].update(sources=["opaque"])),
+            (
+                "s3_url",
+                lambda s: [
+                    source.update(url="https://example.invalid/opaque")
+                    for source in s["supplementary_docs"]["sources"]
+                    if source["name"] == "s3-compat"
+                ],
+            ),
+            (
+                "s3_sha",
+                lambda s: [
+                    source.update(sha256="0" * 64)
+                    for source in s["supplementary_docs"]["sources"]
+                    if source["name"] == "s3-compat"
+                ],
+            ),
+        ):
+            snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+            change(snapshot)
+            text = json.dumps(snapshot)
+
+            def read_text(path, *args, _text=text, **kwargs):
+                return _text if pathlib.Path(path).name == "snapshot.json" else original(path, *args, **kwargs)
+
+            with mock.patch.object(pathlib.Path, "read_text", read_text):
+                errors = validate_protocols(protocols, rows)
+            self.assertTrue(
+                any("context.pinned_source_conflict" in error for error in errors), (name, errors)
+            )
+
+    # --- R3 --------------------------------------------------------------
+
+    def test_invalid_context_count_is_not_echoed(self):
+        marker = 4111111111111111
+        context = caller_context()
+        context["rest_operations"] = marker
+        errors = validate_protocols(self.positive(), self.s3_rows, context=context)
+        self.assertTrue(errors)
+        self.assertTrue(all(str(marker) not in error for error in errors), errors)
+
+    def test_backtick_private_path_is_rejected(self):
+        protocols = protocols_fixture(self.s3_rows)
+        protocols["environments"][0]["notes"] = "path `/home/synthetic/.aws/config`"
+        self.assertTrue(self.errors(protocols))
 
 
 class RealProtocolLedgerTest(unittest.TestCase):
