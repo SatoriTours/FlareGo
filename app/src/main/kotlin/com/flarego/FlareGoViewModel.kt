@@ -40,7 +40,12 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private val store = AndroidLocalStore(application)
+    /** One database owner for the whole app; both stores share it. */
+    private val localDatabase = LocalDatabase.open(application)
+    private val store = localDatabase.localStore
+
+    /** Recoverable task metadata, consumed by the operation lifecycle work. */
+    val operationStore = localDatabase.operationStore
     private val vault = TokenVault(application)
     val connectionDraft = ConnectionDraft()
     val controller =
@@ -87,6 +92,7 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         connectionDraft.clear()
+        localDatabase.close()
         super.onCleared()
     }
 

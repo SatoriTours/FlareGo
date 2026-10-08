@@ -1,0 +1,27 @@
+-- v1 -> v2: add the recoverable task metadata table.
+--
+-- The structure must stay identical to the fresh CREATE in Tasks.sq; the
+-- standalone probe compares the migrated schema with a fresh v2 database.
+CREATE TABLE task (
+    id TEXT NOT NULL PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    scope_kind TEXT NOT NULL,
+    scope_connection_id TEXT NOT NULL,
+    account_id TEXT,
+    zone_id TEXT,
+    user_id TEXT,
+    organization_id TEXT,
+    action_key TEXT NOT NULL,
+    resource_kind TEXT,
+    resource_external_id TEXT,
+    request_fingerprint TEXT NOT NULL,
+    desired_hash TEXT,
+    state TEXT NOT NULL,
+    safe_detail TEXT NOT NULL,
+    provider_request_id TEXT,
+    poll_path TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX task_connection ON task(connection_id);

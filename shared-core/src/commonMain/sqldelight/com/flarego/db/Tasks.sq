@@ -1,0 +1,41 @@
+-- Recoverable task metadata. Fixed safe fields only: locators and fingerprints,
+-- never a payload, provider body, header map or credential.
+CREATE TABLE task (
+    id TEXT NOT NULL PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    scope_kind TEXT NOT NULL,
+    scope_connection_id TEXT NOT NULL,
+    account_id TEXT,
+    zone_id TEXT,
+    user_id TEXT,
+    organization_id TEXT,
+    action_key TEXT NOT NULL,
+    resource_kind TEXT,
+    resource_external_id TEXT,
+    request_fingerprint TEXT NOT NULL,
+    desired_hash TEXT,
+    state TEXT NOT NULL,
+    safe_detail TEXT NOT NULL,
+    provider_request_id TEXT,
+    poll_path TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX task_connection ON task(connection_id);
+
+allTasks:
+SELECT * FROM task ORDER BY updated_at_ms DESC LIMIT 200;
+
+taskById:
+SELECT * FROM task WHERE id = ?;
+
+tasksForConnection:
+SELECT * FROM task WHERE connection_id = ? ORDER BY updated_at_ms DESC;
+
+upsertTask:
+INSERT OR REPLACE INTO task(id, connection_id, scope_kind, scope_connection_id, account_id, zone_id, user_id, organization_id, action_key, resource_kind, resource_external_id, request_fingerprint, desired_hash, state, safe_detail, provider_request_id, poll_path, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+removeTasksForConnection:
+DELETE FROM task WHERE connection_id = ?;

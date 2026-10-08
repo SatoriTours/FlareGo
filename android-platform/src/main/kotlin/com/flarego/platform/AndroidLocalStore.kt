@@ -6,9 +6,18 @@ import com.flarego.core.model.*
 import com.flarego.core.ports.LocalStore
 import com.flarego.db.FlareGoDatabase
 
-class AndroidLocalStore(context: Context) : LocalStore {
-    private val database =
-        FlareGoDatabase(AndroidSqliteDriver(FlareGoDatabase.Schema, context, "flarego.db"))
+/**
+ * The legacy local store.
+ *
+ * In production it shares the [LocalDatabase] owner's database, so its connection,
+ * operation and task rows are written in one transaction and no second connection
+ * is opened. The `Context` constructor remains for compatibility with existing
+ * callers and tests that open their own file.
+ */
+class AndroidLocalStore internal constructor(private val database: FlareGoDatabase) : LocalStore {
+    constructor(context: Context) :
+        this(FlareGoDatabase(AndroidSqliteDriver(FlareGoDatabase.Schema, context, LocalDatabase.NAME)))
+
     private val queries = database.localQueries
 
     override fun connections() =
@@ -19,9 +28,11 @@ class AndroidLocalStore(context: Context) : LocalStore {
     }
 
     override fun removeConnection(id: String) {
+        // One owner transaction: the account, its operations and its tasks leave together.
         database.transaction {
             queries.removeConnection(id)
             queries.removeOperations(id)
+            database.tasksQueries.removeTasksForConnection(id)
         }
     }
 
@@ -31,7 +42,8 @@ class AndroidLocalStore(context: Context) : LocalStore {
                 it.id,
                 it.connection_id,
                 it.title,
-                OperationStatus.valueOf(it.status),
+                // A status written by a future version reads as UNKNOWN instead of crashing.
+                OperationTaskPersistence.operationStatusOf(it.status),
                 it.detail,
             )
         }
