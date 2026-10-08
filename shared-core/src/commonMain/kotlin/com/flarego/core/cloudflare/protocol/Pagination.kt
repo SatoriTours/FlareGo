@@ -73,7 +73,13 @@ object Pagination {
             is PaginationStrategy.Number ->
                 (metadata.next as? PageToken.Number)?.let { PaginationStrategy.Number(it.value, strategy.perPage) }
             is PaginationStrategy.Cursor ->
-                (metadata.next as? PageToken.Cursor)?.let { PaginationStrategy.Cursor(it.value, strategy.seen + it.value) }
+                (metadata.next as? PageToken.Cursor)?.let { next ->
+                    // History keeps every cursor already used, including the one this
+                    // request was made with, so returning to it is detected even though
+                    // the caller never duplicates the two fields.
+                    val used = strategy.seen + listOfNotNull(strategy.cursor) + next.value
+                    PaginationStrategy.Cursor(next.value, used)
+                }
             PaginationStrategy.None -> null
         }
 

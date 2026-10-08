@@ -207,6 +207,9 @@ private fun requestShapeIsSafe(request: String): Boolean {
         if (character.code !in 0x21..0x7E || character == '\\' || character == '#') return false
     }
     if (!hasValidEscapes(request)) return false
+    // The raw text is itself a stage: without this, a path with no escapes would
+    // have no structural check at all (`all {}` is vacuously true).
+    if (!stageIsSafe(request)) return false
     val stages = decodedStages(request) ?: return false
     return stages.all { stageIsSafe(it) }
 }

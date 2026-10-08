@@ -72,10 +72,11 @@ class CloudflareGateway(
     private fun suggestedWaitMs(response: HttpResponse): Long? {
         val entries = response.headers.entries.filter { it.key.equals(RETRY_AFTER, ignoreCase = true) }
         if (entries.isEmpty()) return null
+        // A matching entry with no value is a present invalid header: it fails closed
+        // before flattening, so a case variant with one usable value cannot mask it.
+        if (entries.any { it.value.isEmpty() }) throw rateLimited()
         val values = entries.flatMap { it.value }
-        // A header that is present with no usable value is not a missing header: it
-        // fails closed instead of falling back to the shorter backoff.
-        if (values.isEmpty() || values.size > 1) throw rateLimited()
+        if (values.size > 1) throw rateLimited()
         val raw = values.single().trim()
         if (raw.isEmpty()) throw rateLimited()
         if (raw.all { it in '0'..'9' }) {

@@ -792,6 +792,61 @@ class CloudflareGatewayTest {
         assertTrue(failure.uncertain, "204 is not evidence that a write was not executed")
     }
 
+
+    // ---------------------------------------------------------------- fix 2 residuals
+
+    @Test
+    fun rawTraversalPathsNeverReachTheTransport() = runTest {
+        val cases =
+            listOf(
+                Triple("accounts-account-details", "GET", "/accounts/."),
+                Triple("accounts-account-details", "GET", "/accounts/.."),
+                Triple("dns-records-for-a-zone-list-dns-records", "GET", "/zones/../dns_records"),
+                Triple("dns-records-for-a-zone-delete-dns-record", "DELETE", "/zones/z/dns_records/.."),
+            )
+        for ((key, method, path) in cases) {
+            val transport = ScriptedTransport(listOf(ok()))
+            val failure =
+                assertFailsWith<CloudFailure>("$method $path") {
+                    gateway(transport, ActionPolicies.registry).send(key, HttpRequest(method, path))
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+            assertNull(failure.cause, path)
+            assertEquals(0, transport.requests.size, "$method $path reached the transport")
+        }
+    }
+
+    @Test
+    fun theInitialCurrentCursorStaysInTheAdvancementHistory() {
+        fun root(cursor: String) = Json.parseToJsonElement("""{"result_info":{"cursor":"$cursor"}}""").jsonObject
+        val first = PaginationStrategy.Cursor("first")
+        val second = assertNotNull(Pagination.next(first, Pagination.decode(root("second"), first)))
+        assertEquals("second", (second as PaginationStrategy.Cursor).cursor)
+        val failure = assertFailsWith<CloudFailure> { Pagination.decode(root("first"), second) }
+        assertEquals(CloudFailureCode.INVALID_RESPONSE, failure.code)
+        assertNull(failure.cause)
+    }
+
+    @Test
+    fun aPresentEmptyRetryEntryCannotBeMaskedByAnotherCaseVariant() = runTest {
+        val response =
+            HttpResponse(
+                429,
+                "{}".encodeToByteArray(),
+                mapOf("Retry-After" to emptyList(), "retry-after" to listOf("1")),
+            )
+        val transport = ScriptedTransport(listOf(response, ok()))
+        val sleeps = mutableListOf<Long>()
+        val failure =
+            assertFailsWith<CloudFailure> {
+                gateway(transport, registry(registration("retry-read")), sleeps).send("retry-read", HttpRequest("GET", "$account/d1/database"))
+            }
+        assertEquals(CloudFailureCode.RATE_LIMITED, failure.code)
+        assertEquals(1, transport.requests.size, "a present invalid entry must not be ignored before retrying")
+        assertEquals(0, sleeps.size)
+        assertNull(failure.cause)
+    }
+
     private fun registry(vararg registrations: ActionRegistration): ActionRegistry = ActionRegistry.of(*registrations)
 
     private fun HttpResponse.withHeader(name: String, value: String): HttpResponse =
