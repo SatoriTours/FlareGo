@@ -219,8 +219,12 @@ class AppController(
                         pending.id,
                         connection.id,
                         title,
-                        if (e is CloudException && e.uncertain) OperationStatus.UNKNOWN
-                        else OperationStatus.FAILED,
+                        if ((e is CloudException && e.uncertain) ||
+                            (e is CloudFailure && e.uncertain)) {
+                            OperationStatus.UNKNOWN
+                        } else {
+                            OperationStatus.FAILED
+                        },
                         safeMessage(e),
                     )
                 }
@@ -251,4 +255,8 @@ class AppController(
 }
 
 fun safeMessage(error: Exception) =
-    if (error is CloudException) error.publicMessage else "暂时无法连接，请检查网络后重试"
+    when (error) {
+        is CloudException -> error.publicMessage
+        is CloudFailure -> error.publicMessage
+        else -> "暂时无法连接，请检查网络后重试"
+    }
