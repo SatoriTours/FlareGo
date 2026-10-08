@@ -130,26 +130,30 @@
 - 实时协议记录 session 创建接口、连接协议、鉴权／主机策略、生命周期与产品负责人。
 - 验收环境登记仅保存环境标签、套餐、允许动作、负责人、可用权限类别、清理责任；不得存账号 Token、付款资料或本机凭据路径。
 
-- [ ] **Step 1：写失败测试。**
+- [x] **Step 1：写失败测试。**
   ```python
   def test_provider_unsupported_s3_is_not_an_app_target(self):
       errors = validate_protocols(self.protocols_claiming_all_73_supported, self.s3_rows)
       self.assertTrue(any('provider_unsupported' in e for e in errors))
   ```
   另测没有 GraphQL schema 证据却标 verified、REST＋S3 相加伪造统一覆盖率、敏感字段出现在环境登记。
-- [ ] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_protocols.py' -v`。
-- [ ] **Step 3：完成协议台账与准入文档。** 26 项 S3 建立验收目标；GraphQL 与实时协议列负责人及具体证据阻塞；Registrar sandbox、测试 Zone／DNS、企业产品各有许可范围。真实域名注册、支付和生产 DNS 不列为普通自动测试动作。
-- [ ] **Step 4：运行 GREEN 并评审 P0 出口。** 全部工具测试通过；3,659 项无归属缺口；非 REST 分母和阻塞透明；P1／P2 的 endpoint IDs 与风险策略获得人工审核。授权账号未提供时允许协议实现推进，但相应 L2 真实验收保持阻塞。
-- [ ] **Step 5：提交。** `git commit -m "docs: define Cloudflare protocol and account acceptance gates"`。
+- [x] **Step 2：运行 RED。** `python3 -m unittest discover -s tools/cloudflare_audit/tests -p 'test_protocols.py' -v`。
+- [x] **Step 3：完成协议台账与准入文档。** 26 项 S3 建立验收目标；GraphQL 与实时协议列负责人及具体证据阻塞；Registrar sandbox、测试 Zone／DNS、企业产品各有许可范围。真实域名注册、支付和生产 DNS 不列为普通自动测试动作。
+- [x] **Step 4：运行 GREEN 并评审 P0 出口。** 全部工具测试通过；3,659 项无归属缺口；非 REST 分母和阻塞透明；P1／P2 的 endpoint IDs 与风险策略获得人工审核。授权账号未提供时允许协议实现推进，但相应 L2 真实验收保持阻塞。
+- [x] **Step 5：提交。** `git commit -m "docs: define Cloudflare protocol and account acceptance gates"`。
+
+**Task 4 验收记录：**实现 `e331e02`、修复 `4089289`／`07a2f0b`／`985d71e`／`9711224`，前三轮未通过后完成根因讨论，用户批准 B 闭合事实流水线；第四轮限定复审通过规格／质量门禁。独立 333 项工具＋10 项既有 CI 测试通过，实际 BASE `985d71e` 的 12 项新回归测试产生 11 个断言失败（无 import/error 噪声），当前 GREEN；原 21 负例、新合同 44 例与资格／context／隐私扩展反例、合法完整链／无套餐证据的 schema-only 正例通过。固定 SHA／所有计数／3 个产物字节／5,323,243 字节 ledger／6 REST blobs／S3 原七列 73 身份顺序 26/47 未变。独立公开 MD 核对全 73 身份／支持／特性／组／摘要，实际 `9711224` 无 ignored 来源临时 checkout 的 126 项协议测试通过，强制全集门禁执行；仅额外原 MD 比较跳过 1。该本地测试不是远程 Actions；不运行 Gradle／Android／native／真实云验收。真实 GraphQL、S3 资格保持 0，7 环境 awaiting。
 
 ## P0 验收与后续
 
-- [ ] 工具可离线复核快照，下载仅是显式固定版本输入。
-- [ ] 全量端点有产品、批次、负责人、目标与证据；弃用／受限／外部阻塞不被隐藏。
-- [ ] 用户已确认目标分母和排除理由；没有“工具隐藏就不做”的自动排除。
-- [ ] P1 接入清单及 P2 的 54 个活跃操作独立通过策略评审；其余产品不会因此自动启用。
-- [ ] 本批不宣称新增 Cloudflare 功能；完成后进入 P1 基础能力计划。
+- [x] 工具可离线复核快照，下载仅是显式固定版本输入。
+- [x] 全量端点有产品、批次、负责人、目标与证据；弃用／受限／外部阻塞不被隐藏。
+- [x] 沿用用户批准的目标分母；用户批准的 L0-only／排除清单为空，不自动缩分母；47 厂商不支持 S3 项具体登记，不冒充 FlareGo 实现遗漏。
+- [x] P1 接入清单及 P2 的 54 个活跃操作独立通过工程风险评审；其余产品不会因此自动启用。
+- [x] 本批不宣称新增 Cloudflare 功能；完成后进入 P1 基础能力计划。
+
+**P0 工程出口：**原协调／架构角色逐项审核 65 个唯一 operationId 与绑定、风险和确认／回读／不重放边界，详见 [准入风险审核](../../cloudflare-audit/p0-admission-risk-review.md)。5 新增／11 兼容／54 P2 候选，交集 5、并集 65，35 读／30 写；余 3,594 属未来批次。审核仅准许按已批计划开展工程实现，不是用户云资格／真实写入许可；原提议 JSON 与真实能力／外部阻塞保持不改。所有 P1 运行时动作仍由手写策略及产品确认机制决定；generic setting 路由不授予任意 key。P1 的 Gradle／设备测试命令受当前禁令限制：先检查现有缓存的独立 JVM 测试可行性，不绕过限制，也不把未执行测试算通过。
 
 **执行依赖：**P0 Task 1 → Task 2；Task 3 可在 Task 1 后并行，Task 4 与 Task 2 共用 review.py，必须由同一集成负责人合并。
 
-**执行状态：**Task 1–3 已验收；Task 4 和 P0 出口仍待实施／审核。各项测试、CI 与提交只按对应步骤的实际证据记录，不将规划中的命令当作已执行结果。
+**执行状态：**Task 1–4 及 P0 工程出口已独立验收；真实账号资格／危险动作验收仍阻塞，P1／P2 尚未实施。下一步 P1 Task1 测试工具预检。各项测试、CI 与提交只按实际证据记录，不将规划命令当作已执行结果。
