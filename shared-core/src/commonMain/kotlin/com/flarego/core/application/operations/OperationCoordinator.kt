@@ -4,9 +4,20 @@ import com.flarego.core.model.*
 import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
 import com.flarego.core.ports.OperationStore
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** Immutable coordinator state, replaced by compare-and-set so invalidation is immediate. */
+@OptIn(ExperimentalAtomicApi::class)
+private data class CoordinatorState(
+    val resources: Map<String, Mutex>,
+    val metadataGates: Map<String, Mutex>,
+    val invalidated: Set<String>,
+    val generations: Map<String, Long>,
+)
 
 /**
  * What a trusted write adapter observed. [Unknown] exists for information that was
@@ -51,26 +62,37 @@ class OperationCoordinator(
     private val appScope: CoroutineScope,
     private val storeDispatcher: CoroutineDispatcher,
 ) {
-    private val claims = Mutex()
-    private val executions = mutableMapOf<String, Deferred<Result<OperationTask>>>()
-    private val resources = mutableMapOf<String, Mutex>()
-    private val metadataGates = mutableMapOf<String, Mutex>()
-    private val invalidated = mutableSetOf<String>()
+    @OptIn(ExperimentalAtomicApi::class)
+    private val state =
+        AtomicReference(
+            CoordinatorState(
+                resources = emptyMap(),
+                metadataGates = emptyMap(),
+                invalidated = emptySet(),
+                generations = emptyMap(),
+            )
+        )
 
-    /** Runs the confirmed write at most once and returns the authoritative task. */
+    /**
+     * Runs the confirmed write at most once and returns the authoritative task.
+     *
+     * The issuer verifies the real issued object identity before any cache lookup, so
+     * a clone, a foreign issuer reference or a forged id is refused before it can read
+     * or poison a result. The owner starts an app-scope job (a cancelled UI waiter
+     * never cancels it); every later caller shares that job's result.
+     */
     suspend fun execute(plan: ConfirmedPlan, write: suspend () -> ExecutionReceipt): OperationTask {
-        val job =
-            claims.withLock {
-                executions[plan.confirmationId]
-                    ?: appScope.async(start = CoroutineStart.LAZY) { attempt(plan, write) }.also {
-                        executions[plan.confirmationId] = it
-                    }
+        val admitted = plans.admit(plan) ?: throw invalidInputFailure()
+        if (admitted.owner) {
+            appScope.launch {
+                val result = attempt(admitted.plan, write)
+                admitted.claim.outcome.complete(result)
             }
-        job.start()
-        return job.await().getOrThrow()
+        }
+        return admitted.claim.outcome.await().getOrThrow()
     }
 
-    private suspend fun attempt(plan: ConfirmedPlan, write: suspend () -> ExecutionReceipt): Result<OperationTask> =
+    private suspend fun attempt(plan: ChangePlan, write: suspend () -> ExecutionReceipt): Result<OperationTask> =
         try {
             Result.success(runConfirmed(plan, write))
         } catch (cancelled: CancellationException) {
@@ -79,19 +101,18 @@ class OperationCoordinator(
             Result.failure(failure)
         }
 
-    private suspend fun runConfirmed(plan: ConfirmedPlan, write: suspend () -> ExecutionReceipt): OperationTask {
-        // Atomic single consumption: a cloned plan, a foreign issuer, a consumed
-        // confirmation or an expired one is refused before anything is written.
-        val confirmed = plans.consume(plan) ?: throw invalidInputFailure()
+    private suspend fun runConfirmed(confirmed: ChangePlan, write: suspend () -> ExecutionReceipt): OperationTask {
         return resourceLock(confirmed).withLock {
-            requireAuthorized(confirmed)
+            val generation = generationOf(connectionIdOf(confirmed.scope))
+            requireAuthorized(confirmed, generation)
             if (storeOnIo { store.get(confirmed.id) } != null) throw invalidInputFailure()
             val queued = newTask(confirmed, TaskState.QUEUED)
             persist(confirmed, queued)
             val running = advance(queued, TaskState.RUNNING)
             persist(confirmed, running)
-            // Re-check immediately before the write, not only at the entry.
-            requireAuthorized(confirmed)
+            // Re-check immediately before the write, not only at the entry: an
+            // invalidation that happened while this call was queued must be seen here.
+            requireAuthorized(confirmed, generation)
             val receipt =
                 try {
                     write()
@@ -102,9 +123,22 @@ class OperationCoordinator(
                     // state as evidence that a send may have happened.
                     return@withLock running
                 }
-            val settled = settle(confirmed, running, receipt)
-            persist(confirmed, settled)
-            settled
+            // Settlement (state, clock, locator) and its persistence are both part of the
+            // post-send boundary: any failure after a possible send must return the
+            // original task with its canonical summary, never a fabricated failure and
+            // never a retry.
+            val settled =
+                try {
+                    settle(confirmed, running, receipt)
+                } catch (_: Throwable) {
+                    return@withLock running
+                }
+            return@withLock try {
+                persist(confirmed, settled)
+                settled
+            } catch (_: Throwable) {
+                running
+            }
         }
     }
 
@@ -148,26 +182,44 @@ class OperationCoordinator(
     fun recoverPending(): List<OperationTask> {
         val recovered = mutableListOf<OperationTask>()
         for (connection in context.liveConnections()) {
-            for (task in store.list(connection.id)) {
-                if (!context.isLive(task.scope, null)) continue
-                val updated =
-                    when (task.state) {
-                        TaskState.RUNNING, TaskState.RECONCILING -> advance(task, TaskState.UNKNOWN)
-                        TaskState.QUEUED -> advance(task, TaskState.ACTION_REQUIRED)
-                        // ACCEPTED/PARTIAL/UNKNOWN stay awaiting verification; SUCCEEDED and
-                        // FAILED are unchanged.
-                        else -> task
-                    }
-                if (updated !== task) store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
-                recovered += updated
+            val gate = metadataGate(connection.id)
+            // Synchronous by contract: never block on the gate, and never touch an
+            // invalidated connection (fail closed instead of reviving a deleted task).
+            if (!gate.tryLock()) continue
+            try {
+                if (isInvalidated(connection.id)) continue
+                for (task in store.list(connection.id)) {
+                    if (!context.isLive(task.scope, null)) continue
+                    val updated =
+                        when (task.state) {
+                            TaskState.RUNNING, TaskState.RECONCILING -> advance(task, TaskState.UNKNOWN)
+                            TaskState.QUEUED -> advance(task, TaskState.ACTION_REQUIRED)
+                            // ACCEPTED/PARTIAL/UNKNOWN stay awaiting verification; SUCCEEDED
+                            // and FAILED are unchanged.
+                            else -> task
+                        }
+                    if (updated !== task) store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
+                    recovered += updated
+                }
+            } finally {
+                gate.unlock()
             }
         }
         return recovered
     }
 
-    /** Immediately invalidates confirmations and metadata updates for a connection. */
+    /** Immediately invalidates confirmations, sends and metadata updates for a connection. */
+    @OptIn(ExperimentalAtomicApi::class)
     fun invalidateConnection(connectionId: String) {
-        invalidated += connectionId
+        while (true) {
+            val current = state.load()
+            val next =
+                current.copy(
+                    invalidated = current.invalidated + connectionId,
+                    generations = current.generations + (connectionId to (current.generations[connectionId] ?: 0L) + 1L),
+                )
+            if (state.compareAndSet(current, next)) return
+        }
     }
 
     /**
@@ -188,20 +240,42 @@ class OperationCoordinator(
         val key =
             plan.resourceRef?.let { "${it.kind}:${it.externalId}:${plan.scope}" }
                 ?: "${plan.actionKey}:${plan.scope}"
-        return resources.getOrPut(key) { Mutex() }
+        return stableLock(key) { it.resources }
     }
 
-    private fun metadataGate(connectionId: String): Mutex = metadataGates.getOrPut(connectionId) { Mutex() }
+    /** One stable lock per key, published with compare-and-set so all callers share it. */
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun stableLock(key: String, table: (CoordinatorState) -> Map<String, Mutex>): Mutex {
+        while (true) {
+            val current = state.load()
+            table(current)[key]?.let { return it }
+            val created = Mutex()
+            val next =
+                if (table(current) === current.resources) current.copy(resources = current.resources + (key to created))
+                else current.copy(metadataGates = current.metadataGates + (key to created))
+            if (state.compareAndSet(current, next)) return created
+        }
+    }
+
+    private fun metadataGate(connectionId: String): Mutex = stableLock(connectionId) { it.metadataGates }
 
     private suspend fun <T> withMetadataGate(connectionId: String, block: suspend () -> T): T =
         metadataGate(connectionId).withLock {
-            if (connectionId in invalidated) throw invalidInputFailure()
+            if (isInvalidated(connectionId)) throw invalidInputFailure()
             block()
         }
 
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun isInvalidated(connectionId: String): Boolean = connectionId in state.load().invalidated
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun generationOf(connectionId: String): Long = state.load().generations[connectionId] ?: 0L
+
     private suspend fun <T> storeOnIo(block: suspend () -> T): T = withContext(storeDispatcher) { block() }
 
-    private fun requireAuthorized(plan: ChangePlan) {
+    private fun requireAuthorized(plan: ChangePlan, generation: Long) {
+        val connectionId = connectionIdOf(plan.scope)
+        if (isInvalidated(connectionId) || generationOf(connectionId) != generation) throw invalidInputFailure()
         if (plans.isExpired(plan)) throw invalidInputFailure()
         val live = context.current() ?: throw invalidInputFailure()
         if (live.credentialRevision != plan.credentialRevision) throw invalidInputFailure()
@@ -313,9 +387,6 @@ class OperationCoordinator(
             null
         }
 }
-
-internal fun inputChanged(): CloudFailure =
-    CloudFailure(CloudFailureCode.INVALID_INPUT, "当前输入或账号范围已变化，请重新确认后再操作")
 
 internal fun connectionIdOf(scope: CloudScope): String =
     when (scope) {

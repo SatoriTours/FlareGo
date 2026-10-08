@@ -5,8 +5,22 @@ import com.flarego.core.cloudflare.protocol.ActionRegistration
 import com.flarego.core.cloudflare.protocol.ActionScope
 import com.flarego.core.cloudflare.protocol.ActionSemantics
 import com.flarego.core.model.*
+import com.flarego.core.model.CloudFailure
+import com.flarego.core.model.CloudFailureCode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/**
+ * Issuer-owned execution claim. Every admissible call for one issued confirmation
+ * shares this single holder, so no caller can obtain a second execution or a
+ * different result.
+ */
+internal class ExecutionClaim {
+    val outcome = CompletableDeferred<Result<OperationTask>>()
+}
+
+internal class AdmittedConfirmation(val plan: ChangePlan, val claim: ExecutionClaim, val owner: Boolean)
 
 /** Trusted wall clock for plan validity. */
 fun interface OperationClock {
@@ -84,7 +98,7 @@ class ChangePlans(
     private val issued = linkedMapOf<String, Issued>()
 
     private class Issued(val plan: ChangePlan, val confirmation: ConfirmedPlan) {
-        var consumed: Boolean = false
+        var claim: ExecutionClaim? = null
     }
 
     fun prepare(
@@ -100,7 +114,7 @@ class ChangePlans(
         if (!gate.tryLock()) throw invalidInputFailure()
         try {
             requireWritableRegistration(actionKey, scope)
-            requireLiveSnapshot(scope, resourceRef, credentialRevision)
+            requireLiveSnapshot(scope, resourceRef, credentialRevision, requestFingerprint)
             if (nowMs < 0 || credentialRevision < 0) throw invalidInputFailure()
             requireSha256(beforeHash)
             requireSha256(desiredHash)
@@ -140,7 +154,7 @@ class ChangePlans(
             if (credentialRevision != plan.credentialRevision) throw invalidInputFailure()
             if (requestFingerprint != plan.requestFingerprint) throw invalidInputFailure()
             requireWritableRegistration(plan.actionKey, plan.scope)
-            requireLiveSnapshot(plan.scope, plan.resourceRef, plan.credentialRevision)
+            requireLiveSnapshot(plan.scope, plan.resourceRef, plan.credentialRevision, requestFingerprint)
             val existing = issued[planId]
             if (existing != null) return existing.confirmation
             val confirmationId = ids.nextId()
@@ -156,22 +170,22 @@ class ChangePlans(
     }
 
     /**
-     * Atomically consumes exactly one issued confirmation. Returns null for an
-     * unknown, foreign-issuer or already consumed confirmation, and null when the
-     * trusted clock has passed the expiry.
+     * Admits one execution for a confirmation. The registered instance identity is
+     * verified inside the issuer's own lock *before* any cache is consulted, so a
+     * clone, a foreign issuer object or a forged string can never claim or poison a
+     * result. The first admissible call becomes the owner; every later call for the
+     * same issued reference (including from another coordinator using this issuer)
+     * shares the owner's result — success or store failure — with at most one write.
      */
-    suspend fun consume(confirmation: ConfirmedPlan): ChangePlan? =
+    internal suspend fun admit(confirmation: ConfirmedPlan): AdmittedConfirmation? =
         gate.withLock {
-            val entry = issued.values.firstOrNull { it.confirmation === confirmation }
-            when {
-                entry == null -> null
-                entry.consumed -> null
-                trustedNow() >= entry.plan.expiresAtMs -> null
-                else -> {
-                    entry.consumed = true
-                    entry.plan
-                }
-            }
+            val entry = issued.values.firstOrNull { it.confirmation === confirmation } ?: return@withLock null
+            if (trustedNow() >= entry.plan.expiresAtMs) return@withLock null
+            val existing = entry.claim
+            if (existing != null) return@withLock AdmittedConfirmation(entry.plan, existing, owner = false)
+            val claim = ExecutionClaim()
+            entry.claim = claim
+            AdmittedConfirmation(entry.plan, claim, owner = true)
         }
 
     /** A cheap expiry check for the coordinating engine, using the trusted clock. */
@@ -183,9 +197,18 @@ class ChangePlans(
         return now
     }
 
-    private fun requireLiveSnapshot(scope: CloudScope, resourceRef: ResourceRef?, credentialRevision: Long) {
+    private fun requireLiveSnapshot(
+        scope: CloudScope,
+        resourceRef: ResourceRef?,
+        credentialRevision: Long,
+        requestFingerprint: String,
+    ) {
         val live = context.current() ?: throw invalidInputFailure()
         if (live.credentialRevision != credentialRevision) throw invalidInputFailure()
+        // The independent current snapshot must still be this scope and this command:
+        // plan or requested-scope values never stand in for current state.
+        if (live.scope != scope) throw invalidInputFailure()
+        if (live.requestFingerprint != requestFingerprint) throw inputChanged()
         if (!context.isLive(scope, credentialRevision)) throw invalidInputFailure()
         // ScopeGuard proves the local connection binding only; the product still owns
         // real zone/resource/subject ownership.
@@ -197,6 +220,9 @@ class ChangePlans(
         const val TTL_MS: Long = 300_000
     }
 }
+
+internal fun inputChanged(): CloudFailure =
+    CloudFailure(CloudFailureCode.INVALID_INPUT, "当前输入或账号范围已变化，请重新确认后再操作")
 
 internal fun requireSha256(value: String?) {
     if (value == null) return

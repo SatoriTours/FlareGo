@@ -448,7 +448,7 @@ class OperationCoordinatorTest {
         val lifecycle =
             DnsOperationLifecycle(
                 resolver, plans, coordinator, { 1_000 }, { fixed },
-                { it == zone }, { ExecutionReceipt.Unknown() },   // legacy-style Unit adapter
+                { it == zone }, { _, beforeSend -> beforeSend(); ExecutionReceipt.Unknown() },   // legacy-style Unit adapter
             )
         val controller = AppController(backgroundScope, SessionFactory { DemoSession(connection) }, store, listOf(connection), lifecycle)
         val domain = Domain("zone-1", "example.com", "active", connection.id)
@@ -476,7 +476,7 @@ class OperationCoordinatorTest {
         val lifecycle =
             DnsOperationLifecycle(
                 resolver, plans, coordinator, { 1_000 }, { fixed },
-                { it == zone }, { ExecutionReceipt.Completed() },
+                { it == zone }, { _, _ -> ExecutionReceipt.Completed() },
             )
         val controller = AppController(backgroundScope, SessionFactory { DemoSession(connection) }, MemoryStore(), listOf(connection), lifecycle)
         val operation = controller.saveDns(Domain(foreign.zoneId, "example.com", "active", connection.id), null, DnsDraft("A", "@", "192.0.2.1"))

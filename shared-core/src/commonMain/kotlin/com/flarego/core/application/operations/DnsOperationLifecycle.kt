@@ -22,9 +22,15 @@ data class DnsWriteCommand(
     val credentialRevision: Long,
 )
 
-/** Receipt-aware typed DNS port. The real product implements it in P2. */
+/**
+ * Receipt-aware typed DNS port. The real product implements it in P2.
+ *
+ * [beforeSend] is bound to this one operation by the lifecycle and must be called
+ * immediately after a fresh session is acquired and before the typed send, because
+ * a session acquisition may suspend while the trusted context changes.
+ */
 fun interface DnsReceiptSource {
-    suspend fun write(command: DnsWriteCommand): ExecutionReceipt
+    suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt
 }
 
 /**
@@ -32,8 +38,11 @@ fun interface DnsReceiptSource {
  * the receipt is [ExecutionReceipt.Unknown] — never completion.
  */
 class LegacyDnsReceiptSource(private val session: suspend () -> CloudSession?) : DnsReceiptSource {
-    override suspend fun write(command: DnsWriteCommand): ExecutionReceipt {
+    override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
+        // The session acquisition may suspend: re-validate the bound operation right
+        // before the send instead of trusting a check made before the suspension.
         val api = session() ?: return ExecutionReceipt.Unknown()
+        beforeSend()
         when (command.actionKey) {
             "dns-records-for-a-zone-create-dns-record" -> api.save(command.scope.zoneId, null, command.draft)
             "dns-records-for-a-zone-patch-dns-record" -> api.save(command.scope.zoneId, command.recordId, command.draft)
@@ -97,7 +106,7 @@ class DnsOperationLifecycle(
                 draft = draft,
                 frozenBefore = frozenBefore,
                 desiredHash = fingerprint.sha256(CanonicalJson.encode(desired(recordId, draft, live))),
-                requestFingerprint = fingerprint.sha256(CanonicalJson.encode(commandInput(actionKey, zone, recordId, draft, live))),
+                requestFingerprint = fingerprint.sha256(CanonicalJson.encode(semanticInput(actionKey, zone, recordId, draft, live.connection.id))),
                 credentialRevision = live.credentialRevision,
             )
         // The trusted current input must be the one this command was built from.
@@ -121,24 +130,38 @@ class DnsOperationLifecycle(
                 requestFingerprint = command.requestFingerprint,
                 nowMs = clock.nowMs(),
             )
-        return coordinator.execute(confirmed) { receipts.write(command) }
+        // The closure is bound to this operation, this plan and this trusted snapshot,
+        // so a parallel command can never overwrite a shared guard.
+        val beforeSend = {
+            if (resolver.current() != live) throw invalidInputFailure()
+            if (!owner.owns(zone)) throw invalidInputFailure()
+            if (plans.isExpired(plan)) throw invalidInputFailure()
+            if (live.requestFingerprint != command.requestFingerprint) throw inputChanged()
+            if (!resolver.isLive(zone, live.credentialRevision)) throw invalidInputFailure()
+        }
+        return coordinator.execute(confirmed) { receipts.write(command, beforeSend) }
     }
 
-    private fun commandInput(
+    /**
+     * The pure semantic input of one command: action, full scope, record reference and
+     * the validated draft/conditions. It never contains the fingerprint itself or a
+     * plan field, so an independent current source can compute the same value from the
+     * real input.
+     */
+    internal fun semanticInput(
         actionKey: String,
         zone: ZoneScope,
         recordId: String?,
         draft: DnsDraft,
-        live: LiveOperationContext,
+        connectionId: String,
     ): JsonElement =
         buildJsonObject {
             put("action", actionKey)
-            put("connection", live.connection.id)
+            put("connection", connectionId)
             put("zone", zone.zoneId)
             put("account", zone.account.accountId)
             put("record", recordId ?: "")
             put("draft", draftOf(draft))
-            put("fingerprint", live.requestFingerprint)
         }
 
     private fun desired(recordId: String?, draft: DnsDraft, live: LiveOperationContext): JsonElement =
