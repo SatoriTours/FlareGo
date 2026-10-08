@@ -7,7 +7,9 @@ import com.flarego.core.ports.ByteSource
  * Request payload of one Cloudflare call.
  *
  * Each variant carries its own media type, so binary content is never routed
- * through a string, and every variant is sent as a one-shot body.
+ * through a string, and every variant is sent as a one-shot body. A content type
+ * is checked for full media-type syntax here — a shape check is not a syntax
+ * proof — and never echoed back on failure.
  */
 sealed interface HttpBody {
     /** No payload at all (a `POST` with this body is still sent as an empty body). */
@@ -106,11 +108,11 @@ data class HttpResponse(
 ) {
     /** Legacy text construction (JSON call sites only). */
     constructor(status: Int, body: String) :
-        this(status, body.toByteArray(Charsets.UTF_8), emptyMap())
+        this(status, body.encodeToByteArray(), emptyMap())
 
     /** Legacy UTF-8 text view. Never opens, reads or drains a stream. */
     val body: String
-        get() = bytes.toString(Charsets.UTF_8)
+        get() = bytes.decodeToString()
 }
 
 fun interface HttpTransport {
@@ -125,16 +127,50 @@ fun encodePath(value: String): String =
         else "%" + n.toString(16).uppercase().padStart(2, '0')
     }
 
-/** Validates a media type without echoing the rejected value. */
+/**
+ * Validates a media type against the HTTP grammar: `type "/" subtype` of tokens
+ * plus optional `;` parameters whose value is a token or a quoted string. A
+ * space inside the type, a missing subtype or an unbalanced quote is rejected.
+ * The rejected value is never echoed.
+ */
 private fun requireMediaType(value: String): String {
     if (value.isBlank() || value.length > 255) throw invalidInputFailure()
     if (value.any { it.code !in 0x20..0x7E }) throw invalidInputFailure()
-    val type = value.substringBefore(';').trim()
+    val segments = value.split(';')
+    val type = segments.first().trim()
     if (type.count { it == '/' } != 1) throw invalidInputFailure()
     val slash = type.indexOf('/')
-    if (slash <= 0 || slash == type.length - 1) throw invalidInputFailure()
+    if (!isMediaToken(type.substring(0, slash)) || !isMediaToken(type.substring(slash + 1))) {
+        throw invalidInputFailure()
+    }
+    for (parameter in segments.drop(1)) requireMediaParameter(parameter)
     return value
 }
+
+private fun requireMediaParameter(value: String) {
+    val parameter = value.trim()
+    val equals = parameter.indexOf('=')
+    if (equals <= 0) throw invalidInputFailure()
+    if (!isMediaToken(parameter.substring(0, equals).trim())) throw invalidInputFailure()
+    val parameterValue = parameter.substring(equals + 1).trim()
+    if (parameterValue.isEmpty()) throw invalidInputFailure()
+    if (parameterValue.startsWith("\"")) {
+        if (parameterValue.length < 2 || !parameterValue.endsWith("\"")) throw invalidInputFailure()
+        val quoted = parameterValue.substring(1, parameterValue.length - 1)
+        if (quoted.any { it.code !in 0x20..0x7E || it == '"' }) throw invalidInputFailure()
+    } else if (!isMediaToken(parameterValue)) {
+        throw invalidInputFailure()
+    }
+}
+
+private fun isMediaToken(value: String): Boolean =
+    value.isNotEmpty() && value.all { it.isMediaTokenCharacter() }
+
+private fun Char.isMediaTokenCharacter(): Boolean =
+    this in 'a'..'z' ||
+        this in 'A'..'Z' ||
+        this in '0'..'9' ||
+        this in "!#$%&'*+-.^_`|~"
 
 /** Validates multipart part metadata without echoing the rejected value. */
 private fun requirePartMetadata(value: String): String {

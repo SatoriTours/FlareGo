@@ -5,11 +5,9 @@ import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 
@@ -23,10 +21,10 @@ private const val TOO_LARGE_MESSAGE = "响应内容超出安全上限，请改�
  * Bounded in-memory call path.
  *
  * The response is read through a fixed buffer and fails closed above
- * [BOUNDED_RESPONSE_BYTES]; every response body, every upload source and the call
- * itself are closed on success, failure and cancellation, and coroutine
- * cancellation is bridged onto the real OkHttp call so a blocked read stops
- * instead of continuing in the background.
+ * [BOUNDED_RESPONSE_BYTES]. Every owned upload source and the call itself are
+ * released on success, validation rejection, IO failure and cancellation; the
+ * cleanup always runs on the platform IO thread, including when the coroutine was
+ * already cancelled before the IO body could start.
  */
 class CloudflareTransport internal constructor(
     private val token: String,
@@ -34,28 +32,30 @@ class CloudflareTransport internal constructor(
 ) : HttpTransport {
     constructor(token: String) : this(token, cloudflareHttpClient())
 
-    override suspend fun execute(request: HttpRequest): HttpResponse =
-        withContext(Dispatchers.IO) {
+    override suspend fun execute(request: HttpRequest): HttpResponse {
+        val owned = OwnedResources(request.payload)
+        var primary: Throwable? = null
+        try {
             val job = currentCoroutineContext()[Job]
-            try {
-                val call = client.newCall(cloudflareRequest(token, request))
-                try {
-                    runCloudflareCall(call) { response ->
-                        HttpResponse(
-                            response.code,
-                            readBounded(response.body, job),
-                            response.headers.toMultimap(),
-                        )
-                    }
-                } catch (failure: IOException) {
-                    // A cancelled call must surface as cancellation, never as an IO failure.
-                    rethrowUnlessCancelled(failure)
-                    throw failure
-                }
-            } finally {
-                closePayloadSources(request.payload)
+            val call = client.newCall(cloudflareRequest(token, request) { job?.isActive != false })
+            return runCloudflareCall(call, owned) { response ->
+                HttpResponse(
+                    response.code,
+                    readBounded(response.body, job),
+                    response.headers.toMultimap(),
+                )
+            }
+        } catch (thrown: Throwable) {
+            // A cancelled call must surface as cancellation, never as an IO failure.
+            primary = thrown
+            throw thrown
+        } finally {
+            val cleanupFailure = owned.closeAllOnIo()
+            if (cleanupFailure != null) {
+                if (primary != null) primary.addSuppressed(cleanupFailure) else throw cleanupFailure
             }
         }
+    }
 
     private fun readBounded(body: ResponseBody?, job: Job?): ByteArray {
         if (body == null) return byteArrayOf()
@@ -67,6 +67,7 @@ class CloudflareTransport internal constructor(
                 job?.ensureActive()
                 val read = input.read(buffer)
                 if (read < 0) break
+                if (read == 0) continue
                 if (output.size().toLong() + read > BOUNDED_RESPONSE_BYTES) throw tooLarge()
                 output.write(buffer, 0, read)
             }

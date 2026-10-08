@@ -9,7 +9,9 @@ import com.flarego.core.model.CloudFailureCode
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -19,6 +21,56 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+
+
+/** A source whose blocked read is released by close(), per the ownership contract. */
+internal class BlockingUploadSource : com.flarego.core.ports.ByteSource {
+    val entered = CountDownLatch(1)
+    private val released = CountDownLatch(1)
+    val closedLatch = CountDownLatch(1)
+    val reads = AtomicInteger()
+    @Volatile var closeThread: String? = null
+
+    override fun read(buffer: ByteArray): Int {
+        reads.incrementAndGet()
+        entered.countDown()
+        released.await(10, TimeUnit.SECONDS)
+        return -1
+    }
+
+    override fun close() {
+        closeThread = Thread.currentThread().name
+        closedLatch.countDown()
+        released.countDown()
+    }
+}
+
+/** A source that never makes progress until it is closed or the test releases it. */
+internal class EndlessUploadSource : com.flarego.core.ports.ByteSource {
+    val entered = CountDownLatch(1)
+    val reads = AtomicInteger()
+    private val closed = AtomicInteger()
+    @Volatile private var releasedByTest = false
+
+    override fun read(buffer: ByteArray): Int {
+        reads.incrementAndGet()
+        entered.countDown()
+        return if (closed.get() > 0 || releasedByTest) -1 else 0
+    }
+
+    override fun close() {
+        closed.incrementAndGet()
+    }
+
+    /** Leak prevention for a failing assertion: not a close, so it cannot mask a missing close. */
+    fun releaseFromTest() {
+        releasedByTest = true
+    }
+
+    fun closeCount(): Int = closed.get()
+}
 
 class CloudflareProtocolTest {
 
@@ -530,6 +582,206 @@ class CloudflareProtocolTest {
             assertEquals(2, source.reads.get())
             assertTrue(calls.isNotEmpty())
             assertTrue(calls.all { it.isCanceled() })
+        }
+    }
+
+
+    @Test
+    fun escapedBackslashAndControlPathsAreRejected() = runBlocking {
+        val unsafe =
+            listOf(
+                "/accounts/a%5c..%5c..%5c",
+                "/accounts/a%0d%0a",
+                "/accounts/a%00",
+                "/accounts/a%5c",
+            )
+        MockWebServer().use { server ->
+            server.start()
+            val transport = testTransport(server)
+            for (path in unsafe) {
+                val failure = assertFailsWith<CloudFailure>(path) { transport.execute(HttpRequest("GET", path)) }
+                assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+                assertFalse(failure.publicMessage.contains(path), path)
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun deeplyEncodedTraversalIsRejectedAtEveryDecodedStage() = runBlocking {
+        var segment = "%2e%2e"
+        repeat(5) { segment = segment.replace("%", "%25") }
+        MockWebServer().use { server ->
+            server.start()
+            val failure =
+                assertFailsWith<CloudFailure> {
+                    testTransport(server).execute(HttpRequest("GET", "/accounts/$segment/zones"))
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun escapedQueryControlIsRejected() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val failure =
+                assertFailsWith<CloudFailure> {
+                    testTransport(server).execute(HttpRequest("GET", "/accounts/a?cursor=%0d%0a"))
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun opaqueIdentifierWithALiteralPercentIsPreserved() {
+        // encodePath("id%GG") == "id%25GG": a legitimate opaque identifier, not a new escape.
+        val request = cloudflareRequest("fixture", HttpRequest("GET", "/accounts/id%25GG"))
+        assertEquals("/client/v4/accounts/id%25GG", request.url.encodedPath)
+        val doubleEncoded = cloudflareRequest("fixture", HttpRequest("GET", "/accounts/a%25GG/records"))
+        assertEquals("/client/v4/accounts/a%25GG/records", doubleEncoded.url.encodedPath)
+    }
+
+    @Test
+    fun invalidMediaTypesAreRejectedWithoutEchoingTheValue() {
+        val invalid =
+            listOf(
+                "invalid mime/type",
+                "text",
+                "text/",
+                "/plain",
+                "a b/c",
+                "text/plain; charset",
+                "text/plain; =utf-8",
+                "text/plain; charset=ä",
+                "text/plain; charset=\"unterminated",
+            )
+        for (value in invalid) {
+            val failure =
+                assertFailsWith<CloudFailure>(value) {
+                    HttpBody.Text("x", value)
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, value)
+            assertFalse(failure.publicMessage.contains(value), value)
+        }
+    }
+
+    @Test
+    fun invalidBusinessContentTypeIsRejected() {
+        val failure =
+            assertFailsWith<CloudFailure> {
+                cloudflareRequest(
+                    "fixture",
+                    HttpRequest("POST", "/accounts/a/x", HttpBody.Empty, mapOf("Content-Type" to "invalid mime/type")),
+                )
+            }
+        assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+    }
+
+    @Test
+    fun validMediaTypesAreAcceptedThroughEverySendPath() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val transport = testTransport(server)
+            assertEquals(200, transport.execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Text("x", "application/json; charset=utf-8"))).status)
+            assertEquals(200, transport.execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Bytes(byteArrayOf(1), "text/plain"))).status)
+            assertEquals(
+                200,
+                transport.execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Stream(RecordingSource(listOf(byteArrayOf(1))), 1L, "application/octet-stream"))).status,
+            )
+            assertEquals(
+                200,
+                transport.execute(
+                    HttpRequest(
+                        "POST",
+                        "/accounts/a/x",
+                        HttpBody.Multipart(listOf(MultipartPart("field", null, "text/plain; charset=\"utf-8\"", HttpBody.Text("v", "text/plain")))),
+                    )
+                ).status,
+            )
+            assertEquals(4, server.requestCount)
+        }
+    }
+
+    @Test
+    fun cancellingTheCallReleasesABlockedUploadSource(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val source = BlockingUploadSource()
+            val job =
+                launch(Dispatchers.IO) {
+                    try {
+                        testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Stream(source, null, "application/octet-stream")))
+                    } catch (_: Exception) {}
+                }
+            assertTrue(source.entered.await(3, TimeUnit.SECONDS))
+            val caller = Thread.currentThread().name
+            job.cancel()
+            var prompt = false
+            var closeThread: String? = null
+            try {
+                prompt = source.closedLatch.await(2, TimeUnit.SECONDS)
+                closeThread = source.closeThread
+            } finally {
+                source.close()
+                withTimeout(10_000) { job.join() }
+            }
+            assertTrue(prompt, "a blocked upload read must be released by close on cancellation")
+            assertNotNull(closeThread)
+            assertFalse(closeThread == caller, "cleanup must not run on the caller thread")
+            assertEquals(1, source.reads.get())
+        }
+    }
+
+    @Test
+    fun nonProgressUploadStopsWhenCancelled(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val source = EndlessUploadSource()
+            val job =
+                launch(Dispatchers.IO) {
+                    try {
+                        testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Stream(source, null, "application/octet-stream")))
+                    } catch (_: Exception) {}
+                }
+            assertTrue(source.entered.await(3, TimeUnit.SECONDS))
+            job.cancel()
+            try {
+                withTimeout(5_000) { job.join() }
+            } finally {
+                source.releaseFromTest()
+                withTimeout(5_000) { job.join() }
+            }
+            assertTrue(job.isCancelled)
+            assertEquals(1, source.closeCount(), "the source must be closed exactly once on cancellation")
+        }
+    }
+
+    @Test
+    fun alreadyCancelledEntryClosesOwnedUploadSourceWithoutRequest(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val source = RecordingSource(listOf(byteArrayOf(1)))
+            val entered = AtomicInteger()
+            val cancelled = Job().apply { cancel() }
+            val op =
+                launch(cancelled, start = CoroutineStart.UNDISPATCHED) {
+                    entered.incrementAndGet()
+                    try {
+                        testTransport(server).execute(HttpRequest("POST", "/accounts/a/x", HttpBody.Stream(source, 1L, "application/octet-stream")))
+                    } catch (_: Exception) {}
+                }
+            op.join()
+            assertEquals(1, entered.get())
+            assertEquals(1, source.closed.get(), "an already cancelled entry must still close owned sources")
+            assertEquals(0, server.requestCount)
         }
     }
 

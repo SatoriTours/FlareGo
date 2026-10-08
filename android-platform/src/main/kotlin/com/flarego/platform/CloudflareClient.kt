@@ -5,19 +5,21 @@ import com.flarego.core.cloudflare.HttpRequest
 import com.flarego.core.cloudflare.MultipartPart
 import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
+import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.ByteSource
 import java.io.IOException
+import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okio.BufferedSink
 
 /** The only accepted API origin, including the Cloudflare API version prefix. */
@@ -29,7 +31,6 @@ internal const val CLOUDFLARE_API_HOST = "api.cloudflare.com"
 private const val INVALID_INPUT_MESSAGE = "请求内容或路径不符合安全规则，请检查后重试"
 
 private const val MAX_PATH_LENGTH = 4096
-private const val MAX_DECODE_ROUNDS = 4
 
 /** HTTP methods this transport is allowed to construct. */
 private val ALLOWED_METHODS = setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
@@ -71,9 +72,10 @@ internal fun cloudflareClientBuilder(): OkHttpClient.Builder =
 internal fun cloudflareHttpClient(): OkHttpClient = cloudflareClientBuilder().build()
 
 /**
- * Test-only seam: the same production policy, plus an application interceptor
+ * Trusted test seam: the same production policy, plus an application interceptor
  * that may rewrite the already-constructed fixed Cloudflare URL before DNS and
- * before any connection is opened.
+ * before any connection is opened. It is a trusted-code seam for local tests, not
+ * a runtime permission check, and production call sites do not use it.
  */
 internal fun cloudflareHttpClient(rewrite: (Request) -> Request): OkHttpClient =
     cloudflareClientBuilder().addInterceptor { chain -> chain.proceed(rewrite(chain.request())) }.build()
@@ -92,15 +94,20 @@ internal fun cloudflareFileClient(rewrite: (Request) -> Request): OkHttpClient =
 /**
  * Builds the only request shape this client may send: the fixed Cloudflare
  * origin, a reviewed relative path, the injected bearer/accept headers, an
- * allowlisted set of business headers and a one-shot body.
+ * allowlisted set of business headers and a one-shot body. [isActive] lets the
+ * streaming body stop as soon as the calling coroutine is no longer active.
  */
-internal fun cloudflareRequest(token: String, request: HttpRequest): Request {
+internal fun cloudflareRequest(
+    token: String,
+    request: HttpRequest,
+    isActive: () -> Boolean = { true },
+): Request {
     val method = requireHttpMethod(request.method)
     val path = requireApiPath(request.path)
     val bodyless = method == "GET" || method == "HEAD"
     if (bodyless && request.payload != HttpBody.Empty) throw invalidInput()
     val headers = requireBusinessHeaders(request.headers, request.payload)
-    val body = if (bodyless) null else request.payload.toRequestBody()
+    val body = if (bodyless) null else request.payload.toRequestBody(isActive)
     val builder =
         Request.Builder()
             .url(requireCloudflareUrl(path))
@@ -111,60 +118,92 @@ internal fun cloudflareRequest(token: String, request: HttpRequest): Request {
 }
 
 /**
- * Runs one blocking OkHttp call on the platform IO dispatcher and bridges
- * coroutine cancellation onto the real [Call].
+ * Runs one blocking OkHttp call on the platform IO thread and owns its
+ * cancellation lifecycle.
  *
- * The cancellation hook is registered on a cancellable continuation, so it fires
- * as soon as the coroutine is cancelled (not when the blocking body eventually
- * returns). That closes the socket and makes a blocked read fail promptly, so no
- * IO keeps running in the background after cancellation. Callers run this on the
- * platform IO dispatcher, so all blocking IO and all closing stay off the UI
- * thread.
+ * The blocking call runs on a separate IO worker while this coroutine awaits it.
+ * When the caller is cancelled, the resumption happens on this same IO thread, so
+ * the call is cancelled *and* the owned upload sources/sink are closed there —
+ * before the worker returns. Closing releases a blocked `read`/`write` for any
+ * implementation that follows the ownership contract, so the worker stops
+ * promptly instead of continuing in the background.
  */
-internal suspend fun <T> runCloudflareCall(call: Call, block: (Response) -> T): T =
-    suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { call.cancel() }
+internal suspend fun <T> runCloudflareCall(
+    call: Call,
+    owned: OwnedResources,
+    block: (Response) -> T,
+): T {
+    return withContext(Dispatchers.IO) {
+        // The worker captures its own outcome, including the socket error that
+        // `call.cancel()` may produce, so a cancelled call can never surface as an
+        // IO failure of the caller and no worker failure can escape unobserved.
+        val running = async(Dispatchers.IO) { runCatching { call.execute().use(block) } }
         try {
-            val result = call.execute().use(block)
-            if (continuation.isActive) continuation.resume(result)
-        } catch (failure: Throwable) {
-            if (continuation.isActive) continuation.resumeWithException(failure)
+            running.await().getOrThrow()
+        } catch (cancelled: CancellationException) {
+            call.cancel()
+            owned.closeAll()
+            running.cancel()
+            running.await() // the worker stops as soon as the socket or the source is released
+            throw cancelled
         }
     }
-
-/** Turns an IO failure caused by our own cancellation back into cancellation. */
-internal suspend fun rethrowUnlessCancelled(failure: IOException) {
-    currentCoroutineContext().ensureActive()
-    throw failure
 }
 
 /**
- * Closes every upload source owned by [payload] exactly once, even when the same
- * source instance is referenced by more than one multipart part. Never called by
- * the request builder: the transport owns closing on every outcome.
+ * Owned upload sources plus the optional download sink, each closed at most once.
+ *
+ * Cleanup is independent per resource: a failing `close` never skips the other
+ * sources or the sink, and repeated calls are no-ops. The first cleanup failure
+ * is reported so the caller can keep a primary cancellation/validation/IO failure
+ * authoritative.
  */
-internal fun closePayloadSources(payload: HttpBody) {
-    val seen = java.util.Collections.newSetFromMap(IdentityHashMap<ByteSource, Boolean>())
-    var firstFailure: Throwable? = null
-    fun closeOnce(source: ByteSource) {
-        if (!seen.add(source)) return
+internal class OwnedResources(payload: HttpBody, private val sink: ByteSink? = null) {
+    private val sources: List<ByteSource> = uploadSourcesOf(payload)
+    private val closedSources: MutableSet<ByteSource> =
+        Collections.newSetFromMap(IdentityHashMap<ByteSource, Boolean>())
+    private var sinkClosed = false
+    private var failure: Throwable? = null
+
+    /** Closes every owned resource once, never throwing. */
+    fun closeAll(): Throwable? =
+        synchronized(this) {
+            for (source in sources) {
+                if (!closedSources.add(source)) continue
+                attempt { source.close() }
+            }
+            val ownedSink = sink
+            if (ownedSink != null && !sinkClosed) {
+                sinkClosed = true
+                attempt { ownedSink.close() }
+            }
+            failure
+        }
+
+    /**
+     * Cleanup on the platform IO thread. `NonCancellable` matters: when the caller
+     * is already cancelled, a plain `withContext` would never enter its block and
+     * the ownership transfer would leak.
+     */
+    suspend fun closeAllOnIo(): Throwable? =
+        withContext(NonCancellable + Dispatchers.IO) { closeAll() }
+
+    private inline fun attempt(close: () -> Unit) {
         try {
-            source.close()
-        } catch (failure: Throwable) {
-            if (firstFailure == null) firstFailure = failure
+            close()
+        } catch (thrown: Throwable) {
+            if (failure == null) failure = thrown
         }
     }
-    when (payload) {
-        is HttpBody.Stream -> closeOnce(payload.source)
-        is HttpBody.Multipart ->
-            payload.parts.forEach { part ->
-                val body = part.body
-                if (body is HttpBody.Stream) closeOnce(body.source)
-            }
-        else -> {}
-    }
-    firstFailure?.let { throw it }
 }
+
+private fun uploadSourcesOf(payload: HttpBody): List<ByteSource> =
+    when (payload) {
+        is HttpBody.Stream -> listOf(payload.source)
+        is HttpBody.Multipart ->
+            payload.parts.mapNotNull { (it.body as? HttpBody.Stream)?.source }
+        else -> emptyList()
+    }
 
 private fun requireHttpMethod(raw: String): String {
     if (raw !in ALLOWED_METHODS) throw invalidInput()
@@ -174,37 +213,83 @@ private fun requireHttpMethod(raw: String): String {
 /**
  * Accepts only a relative API path that stays inside the fixed prefix after
  * normalization: no scheme, no protocol-relative `//host`, no backslash, no
- * fragment, no control characters, no traversal in raw or multiply
+ * fragment, no control characters, no traversal in raw or repeatedly
  * percent-encoded form. Legitimate percent-encoded query content (for example a
- * pagination cursor) stays valid.
+ * pagination cursor) stays valid, and an opaque identifier that legitimately
+ * contains a literal percent sign (for example `encodePath("id%GG")` →
+ * `id%25GG`) is preserved verbatim instead of being decoded again as a new
+ * escape.
+ *
+ * The check is closed: the raw path and *every* fully decoded form are validated
+ * for the same dangerous structures, and decoding continues until no valid escape
+ * remains (each round strictly shrinks the string, so this terminates). A form
+ * that still contains an undecidable `%` sequence is a literal percent, not
+ * ambiguity, and is only accepted when the decoded form is safe.
  */
 private fun requireApiPath(raw: String): String {
     if (raw.length <= 1 || raw.length > MAX_PATH_LENGTH) throw invalidInput()
     if (!raw.startsWith("/") || raw.startsWith("//")) throw invalidInput()
     for (character in raw) {
-        val code = character.code
-        if (code !in 0x21..0x7E || character == '\\' || character == '#') throw invalidInput()
+        if (!character.isRawUrlCharacter() || character == '\\' || character == '#') throw invalidInput()
     }
     requireValidEscapes(raw)
     val queryAt = raw.indexOf('?')
-    val pathPart = if (queryAt < 0) raw else raw.substring(0, queryAt)
-    requireSafeSegments(pathPart)
-    var decoded = pathPart
+    val rawPath = if (queryAt < 0) raw else raw.substring(0, queryAt)
+    val rawQuery = if (queryAt < 0) "" else raw.substring(queryAt + 1)
+    requireSafePath(rawPath)
+    requireSafeQuery(rawQuery)
+    var decoded = rawPath
     var rounds = 0
-    while (rounds < MAX_DECODE_ROUNDS && decoded.contains('%')) {
-        decoded = decodeOnce(decoded)
-        requireSafeSegments(decoded)
+    while (decoded.contains('%')) {
+        val next = decodeKnownEscapes(decoded)
+        if (next == decoded) break
+        // Never accept an ambiguous budget: every decoded stage is checked.
+        requireSafePath(next)
+        decoded = next
         rounds++
+        if (rounds > raw.length) throw invalidInput()
+    }
+    var decodedQuery = rawQuery
+    var queryRounds = 0
+    while (decodedQuery.contains('%')) {
+        val next = decodeKnownEscapes(decodedQuery)
+        if (next == decodedQuery) break
+        requireSafeQuery(next)
+        decodedQuery = next
+        queryRounds++
+        if (queryRounds > raw.length) throw invalidInput()
     }
     return raw
 }
 
-private fun requireSafeSegments(pathPart: String) {
+private fun requireSafePath(pathPart: String) {
     if (!pathPart.startsWith("/") || pathPart.contains("//")) throw invalidInput()
     for (segment in pathPart.split('/')) {
         if (segment == "." || segment == "..") throw invalidInput()
     }
+    for (character in pathPart) {
+        if (!character.isDecodedUrlCharacter() || character == '\\' || character == '#') {
+            throw invalidInput()
+        }
+    }
 }
+
+/**
+ * Query values are opaque data (a cursor may legitimately contain `/`, `+`, `=`
+ * or an encoded space), so the decoded query only rejects control characters —
+ * the structure checks belong to the path.
+ */
+private fun requireSafeQuery(queryPart: String) {
+    for (character in queryPart) {
+        if (!character.isDecodedUrlCharacter()) throw invalidInput()
+    }
+}
+
+/** Raw URL text: printable ASCII without space, controls or non-ASCII. */
+private fun Char.isRawUrlCharacter(): Boolean = code in 0x21..0x7E
+
+/** Decoded URL text: printable ASCII, controls rejected. */
+private fun Char.isDecodedUrlCharacter(): Boolean = code in 0x20..0x7E
 
 private fun requireValidEscapes(value: String) {
     var index = 0
@@ -219,15 +304,26 @@ private fun requireValidEscapes(value: String) {
     }
 }
 
-private fun decodeOnce(value: String): String {
+/**
+ * Decodes one level of *valid* percent escapes only. A `%` that is not followed
+ * by two hex digits is a literal percent (an opaque identifier may contain one)
+ * and is copied verbatim, so no parse exception can escape and the identifier is
+ * preserved.
+ */
+private fun decodeKnownEscapes(value: String): String {
     val decoded = StringBuilder(value.length)
     var index = 0
     while (index < value.length) {
-        if (value[index] == '%' && index + 2 < value.length) {
+        val character = value[index]
+        if (character == '%' &&
+            index + 2 < value.length &&
+            value[index + 1].isHexDigit() &&
+            value[index + 2].isHexDigit()
+        ) {
             decoded.append(value.substring(index + 1, index + 3).toInt(16).toChar())
             index += 3
         } else {
-            decoded.append(value[index])
+            decoded.append(character)
             index++
         }
     }
@@ -269,6 +365,7 @@ private fun requireBusinessHeaders(
 }
 
 private fun requireMatchingContentType(value: String, payload: HttpBody) {
+    requireParseableMediaType(value)
     when (payload) {
         is HttpBody.Empty -> return
         is HttpBody.Multipart -> throw invalidInput()
@@ -278,22 +375,32 @@ private fun requireMatchingContentType(value: String, payload: HttpBody) {
     }
 }
 
+/**
+ * Platform-side fail-closed parse of a user-supplied media type. The core layer
+ * already proves the syntax; this is the last gate before OkHttp parses it, so a
+ * value OkHttp would reject can never reach the request builder or echo itself
+ * through an `IllegalArgumentException`.
+ */
+private fun requireParseableMediaType(value: String) {
+    if (value.toMediaTypeOrNull() == null) throw invalidInput()
+}
+
 private fun requireSameMediaType(value: String, declared: String) {
     if (!value.trim().equals(declared.trim(), ignoreCase = true)) throw invalidInput()
 }
 
-private fun HttpBody.toRequestBody(): RequestBody =
+private fun HttpBody.toRequestBody(isActive: () -> Boolean): RequestBody =
     when (this) {
         is HttpBody.Empty -> EmptyBody
-        is HttpBody.Text -> BytesBody(value.toByteArray(Charsets.UTF_8), contentType)
+        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), contentType)
         is HttpBody.Bytes -> BytesBody(value, contentType)
-        is HttpBody.Stream -> StreamBody(source, length, contentType)
-        is HttpBody.Multipart -> multipartBody(parts)
+        is HttpBody.Stream -> StreamBody(source, length, contentType, isActive)
+        is HttpBody.Multipart -> multipartBody(parts, isActive)
     }
 
 /** An explicit zero-length one-shot body: `POST` with no payload still sends a body. */
 private object EmptyBody : RequestBody() {
-    override fun contentType() = "application/json; charset=utf-8".toMediaType()
+    override fun contentType() = "application/json; charset=utf-8".toMediaTypeOrNull()
 
     override fun contentLength() = 0L
 
@@ -303,7 +410,7 @@ private object EmptyBody : RequestBody() {
 }
 
 private class BytesBody(private val bytes: ByteArray, private val mediaType: String) : RequestBody() {
-    override fun contentType() = mediaType.toMediaType()
+    override fun contentType() = mediaType.toMediaTypeOrNull()
 
     override fun contentLength() = bytes.size.toLong()
 
@@ -317,14 +424,17 @@ private class BytesBody(private val bytes: ByteArray, private val mediaType: Str
 /**
  * One-shot streaming body with a fixed buffer. A declared length is reported to
  * the server and verified against the bytes the source really produced; an
- * unknown length is sent without padding.
+ * unknown length is sent without padding. Activity is checked before every read
+ * and before every write, so cancellation stops the upload between reads instead
+ * of spinning or continuing in the background.
  */
 private class StreamBody(
     private val source: ByteSource,
     private val length: Long?,
     private val mediaType: String,
+    private val isActive: () -> Boolean,
 ) : RequestBody() {
-    override fun contentType() = mediaType.toMediaType()
+    override fun contentType() = mediaType.toMediaTypeOrNull()
 
     override fun contentLength() = length ?: -1L
 
@@ -334,33 +444,40 @@ private class StreamBody(
         val buffer = ByteArray(IO_BUFFER_BYTES)
         var written = 0L
         while (true) {
+            requireActive()
             val read = source.read(buffer)
             if (read < 0) break
+            if (read == 0) continue
+            requireActive()
             sink.write(buffer, 0, read)
             written += read
         }
         val declared = length
         if (declared != null && written != declared) {
-            throw java.io.IOException("Upload body length mismatch")
+            throw IOException("Upload body length mismatch")
         }
+    }
+
+    private fun requireActive() {
+        if (!isActive()) throw IOException("Upload cancelled")
     }
 }
 
-private fun multipartBody(parts: List<MultipartPart>): RequestBody {
+private fun multipartBody(parts: List<MultipartPart>, isActive: () -> Boolean): RequestBody {
     val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
     for (part in parts) {
-        val body = part.body.toPartBody(part)
+        val body = part.body.toPartBody(part, isActive)
         if (part.filename == null) builder.addFormDataPart(part.name, null, body)
         else builder.addFormDataPart(part.name, part.filename, body)
     }
     return builder.build()
 }
 
-private fun HttpBody.toPartBody(part: MultipartPart): RequestBody =
+private fun HttpBody.toPartBody(part: MultipartPart, isActive: () -> Boolean): RequestBody =
     when (this) {
-        is HttpBody.Text -> BytesBody(value.toByteArray(Charsets.UTF_8), part.contentType)
+        is HttpBody.Text -> BytesBody(value.encodeToByteArray(), part.contentType)
         is HttpBody.Bytes -> BytesBody(value, part.contentType)
-        is HttpBody.Stream -> StreamBody(source, length, part.contentType)
+        is HttpBody.Stream -> StreamBody(source, length, part.contentType, isActive)
         else -> throw invalidInput()
     }
 

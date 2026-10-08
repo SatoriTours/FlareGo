@@ -4,12 +4,9 @@ import com.flarego.core.cloudflare.HttpRequest
 import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.HttpResponseHead
 import com.flarego.core.ports.TransferPort
-import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Response
 
@@ -19,9 +16,9 @@ import okhttp3.Response
  * The response is streamed through a fixed buffer: no whole-file buffering, no
  * in-memory size bound (that bound belongs to [CloudflareTransport]), an error
  * response is never written to the sink, and the sink plus every upload source
- * are closed on success, failure and cancellation. Coroutine cancellation is
- * bridged onto the real OkHttp call, and the write loop stops as soon as the
- * coroutine is no longer active.
+ * are released on success, validation rejection, IO failure and cancellation.
+ * Cleanup is independent per resource and always runs on the platform IO thread,
+ * including when the coroutine was already cancelled before the IO body started.
  */
 class CloudflareTransfers internal constructor(
     private val token: String,
@@ -29,22 +26,23 @@ class CloudflareTransfers internal constructor(
 ) : TransferPort {
     constructor(token: String) : this(token, cloudflareFileClient())
 
-    override suspend fun download(request: HttpRequest, sink: ByteSink): HttpResponseHead =
-        withContext(Dispatchers.IO) {
+    override suspend fun download(request: HttpRequest, sink: ByteSink): HttpResponseHead {
+        val owned = OwnedResources(request.payload, sink)
+        var primary: Throwable? = null
+        try {
             val job = currentCoroutineContext()[Job]
-            try {
-                val call = client.newCall(cloudflareRequest(token, request))
-                try {
-                    runCloudflareCall(call) { response -> stream(response, sink, job) }
-                } catch (failure: IOException) {
-                    rethrowUnlessCancelled(failure)
-                    throw failure
-                }
-            } finally {
-                closePayloadSources(request.payload)
-                sink.close()
+            val call = client.newCall(cloudflareRequest(token, request) { job?.isActive != false })
+            return runCloudflareCall(call, owned) { response -> stream(response, sink, job) }
+        } catch (thrown: Throwable) {
+            primary = thrown
+            throw thrown
+        } finally {
+            val cleanupFailure = owned.closeAllOnIo()
+            if (cleanupFailure != null) {
+                if (primary != null) primary.addSuppressed(cleanupFailure) else throw cleanupFailure
             }
         }
+    }
 
     private fun stream(response: Response, sink: ByteSink, job: Job?): HttpResponseHead {
         val headers = response.headers.toMultimap()
@@ -61,6 +59,8 @@ class CloudflareTransfers internal constructor(
                     job?.ensureActive()
                     val read = it.read(buffer)
                     if (read < 0) break
+                    if (read == 0) continue
+                    job?.ensureActive()
                     sink.write(buffer, 0, read)
                     transferred += read
                 }

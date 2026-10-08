@@ -7,6 +7,17 @@ import com.flarego.core.cloudflare.HttpRequest
  *
  * [read] returns the number of bytes written into `buffer`, or `-1` at end of
  * stream. Implementations are only called from the platform IO thread.
+ *
+ * Ownership contract: once the payload is handed to the transport, the transport
+ * closes the source on every outcome (success, validation rejection, IO failure
+ * and cancellation). [close] must therefore release the underlying resource and
+ * **must unblock a `read` that is currently blocked** when the implementation's
+ * IO can be released that way (for example by interrupting or closing the
+ * underlying stream). It must tolerate being called while a `read` is in flight
+ * and it must be safe to call from another thread. A `read` that returns `0` is
+ * treated as no progress and must not spin forever. An implementation whose IO
+ * cannot be released by [close] is outside this contract: the transport cannot
+ * force-terminate arbitrary third-party IO.
  */
 interface ByteSource {
     fun read(buffer: ByteArray): Int
@@ -18,6 +29,12 @@ interface ByteSource {
  * Synchronous byte sink owned by a transport call.
  *
  * Implementations are only called from the platform IO thread.
+ *
+ * Ownership contract: the transport closes the sink on every outcome, including
+ * cancellation, so [close] must release the underlying resource and **must
+ * unblock a `write` that is currently blocked** when the implementation's IO can
+ * be released that way. It must tolerate being called while a `write` is in
+ * flight and it must be safe to call from another thread.
  */
 interface ByteSink {
     fun write(buffer: ByteArray, offset: Int, count: Int)
