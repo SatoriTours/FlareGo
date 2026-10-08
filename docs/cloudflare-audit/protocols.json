@@ -44,7 +44,7 @@
       "count": null,
       "status": "awaiting_protocol_evidence",
       "independent": true,
-      "source": "docs/cloudflare-audit/endpoints.csv session operations",
+      "source": "docs/cloudflare-audit/endpoints.csv",
       "note": "REST session endpoints are counted once in the REST denominator; consumer protocols are separate evidence"
     }
   ],
@@ -156,6 +156,7 @@
       "authorized_account_absent"
     ],
     "plan_limits": "unverified",
+    "plan_evidence": null,
     "capability_acceptance": [],
     "verified": 0,
     "families": [

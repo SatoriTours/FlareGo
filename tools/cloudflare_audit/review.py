@@ -2052,6 +2052,12 @@ def cross_check_schema(schema: dict, catalog_operations: list[dict], review: dic
     return errors
 # --------------------------------------------------------------------------- #
 # Independent protocol ledger (Task 4)
+#
+# Closed fact pipeline: authoritative context/universe -> environment
+# authorization/entitlement -> capture/matrix -> same-environment plan and query
+# evidence -> derived status/count/unit/source -> comparison with the declared
+# ledger. A stage with invalid facts never emits qualifying facts, and later
+# gates never read raw declarations as authority.
 # --------------------------------------------------------------------------- #
 
 PROTOCOLS_FORMAT = "flarego.cloudflare-audit.protocols/1"
@@ -2068,8 +2074,39 @@ FORBIDDEN_COMBINED_KEYS = (
 FORBIDDEN_DENOMINATOR_NAMES = ("total", "combined", "overall", "all")
 REQUIRED_DENOMINATOR_NAMES = ("rest", "s3", "graphql", "realtime")
 NON_REST_DENOMINATORS = ("s3", "graphql", "realtime")
-UNKNOWN_DENOMINATOR_STATUSES = ("awaiting_authorized_schema", "awaiting_protocol_evidence")
+DENOMINATOR_UNITS = {
+    "rest": ("operations",),
+    "s3": ("operations",),
+    "graphql": ("datasets_and_fields", "datasets", "fields"),
+    "realtime": ("sessions_and_streams",),
+}
 GRAPHQL_SINGLE_UNITS = ("datasets", "fields")
+GRAPHQL_UNKNOWN_UNIT = "datasets_and_fields"
+REALTIME_UNIT = "sessions_and_streams"
+PROTOCOL_CONTEXT_KINDS = ("pinned", "caller_owned")
+GRAPHQL_OVERVIEW_URL = (
+    "https://raw.githubusercontent.com/cloudflare/cloudflare-docs/"
+    "e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/analytics/graphql-api/index.mdx"
+)
+NORMATIVE_SOURCE_REFS = {
+    "rest": "docs/cloudflare-audit/snapshot.json",
+    "s3": "docs/cloudflare-audit/r2-s3-operations.csv",
+    "graphql": GRAPHQL_OVERVIEW_URL,
+    "realtime": "docs/cloudflare-audit/endpoints.csv",
+}
+# Small fixed entitlement policy for the GraphQL qualification path. Categories
+# are authorization-scope metadata only: they never substitute for real account
+# verification or for an L2 acceptance result.
+GRAPHQL_ENTITLEMENTS = {
+    "capture": {
+        "actions": ("schema_introspection_capture",),
+        "permissions": ("analytics_read",),
+    },
+    "query": {
+        "actions": ("dataset_read_only_query",),
+        "permissions": ("analytics_read",),
+    },
+}
 REQUIRED_GLOBAL_BLOCKER_CODES = (
     "authorized_account_absent",
     "authorized_schema_capture_absent",
@@ -2090,6 +2127,14 @@ GRAPHQL_CAPTURE_FIELDS = (
     "authorized_by",
     "datasets",
     "query_kinds",
+)
+PLAN_EVIDENCE_FIELDS = (
+    "environment",
+    "plan_label",
+    "authorized_by",
+    "captured_at",
+    "artifact_sha256",
+    "query_scope",
 )
 CAPABILITY_RECORD_FIELDS = (
     "record_id",
@@ -2308,11 +2353,15 @@ NORMALIZED_SENSITIVE_SUBSTRINGS = (
 SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\bBearer\s+\S{8,}", re.IGNORECASE),
+    # A path-rooted token containing a credential-ish directory; ordinary URL
+    # authorities ("scheme://") are excluded, while quoting/parentheses do not
+    # hide an embedded local path.
     re.compile(
-        r"(?:^|[\s:=])(?:/(?!/)|~)[^\s]*"
+        r"(?:^|[\s:=('\"\[{,])/(?!/)[^\s'\"()\[\]{}]*"
         r"(?:\.aws|\.ssh|\.config|\.cloudflare|\.netrc|credential|secret|token)",
         re.IGNORECASE,
     ),
+    re.compile(r"(?:^|[\s:=('\"\[{,])~[^\s'\"()\[\]{}]*", re.IGNORECASE),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bey[A-Za-z0-9_-]{8,}\."),
     re.compile(r"\b[0-9a-f]{32}\b"),
@@ -2320,74 +2369,77 @@ SENSITIVE_VALUE_PATTERNS = (
 )
 
 
-def _safe_value(value: Any) -> str:
-    """Describe a rejected value without echoing untrusted payloads."""
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        text = str(value)
-        if len(text) <= 40:
-            return repr(value)
-        return f"{type(value).__name__} of length {len(text)}"
-    if isinstance(value, (list, dict, tuple, set)):
-        return f"{type(value).__name__} with {len(value)} entr{'y' if len(value) == 1 else 'ies'}"
+def _shape(value: Any) -> str:
+    """Payload-free description: type and shape only, never any content."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return f"{type(value).__name__}"
+    if isinstance(value, str):
+        return f"string of length {len(value)}"
+    if isinstance(value, (list, tuple, set)):
+        return f"{type(value).__name__} of length {len(value)}"
+    if isinstance(value, dict):
+        return f"object with {len(value)} key(s)"
     return type(value).__name__
 
 
-def _protocol_dict(value: Any, label: str, errors: list[str]) -> dict:
+def _protocol_dict(value: Any, label: str, code: str, errors: list[str]) -> dict:
     if isinstance(value, dict):
         return value
-    errors.append(f"{label} must be an object, got {type(value).__name__}")
+    errors.append(f"{code}: {label} must be an object, got {_shape(value)}")
     return {}
 
 
-def _protocol_list(value: Any, label: str, errors: list[str]) -> list:
+def _protocol_list(value: Any, label: str, code: str, errors: list[str]) -> list:
     if isinstance(value, list):
         return value
-    errors.append(f"{label} must be a list, got {type(value).__name__}")
+    errors.append(f"{code}: {label} must be a list, got {_shape(value)}")
     return []
 
 
-def _protocol_text(value: Any, label: str, errors: list[str]) -> str:
+def _protocol_text(value: Any, label: str, code: str, errors: list[str]) -> str:
     if isinstance(value, str) and value.strip():
         return value
-    errors.append(f"{label} must be a non-empty string, got {_safe_value(value)}")
+    errors.append(f"{code}: {label} must be a non-empty string, got {_shape(value)}")
     return ""
 
 
-def _protocol_date(value: Any, label: str, errors: list[str]) -> str:
+def _protocol_date(value: Any, label: str, code: str, errors: list[str]) -> str:
     if not isinstance(value, str) or not ISO_UTC.match(value):
-        errors.append(f"{label} must be an ISO-8601 UTC timestamp, got {_safe_value(value)}")
+        errors.append(f"{code}: {label} must be an ISO-8601 UTC timestamp, got {_shape(value)}")
         return ""
     try:
         datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
-        errors.append(f"{label} must be a real calendar date, got {_safe_value(value)}")
+        errors.append(f"{code}: {label} must be a real calendar date")
         return ""
     return value
 
 
-def _protocol_calendar_date(value: Any, label: str, errors: list[str]) -> str:
-    """Accept a plain YYYY-MM-DD date or a full UTC timestamp."""
+def _protocol_calendar_date(value: Any, label: str, code: str, errors: list[str]) -> str:
     if isinstance(value, str) and ISO_DATE.match(value):
         try:
             datetime.datetime.strptime(value, "%Y-%m-%d")
         except ValueError:
-            errors.append(f"{label} must be a real calendar date, got {_safe_value(value)}")
+            errors.append(f"{code}: {label} must be a real calendar date")
             return ""
         return value
-    return _protocol_date(value, label, errors)
+    return _protocol_date(value, label, code, errors)
 
 
-def _protocol_hex64(value: Any, label: str, errors: list[str]) -> str:
+def _protocol_hex64(value: Any, label: str, code: str, errors: list[str]) -> str:
     if isinstance(value, str) and HEX64.match(value):
         return value
-    errors.append(f"{label} must be a 64-character lowercase hex digest, got {_safe_value(value)}")
+    errors.append(f"{code}: {label} must be a 64-character lowercase hex digest, got {_shape(value)}")
     return ""
 
 
-def _protocol_count(value: Any, label: str, errors: list[str]) -> int | None:
-    """Non-negative integer counts only; booleans are never counts."""
+def _protocol_count(value: Any, label: str, code: str, errors: list[str]) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        errors.append(f"{label} must be a non-negative integer, got {_safe_value(value)}")
+        errors.append(f"{code}: {label} must be a non-negative integer, got {_shape(value)}")
         return None
     return value
 
@@ -2411,10 +2463,11 @@ def _sensitive_findings(label: str, node: Any) -> list[str]:
                 part in normalized for part in NORMALIZED_SENSITIVE_SUBSTRINGS
             ):
                 findings.append(
-                    f"{label}.{key}: sensitive key must not be recorded in the environment registry"
+                    f"privacy.sensitive_key: {label} contains a sensitive key that must not be "
+                    "recorded in the environment registry"
                 )
                 continue
-            findings.extend(_sensitive_findings(f"{label}.{key}", value))
+            findings.extend(_sensitive_findings(f"{label}.{_shape(key)}", value))
     elif isinstance(node, list):
         for index, value in enumerate(node):
             findings.extend(_sensitive_findings(f"{label}[{index}]", value))
@@ -2422,22 +2475,52 @@ def _sensitive_findings(label: str, node: Any) -> list[str]:
         for pattern in SENSITIVE_VALUE_PATTERNS:
             if pattern.search(node):
                 findings.append(
-                    f"{label}: value looks like credential material or a local credential path and "
-                    "must not be recorded"
+                    f"privacy.sensitive_value: {label} looks like credential material or a local "
+                    "credential path and must not be recorded"
                 )
                 break
     return findings
 
 
-def _pinned_context(errors: list[str]) -> dict:
-    """Read-only pinned context: committed catalog, REST count and S3 source facts."""
+def _normalize_catalog(catalog_operations: Any, errors: list[str]) -> list[dict] | None:
+    """Normalize a catalog into unique identity facts, without echoing content."""
+    if not isinstance(catalog_operations, list):
+        errors.append(f"context.operations_invalid: catalog must be a list, got {_shape(catalog_operations)}")
+        return None
+    try:
+        normalized = normalize_operations(catalog_operations)
+    except ValueError as error:
+        errors.append(f"context.operations_invalid: catalog is not usable ({type(error).__name__})")
+        return None
+    if not normalized:
+        errors.append("context.operations_invalid: catalog must contain at least one operation")
+        return None
+    return [
+        {
+            "operation_id": operation["operation_id"],
+            "method": operation["method"],
+            "path": operation["path"],
+        }
+        for operation in normalized
+    ]
+
+
+def _pinned_universe(errors: list[str]) -> dict:
+    """Read the tracked normative context: committed catalog, REST count and pins."""
     root = Path(__file__).resolve().parents[2]
     catalog_path = root / "docs/cloudflare-audit/endpoints.csv"
     snapshot_path = root / "docs/cloudflare-audit/snapshot.json"
-    context: dict[str, Any] = {"operations": [], "rest_operations": None}
+    universe: dict[str, Any] = {
+        "kind": "pinned",
+        "operations": None,
+        "rest_operations": None,
+        "s3_universe": dict(S3_SOURCE_INVENTORY),
+        "source_refs": dict(NORMATIVE_SOURCE_REFS),
+    }
+    operations: list[dict] = []
     try:
         with catalog_path.open(encoding="utf-8-sig", newline="") as handle:
-            context["operations"] = [
+            operations = [
                 {"operation_id": row["operation_id"], "method": row["method"], "path": row["path"]}
                 for row in csv.DictReader(handle)
             ]
@@ -2445,149 +2528,318 @@ def _pinned_context(errors: list[str]) -> dict:
         if not isinstance(snapshot, dict):
             raise ValueError("snapshot must be an object")
         counts = snapshot.get("counts")
-        if not isinstance(counts, dict):
-            raise ValueError("snapshot.counts must be an object")
-        context["rest_operations"] = counts.get("operations")
+        if not isinstance(counts, dict) or isinstance(counts.get("operations"), bool) or not isinstance(
+            counts.get("operations"), int
+        ):
+            raise ValueError("snapshot.counts.operations must be an integer")
+        universe["rest_operations"] = counts["operations"]
         docs = snapshot.get("supplementary_docs")
         if isinstance(docs, dict):
             commit = docs.get("commit")
             for source in docs.get("sources") or []:
-                if isinstance(source, dict) and source.get("name") == S3_SOURCE_NAME:
-                    context["s3_source"] = {**source, "commit": commit}
+                if not isinstance(source, dict):
+                    continue
+                if source.get("name") == S3_SOURCE_NAME:
+                    if source.get("sha256") != S3_SOURCE_SHA256 or commit != S3_SOURCE_COMMIT:
+                        errors.append(
+                            "context.pinned_source_conflict: snapshot S3 supplementary source metadata "
+                            "does not match the frozen source contract"
+                        )
+                if source.get("name") == "graphql-overview" and source.get("url") != GRAPHQL_OVERVIEW_URL:
+                    errors.append(
+                        "context.pinned_source_conflict: snapshot GraphQL overview source metadata does "
+                        "not match the frozen source contract"
+                    )
     except (OSError, ValueError, KeyError, TypeError) as error:
-        errors.append(f"pinned protocol context is unavailable: {type(error).__name__}: {error}")
-    return context
-
-
-def _validate_context(context: Any, errors: list[str]) -> tuple[list | None, int | None, dict]:
-    """Validate the context facts; missing or malformed facts fail closed."""
-    if not isinstance(context, dict):
-        errors.append(f"protocol context must be an object, got {type(context).__name__}")
-        return None, None, {}
-    operations = context.get("operations")
-    if not isinstance(operations, list) or not operations:
-        errors.append("protocol context must provide a non-empty operations list for reference checks")
+        errors.append(f"context.pinned_unavailable: pinned protocol context is unusable ({type(error).__name__})")
+    if not operations:
+        errors.append("context.pinned_unavailable: committed catalog has no operations")
         operations = None
+    universe["operations"] = operations
+    return universe
+
+
+def _protocol_universe(
+    context: Any, catalog_operations: Any, errors: list[str]
+) -> dict | None:
+    """Stage 0: resolve the authoritative universe (pinned or caller-owned)."""
+    if context is None:
+        pinned = _pinned_universe(errors)
+        if catalog_operations is not None:
+            supplied = _normalize_catalog(catalog_operations, errors)
+            if supplied is not None and pinned.get("operations"):
+                pinned_ids = {operation["operation_id"] for operation in pinned["operations"]}
+                supplied_ids = {operation["operation_id"] for operation in supplied}
+                if supplied_ids != pinned_ids:
+                    errors.append(
+                        "context.catalog_mismatch: supplied catalog must match the pinned normative "
+                        "universe exactly (missing or additional identities)"
+                    )
+                elif {
+                    operation["operation_id"]: (operation["method"], operation["path"])
+                    for operation in supplied
+                } != {
+                    operation["operation_id"]: (operation["method"], operation["path"])
+                    for operation in pinned["operations"]
+                }:
+                    errors.append(
+                        "context.catalog_mismatch: supplied catalog METHOD+path bindings must match the "
+                        "pinned normative universe"
+                    )
+        return pinned
+    if not isinstance(context, dict):
+        errors.append(f"context.invalid: context must be an object, got {_shape(context)}")
+        return None
+    kind = context.get("kind")
+    if kind == "pinned":
+        pinned = _pinned_universe(errors)
+        for field, expected in (
+            ("rest_operations", pinned.get("rest_operations")),
+            ("s3_subset", sorted(pinned["s3_universe"])),
+            ("source_refs", dict(NORMATIVE_SOURCE_REFS)),
+        ):
+            if field in context and context.get(field) != expected:
+                errors.append(
+                    f"context.pinned_mismatch: declared {field} must match the canonical pinned facts"
+                )
+        if catalog_operations is not None:
+            supplied = _normalize_catalog(catalog_operations, errors)
+            if supplied is not None and pinned.get("operations") and {
+                operation["operation_id"] for operation in supplied
+            } != {operation["operation_id"] for operation in pinned["operations"]}:
+                errors.append(
+                    "context.catalog_mismatch: supplied catalog must match the pinned normative universe"
+                )
+        return pinned
+    if kind != "caller_owned":
+        errors.append(
+            f"context.kind_invalid: context.kind must be one of {', '.join(PROTOCOL_CONTEXT_KINDS)}, "
+            f"got {_shape(kind)}"
+        )
+        return None
+    operations = _normalize_catalog(context.get("operations"), errors)
     rest_operations = context.get("rest_operations")
     if isinstance(rest_operations, bool) or not isinstance(rest_operations, int) or rest_operations <= 0:
-        errors.append("protocol context must provide the pinned REST operation count")
+        errors.append(
+            f"context.rest_count_invalid: context.rest_operations must be a positive integer, got "
+            f"{_shape(rest_operations)}"
+        )
         rest_operations = None
-    s3_source = context.get("s3_source")
-    return operations, rest_operations, s3_source if isinstance(s3_source, dict) else {}
+    elif operations is not None and rest_operations != len(
+        {operation["operation_id"] for operation in operations}
+    ):
+        errors.append(
+            "context.rest_count_mismatch: context.rest_operations must equal the unique normalized "
+            "operation count of the caller-owned catalog"
+        )
+    subset = context.get("s3_subset")
+    universe_subset: dict[str, tuple[bool, str]] = {}
+    if not isinstance(subset, list) or not subset:
+        errors.append(
+            f"context.s3_subset_invalid: context.s3_subset must be a non-empty list, got {_shape(subset)}"
+        )
+    else:
+        for item in subset:
+            if not isinstance(item, str) or item not in S3_SOURCE_INVENTORY:
+                errors.append(
+                    "context.s3_subset_unknown: caller-owned S3 subset contains an identity that is not "
+                    "part of the frozen inventory"
+                )
+                universe_subset = {}
+                break
+            if item in universe_subset:
+                errors.append("context.s3_subset_duplicate: caller-owned S3 subset contains duplicates")
+                universe_subset = {}
+                break
+            universe_subset[item] = S3_SOURCE_INVENTORY[item]
+    source_refs = context.get("source_refs")
+    resolved_refs: dict[str, str] = {}
+    if not isinstance(source_refs, dict):
+        errors.append(
+            f"context.source_refs_invalid: context.source_refs must be an object, got {_shape(source_refs)}"
+        )
+    else:
+        for name in REQUIRED_DENOMINATOR_NAMES:
+            value = source_refs.get(name)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(
+                    f"context.source_refs_invalid: context.source_refs.{name} must be a non-empty "
+                    "public-style label"
+                )
+            else:
+                resolved_refs[name] = value
+    if catalog_operations is not None:
+        supplied = _normalize_catalog(catalog_operations, errors)
+        if supplied is not None and operations is not None and {
+            operation["operation_id"] for operation in supplied
+        } != {operation["operation_id"] for operation in operations}:
+            errors.append(
+                "context.catalog_conflict: the third-argument catalog and the caller-owned context must "
+                "describe the same operation universe"
+            )
+    if (
+        operations is None
+        or rest_operations is None
+        or not universe_subset
+        or len(resolved_refs) != len(REQUIRED_DENOMINATOR_NAMES)
+    ):
+        return None
+    return {
+        "kind": "caller_owned",
+        "operations": operations,
+        "rest_operations": rest_operations,
+        "s3_universe": universe_subset,
+        "source_refs": resolved_refs,
+    }
 
 
-def _catalog_index(catalog_operations: list[dict] | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
-    if catalog_operations is None:
+def _catalog_index(universe: dict | None, errors: list[str]) -> dict[str, tuple[str, str]] | None:
+    if universe is None or not universe.get("operations"):
         return None
-    index: dict[str, tuple[str, str]] = {}
-    try:
-        normalized = normalize_operations(catalog_operations)
-    except ValueError as error:
-        errors.append(f"catalog operations are not usable: {error}")
-        return None
-    for operation in normalized:
-        index[operation["operation_id"]] = (operation["method"], operation["path"])
-    return index
+    return {
+        operation["operation_id"]: (operation["method"], operation["path"])
+        for operation in universe["operations"]
+    }
 
 
 def _check_operation_reference(
     entry: Any, label: str, catalog: dict[str, tuple[str, str]] | None, errors: list[str]
-) -> str:
+) -> bool:
     if not isinstance(entry, dict):
-        errors.append(f"{label} must be an object, got {type(entry).__name__}")
-        return ""
+        errors.append(f"catalog.reference_invalid: {label} must be an object, got {_shape(entry)}")
+        return False
     operation_id = entry.get("operation_id")
     if not isinstance(operation_id, str) or not operation_id:
-        errors.append(f"{label}.operation_id must be a non-empty string")
-        return ""
+        errors.append(f"catalog.reference_invalid: {label}.operation_id must be a non-empty string")
+        return False
     if catalog is None:
         errors.append(
-            f"{label}: cannot verify operationId {operation_id!r} without a validated catalog context"
+            f"catalog.context_missing: {label} cannot be verified without a validated catalog universe"
         )
-        return operation_id
+        return False
     known = catalog.get(operation_id)
     if known is None:
-        errors.append(f"{label}: unknown operationId {operation_id!r} is not present in the catalog")
-        return operation_id
+        errors.append(
+            f"catalog.unknown_operation: {label}.operation_id is not part of the authoritative universe"
+        )
+        return False
     declared = (entry.get("method"), entry.get("path"))
     if declared != known:
         errors.append(
-            f"{label}: operationId {operation_id!r} has a different METHOD+path binding: "
-            f"{declared[0]} {declared[1]} vs catalog {known[0]} {known[1]}"
+            f"catalog.binding_mismatch: {label} METHOD+path does not match the authoritative universe"
         )
-    return operation_id
+        return False
+    return True
 
 
 def _environment_facts(environments: list, errors: list[str]) -> dict[str, dict]:
-    """Validate the environment registry and derive per-environment authorization facts."""
+    """Stage 1: validated environment authorization and entitlement facts."""
     facts: dict[str, dict] = {}
     for position, entry in enumerate(environments):
         label = f"protocols.environments[{position}]"
-        item = _protocol_dict(entry, label, errors)
+        item = _protocol_dict(entry, label, "qualification.environment_invalid", errors)
         for key in item:
             if key not in ENVIRONMENT_FIELDS:
                 errors.append(
-                    f"{label}.{key} is not part of the environment registry; only labels, plan, "
-                    "allowed action categories, owner, permission categories, cleanup, status and "
-                    "an authorization reference may be recorded"
+                    f"qualification.environment_field: {label} has a field outside the environment "
+                    "registry (only labels, plan, allowed action categories, owner, permission "
+                    "categories, cleanup, status and an authorization reference are allowed)"
                 )
-        environment_id = _protocol_text(item.get("environment_id"), f"{label}.environment_id", errors)
-        _protocol_text(item.get("label"), f"{label}.label", errors)
-        _protocol_text(item.get("plan"), f"{label}.plan", errors)
-        _protocol_text(item.get("owner_role"), f"{label}.owner_role", errors)
-        _protocol_text(item.get("cleanup_responsibility"), f"{label}.cleanup_responsibility", errors)
+        environment_id = _protocol_text(
+            item.get("environment_id"), f"{label}.environment_id", "qualification.environment_invalid", errors
+        )
+        plan = _protocol_text(item.get("plan"), f"{label}.plan", "qualification.environment_invalid", errors)
+        _protocol_text(item.get("label"), f"{label}.label", "qualification.environment_invalid", errors)
+        _protocol_text(
+            item.get("owner_role"), f"{label}.owner_role", "qualification.environment_invalid", errors
+        )
+        _protocol_text(
+            item.get("cleanup_responsibility"),
+            f"{label}.cleanup_responsibility",
+            "qualification.environment_invalid",
+            errors,
+        )
         status = item.get("status")
         if status not in ENVIRONMENT_STATUSES:
             errors.append(
-                f"{label}.status must be one of {', '.join(ENVIRONMENT_STATUSES)}, got "
-                f"{_safe_value(status)}"
+                f"qualification.environment_status: {label}.status must be one of "
+                f"{', '.join(ENVIRONMENT_STATUSES)}, got {_shape(status)}"
             )
-        for field in ("allowed_action_categories", "permission_categories"):
-            values = _protocol_list(item.get(field), f"{label}.{field}", errors)
+        actions: set[str] = set()
+        permissions: set[str] = set()
+        for field, target in (
+            ("allowed_action_categories", actions),
+            ("permission_categories", permissions),
+        ):
+            values = _protocol_list(item.get(field), f"{label}.{field}", "qualification.environment_invalid", errors)
             if not values:
-                errors.append(f"{label}.{field} must list at least one category")
+                errors.append(f"qualification.environment_invalid: {label}.{field} must list at least one category")
             for value in values:
                 if not isinstance(value, str) or not value.strip():
-                    errors.append(f"{label}.{field} items must be non-empty strings")
+                    errors.append(
+                        f"qualification.environment_invalid: {label}.{field} items must be non-empty strings"
+                    )
+                    continue
+                target.add(value)
         if "notes" in item and not isinstance(item.get("notes"), str):
-            errors.append(f"{label}.notes must be a plain string, got {type(item.get('notes')).__name__}")
+            errors.append(
+                f"qualification.environment_invalid: {label}.notes must be a plain string, got "
+                f"{_shape(item.get('notes'))}"
+            )
         blocker_codes: list[str] = []
         for blocker_index, blocker in enumerate(
-            _protocol_list(item.get("blockers"), f"{label}.blockers", errors)
+            _protocol_list(item.get("blockers"), f"{label}.blockers", "qualification.environment_invalid", errors)
         ):
             blocker_label = f"{label}.blockers[{blocker_index}]"
             if not isinstance(blocker, dict):
-                errors.append(f"{blocker_label} must be an object, got {type(blocker).__name__}")
+                errors.append(
+                    f"qualification.environment_invalid: {blocker_label} must be an object, got "
+                    f"{_shape(blocker)}"
+                )
                 continue
             for key in blocker:
                 if key not in BLOCKER_FIELDS:
                     errors.append(
-                        f"{blocker_label}.{key} is not an allowed blocker field; only code and detail "
-                        "may be recorded"
+                        f"qualification.environment_field: {blocker_label} has a field outside the "
+                        "blocker contract (only code and detail are allowed)"
                     )
-            code = _protocol_text(blocker.get("code"), f"{blocker_label}.code", errors)
+            code = _protocol_text(
+                blocker.get("code"), f"{blocker_label}.code", "qualification.environment_invalid", errors
+            )
             if code:
                 blocker_codes.append(code)
-            _protocol_text(blocker.get("detail"), f"{blocker_label}.detail", errors)
+            _protocol_text(
+                blocker.get("detail"), f"{blocker_label}.detail", "qualification.environment_invalid", errors
+            )
         reference = item.get("authorization_reference")
         if status == "available":
             if not isinstance(reference, str) or not reference.strip():
                 errors.append(
-                    f"{label}.authorization_reference is required before an environment can be "
-                    "available; a status change alone is not authorization"
+                    f"qualification.environment_reference_missing: {label}.authorization_reference is "
+                    "required before an environment can be available"
                 )
             if blocker_codes:
-                errors.append(f"{label}: an available environment must not keep unresolved blockers")
+                errors.append(
+                    f"qualification.environment_blocked: {label} must not be available while it keeps "
+                    "unresolved blockers"
+                )
         elif reference not in (None, ""):
             errors.append(
-                f"{label}.authorization_reference must stay empty while the environment is not available"
+                f"qualification.environment_reference_unexpected: {label}.authorization_reference must "
+                "stay empty while the environment is not available"
             )
         errors.extend(_sensitive_findings(label, item))
         if environment_id:
             if environment_id in facts:
-                errors.append(f"{label}.environment_id duplicate {environment_id!r}")
+                errors.append(
+                    f"qualification.environment_duplicate: {label}.environment_id duplicates an earlier "
+                    "environment id"
+                )
             facts[environment_id] = {
                 "status": status,
+                "plan": plan,
+                "actions": actions,
+                "permissions": permissions,
                 "authorization_reference": reference if isinstance(reference, str) else "",
                 "blocker_codes": blocker_codes,
                 "authorized": status == "available"
@@ -2598,83 +2850,130 @@ def _environment_facts(environments: list, errors: list[str]) -> dict[str, dict]
     return facts
 
 
+def _missing_entitlements(environment: dict, requirement: str) -> list[str]:
+    """Return the missing action/permission categories for one entitlement requirement."""
+    spec = GRAPHQL_ENTITLEMENTS[requirement]
+    missing = [f"action:{name}" for name in spec["actions"] if name not in environment["actions"]]
+    missing += [f"permission:{name}" for name in spec["permissions"] if name not in environment["permissions"]]
+    return missing
+
+
 def _schema_matrix(capture: dict, label: str, errors: list[str]) -> dict[str, set[str]]:
     """Validate the captured dataset/field matrix used to qualify query scopes."""
     matrix: dict[str, set[str]] = {}
-    entries = _protocol_list(capture.get("datasets"), f"{label}.datasets", errors)
+    entries = _protocol_list(capture.get("datasets"), f"{label}.datasets", "qualification.capture_invalid", errors)
     if not entries:
-        errors.append(f"{label}.datasets must list the captured datasets and fields")
+        errors.append(f"qualification.capture_invalid: {label}.datasets must list the captured datasets")
     for index, entry in enumerate(entries):
         entry_label = f"{label}.datasets[{index}]"
-        item = _protocol_dict(entry, entry_label, errors)
-        dataset = _protocol_text(item.get("dataset"), f"{entry_label}.dataset", errors)
-        fields = _protocol_list(item.get("fields"), f"{entry_label}.fields", errors)
+        item = _protocol_dict(entry, entry_label, "qualification.capture_invalid", errors)
+        dataset = _protocol_text(
+            item.get("dataset"), f"{entry_label}.dataset", "qualification.capture_invalid", errors
+        )
+        fields = _protocol_list(
+            item.get("fields"), f"{entry_label}.fields", "qualification.capture_invalid", errors
+        )
         if not fields:
-            errors.append(f"{entry_label}.fields must list at least one field")
+            errors.append(f"qualification.capture_invalid: {entry_label}.fields must list at least one field")
         clean_fields: set[str] = set()
         for field in fields:
             if not isinstance(field, str) or not field.strip():
-                errors.append(f"{entry_label}.fields items must be non-empty strings")
+                errors.append(
+                    f"qualification.capture_invalid: {entry_label}.fields items must be non-empty strings"
+                )
                 continue
             clean_fields.add(field)
         if dataset:
             if dataset in matrix:
-                errors.append(f"{entry_label}.dataset duplicate {dataset!r}")
+                errors.append(
+                    f"qualification.capture_invalid: {entry_label}.dataset duplicates an earlier dataset"
+                )
             matrix[dataset] = clean_fields
     return matrix
 
 
 def _capture_facts(
-    graphql: dict, environments: dict[str, dict], clearances: dict[str, str], errors: list[str]
+    graphql: dict, environments: dict[str, dict], errors: list[str]
 ) -> dict | None:
-    """Validate the schema capture and return the authorization-linked fact record."""
-    evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
+    """Stage 2: validated capture linked to exactly one entitled environment."""
+    evidence = _protocol_dict(
+        graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", "qualification.capture_invalid", errors
+    )
     capture = evidence.get("authorized_introspection")
     if capture is None:
         return None
     label = "protocols.graphql schema_evidence.authorized_introspection"
     if not isinstance(capture, dict):
-        errors.append(f"{label} must be an object or null, got {type(capture).__name__}")
+        errors.append(
+            f"qualification.capture_invalid: {label} must be an object or null, got {_shape(capture)}"
+        )
         return None
     valid = True
-    environment = _protocol_text(capture.get("environment"), f"{label}.environment", errors)
+    for field in GRAPHQL_CAPTURE_FIELDS:
+        if field not in capture:
+            errors.append(f"qualification.capture_invalid: {label}.{field} is required")
+            valid = False
+    environment = _protocol_text(
+        capture.get("environment"), f"{label}.environment", "qualification.capture_invalid", errors
+    )
     linked = environments.get(environment) if environment else None
     if environment and linked is None:
-        errors.append(f"{label}.environment {environment!r} is not a registered environment")
-        valid = False
-    elif linked is not None and not linked["authorized"]:
         errors.append(
-            f"{label}.environment {environment!r} is not available (status/blockers); an awaiting or "
-            "blocked environment cannot authorize a capture"
+            f"qualification.environment_unknown: {label}.environment is not a registered environment"
         )
         valid = False
-    authorized_by = _protocol_text(capture.get("authorized_by"), f"{label}.authorized_by", errors)
-    if authorized_by and linked is not None:
-        accepted = {linked["authorization_reference"]} | set(clearances.values())
-        if authorized_by not in accepted:
+    elif linked is not None:
+        if not linked["authorized"]:
             errors.append(
-                f"{label}.authorized_by must match the linked environment authorization reference or "
-                "a cleared global blocker reference"
+                f"qualification.environment_not_available: {label}.environment is not available "
+                "(status/blockers); an awaiting or blocked environment cannot authorize a capture"
             )
             valid = False
-    captured_at = _protocol_date(capture.get("captured_at"), f"{label}.captured_at", errors)
-    artifact = _protocol_hex64(capture.get("artifact_sha256"), f"{label}.artifact_sha256", errors)
+        else:
+            missing = _missing_entitlements(linked, "capture")
+            if missing:
+                errors.append(
+                    f"qualification.entitlement_missing: {label}.environment does not grant the capture "
+                    f"entitlement ({', '.join(missing)})"
+                )
+                valid = False
+    authorized_by = _protocol_text(
+        capture.get("authorized_by"), f"{label}.authorized_by", "qualification.capture_invalid", errors
+    )
+    if authorized_by and linked is not None:
+        if authorized_by != linked["authorization_reference"]:
+            errors.append(
+                f"qualification.capture_authority_mismatch: {label}.authorized_by must equal the linked "
+                "environment authorization reference"
+            )
+            valid = False
+    captured_at = _protocol_date(
+        capture.get("captured_at"), f"{label}.captured_at", "qualification.capture_invalid", errors
+    )
+    artifact = _protocol_hex64(
+        capture.get("artifact_sha256"), f"{label}.artifact_sha256", "qualification.capture_invalid", errors
+    )
     matrix = _schema_matrix(capture, label, errors)
     query_kinds: set[str] = set()
-    raw_kinds = _protocol_list(capture.get("query_kinds"), f"{label}.query_kinds", errors)
+    raw_kinds = _protocol_list(
+        capture.get("query_kinds"), f"{label}.query_kinds", "qualification.capture_invalid", errors
+    )
     if not raw_kinds:
-        errors.append(f"{label}.query_kinds must list the captured query kinds")
+        errors.append(f"qualification.capture_invalid: {label}.query_kinds must list the captured query kinds")
     for kind in raw_kinds:
         if not isinstance(kind, str) or not kind.strip():
-            errors.append(f"{label}.query_kinds items must be non-empty strings")
+            errors.append(
+                f"qualification.capture_invalid: {label}.query_kinds items must be non-empty strings"
+            )
             continue
         query_kinds.add(kind)
     if not (environment and authorized_by and captured_at and artifact and matrix and query_kinds):
         valid = False
-    if not valid:
+    if not valid or linked is None:
         return None
     return {
         "environment": environment,
+        "environment_plan": linked["plan"],
         "authorized_by": authorized_by,
         "captured_at": captured_at,
         "artifact_sha256": artifact,
@@ -2685,82 +2984,231 @@ def _capture_facts(
     }
 
 
+def _scope_in_matrix(scope: Any, capture: dict) -> bool:
+    """True when a query scope references only captured datasets/fields/query kinds."""
+    if not isinstance(scope, dict):
+        return False
+    dataset = scope.get("dataset")
+    fields = scope.get("fields")
+    kinds = scope.get("query_kinds")
+    if not isinstance(dataset, str) or dataset not in capture["matrix"]:
+        return False
+    if not isinstance(fields, list) or not fields:
+        return False
+    if any(not isinstance(field, str) or field not in capture["matrix"][dataset] for field in fields):
+        return False
+    if not isinstance(kinds, list) or not kinds:
+        return False
+    return all(isinstance(kind, str) and kind in capture["query_kinds"] for kind in kinds)
+
+
+def _scope_included(scope: Any, allowed: Any) -> bool:
+    """True when ``scope`` is a subset of an authorized plan scope."""
+    if not isinstance(scope, dict) or not isinstance(allowed, dict):
+        return False
+    if scope.get("dataset") != allowed.get("dataset"):
+        return False
+    allowed_fields = allowed.get("fields")
+    allowed_kinds = allowed.get("query_kinds")
+    if not isinstance(allowed_fields, list) or not isinstance(allowed_kinds, list):
+        return False
+    fields = scope.get("fields")
+    kinds = scope.get("query_kinds")
+    if not isinstance(fields, list) or not isinstance(kinds, list):
+        return False
+    return all(field in allowed_fields for field in fields) and all(kind in allowed_kinds for kind in kinds)
+
+
+def _plan_evidence_facts(
+    graphql: dict, environments: dict[str, dict], capture: dict | None, errors: list[str]
+) -> dict | None:
+    """Stage 3a: validated plan evidence for the same environment and scope."""
+    plan = graphql.get("plan_evidence")
+    if plan is None:
+        return None
+    label = "protocols.graphql.plan_evidence"
+    if not isinstance(plan, dict):
+        errors.append(f"qualification.plan_evidence_invalid: {label} must be an object or null, got {_shape(plan)}")
+        return None
+    valid = True
+    for field in PLAN_EVIDENCE_FIELDS:
+        if field not in plan:
+            errors.append(f"qualification.plan_evidence_invalid: {label}.{field} is required")
+            valid = False
+    environment = _protocol_text(
+        plan.get("environment"), f"{label}.environment", "qualification.plan_evidence_invalid", errors
+    )
+    linked = environments.get(environment) if environment else None
+    if linked is None:
+        errors.append(
+            f"qualification.plan_evidence_invalid: {label}.environment must link a registered environment"
+        )
+        valid = False
+    elif capture is None or environment != capture["environment"]:
+        errors.append(
+            f"qualification.plan_evidence_environment_mismatch: {label}.environment must be the same "
+            "environment as the schema capture"
+        )
+        valid = False
+    elif not linked["authorized"]:
+        errors.append(
+            f"qualification.plan_evidence_invalid: {label}.environment is not available (status/blockers)"
+        )
+        valid = False
+    plan_label = _protocol_text(
+        plan.get("plan_label"), f"{label}.plan_label", "qualification.plan_evidence_invalid", errors
+    )
+    if plan_label and linked is not None and plan_label != linked["plan"]:
+        errors.append(
+            f"qualification.plan_evidence_plan_mismatch: {label}.plan_label must equal the linked "
+            "environment plan label"
+        )
+        valid = False
+    authorized_by = _protocol_text(
+        plan.get("authorized_by"), f"{label}.authorized_by", "qualification.plan_evidence_invalid", errors
+    )
+    if authorized_by and linked is not None and authorized_by != linked["authorization_reference"]:
+        errors.append(
+            f"qualification.plan_evidence_authority_mismatch: {label}.authorized_by must equal the linked "
+            "environment authorization reference"
+        )
+        valid = False
+    captured_at = _protocol_date(
+        plan.get("captured_at"), f"{label}.captured_at", "qualification.plan_evidence_invalid", errors
+    )
+    if captured_at and capture is not None and captured_at < capture["captured_at"]:
+        errors.append(
+            f"qualification.plan_evidence_order: {label}.captured_at must not predate the schema capture"
+        )
+        valid = False
+    artifact = _protocol_hex64(
+        plan.get("artifact_sha256"), f"{label}.artifact_sha256", "qualification.plan_evidence_invalid", errors
+    )
+    scope = plan.get("query_scope")
+    if capture is not None and not _scope_in_matrix(scope, capture):
+        errors.append(
+            f"qualification.plan_evidence_scope_mismatch: {label}.query_scope must reference the captured "
+            "dataset, fields and query kinds"
+        )
+        valid = False
+    if not (environment and linked is not None and plan_label and authorized_by and captured_at and artifact and valid):
+        return None
+    return {
+        "environment": environment,
+        "plan_label": plan_label,
+        "authorized_by": authorized_by,
+        "captured_at": captured_at,
+        "artifact_sha256": artifact,
+        "query_scope": scope,
+    }
+
+
 def _capability_facts(
     graphql: dict,
     environments: dict[str, dict],
     capture: dict | None,
+    plan: dict | None,
     errors: list[str],
 ) -> list[dict]:
-    """Validate capability records against the captured matrix; return valid records."""
+    """Stage 3b: independent query acceptance inside the captured and authorized scope."""
     records: list[dict] = []
     seen_ids: list[str] = []
     for index, record in enumerate(
-        _protocol_list(graphql.get("capability_acceptance"), "protocols.graphql.capability_acceptance", errors)
+        _protocol_list(
+            graphql.get("capability_acceptance"),
+            "protocols.graphql.capability_acceptance",
+            "qualification.record_invalid",
+            errors,
+        )
     ):
         label = f"protocols.graphql.capability_acceptance[{index}]"
-        item = _protocol_dict(record, label, errors)
+        item = _protocol_dict(record, label, "qualification.record_invalid", errors)
         valid = True
         for field in CAPABILITY_RECORD_FIELDS:
             if field not in item:
-                errors.append(f"{label}.{field} is required")
+                errors.append(f"qualification.record_invalid: {label}.{field} is required")
                 valid = False
-        record_id = _protocol_text(item.get("record_id"), f"{label}.record_id", errors)
+        record_id = _protocol_text(item.get("record_id"), f"{label}.record_id", "qualification.record_invalid", errors)
         if record_id:
             if record_id in seen_ids:
-                errors.append(f"{label}.record_id duplicate {record_id!r}")
+                errors.append(
+                    f"qualification.record_duplicate: {label}.record_id duplicates an earlier acceptance record"
+                )
                 valid = False
             seen_ids.append(record_id)
-        captured_at = _protocol_date(item.get("captured_at"), f"{label}.captured_at", errors)
-        artifact = _protocol_hex64(item.get("evidence_artifact"), f"{label}.evidence_artifact", errors)
+        captured_at = _protocol_date(
+            item.get("captured_at"), f"{label}.captured_at", "qualification.record_invalid", errors
+        )
+        artifact = _protocol_hex64(
+            item.get("evidence_artifact"), f"{label}.evidence_artifact", "qualification.record_invalid", errors
+        )
         if item.get("result") != "verified":
-            errors.append(f"{label}.result must be 'verified', got {_safe_value(item.get('result'))}")
+            errors.append(
+                f"qualification.record_invalid: {label}.result must be 'verified', got {_shape(item.get('result'))}"
+            )
             valid = False
         environment = item.get("environment")
         linked = environments.get(environment) if isinstance(environment, str) else None
-        if linked is None:
-            errors.append(f"{label}.environment must link a registered environment")
-            valid = False
-        elif not linked["authorized"]:
-            errors.append(f"{label}.environment {environment!r} is not available (status/blockers)")
-            valid = False
-        scope = item.get("query_scope")
-        scope_ok = False
         if capture is None:
             errors.append(
-                f"{label}.query_scope cannot be qualified without a validated schema capture"
+                f"qualification.record_invalid: {label} cannot be qualified without a validated schema capture"
             )
-        elif not isinstance(scope, dict):
-            errors.append(f"{label}.query_scope must be an object, got {type(scope).__name__}")
+            valid = False
+        elif linked is None:
+            errors.append(
+                f"qualification.environment_unknown: {label}.environment is not a registered environment"
+            )
+            valid = False
         else:
-            dataset = scope.get("dataset")
-            fields = scope.get("fields")
-            kinds = scope.get("query_kinds")
-            if not isinstance(dataset, str) or dataset not in capture["matrix"]:
+            if environment != capture["environment"]:
                 errors.append(
-                    f"{label}.query_scope.dataset must reference a captured dataset, got "
-                    f"{_safe_value(dataset)}"
+                    f"qualification.record_environment_mismatch: {label}.environment must be the same "
+                    "environment as the schema capture"
                 )
-            elif not isinstance(fields, list) or not fields:
-                errors.append(f"{label}.query_scope.fields must list at least one captured field")
+                valid = False
+            if not linked["authorized"]:
+                errors.append(
+                    f"qualification.environment_not_available: {label}.environment is not available "
+                    "(status/blockers)"
+                )
+                valid = False
             else:
-                unknown_fields = [
-                    field
-                    for field in fields
-                    if not isinstance(field, str) or field not in capture["matrix"][dataset]
-                ]
-                if unknown_fields:
+                missing = _missing_entitlements(linked, "query")
+                if missing:
                     errors.append(
-                        f"{label}.query_scope.fields must reference captured fields of {dataset!r}"
+                        f"qualification.entitlement_missing: {label}.environment does not grant the query "
+                        f"entitlement ({', '.join(missing)})"
                     )
-                elif not isinstance(kinds, list) or not kinds or any(
-                    not isinstance(kind, str) or kind not in capture["query_kinds"] for kind in kinds
-                ):
-                    errors.append(
-                        f"{label}.query_scope.query_kinds must reference captured query kinds"
-                    )
-                else:
-                    scope_ok = True
-        if not (record_id and captured_at and artifact and scope_ok and valid):
+                    valid = False
+            if plan is None:
+                errors.append(
+                    f"qualification.plan_evidence_missing: {label} cannot qualify a positive capability "
+                    "without validated plan evidence for the same environment and scope"
+                )
+                valid = False
+            elif not _scope_included(item.get("query_scope"), plan["query_scope"]):
+                errors.append(
+                    f"qualification.plan_scope_mismatch: {label}.query_scope must be included in the "
+                    "authorized plan evidence scope"
+                )
+                valid = False
+        if capture is not None and captured_at and captured_at < capture["captured_at"]:
+            errors.append(
+                f"qualification.record_order: {label}.captured_at must not predate the schema capture"
+            )
+            valid = False
+        if plan is not None and captured_at and captured_at < plan["captured_at"]:
+            errors.append(
+                f"qualification.record_order: {label}.captured_at must not predate the plan evidence"
+            )
+            valid = False
+        if capture is not None and not _scope_in_matrix(item.get("query_scope"), capture):
+            errors.append(
+                f"qualification.record_scope_mismatch: {label}.query_scope must reference the captured "
+                "dataset, fields and query kinds"
+            )
+            valid = False
+        if not (record_id and captured_at and artifact and valid):
             valid = False
         if valid:
             records.append(
@@ -2780,15 +3228,17 @@ def _blocker_facts(protocols: dict, errors: list[str]) -> tuple[dict[str, str], 
     clearances: dict[str, str] = {}
     active: list[str] = []
     seen: list[str] = []
-    for index, blocker in enumerate(_protocol_list(protocols.get("blockers"), "protocols.blockers", errors)):
+    for index, blocker in enumerate(
+        _protocol_list(protocols.get("blockers"), "protocols.blockers", "blockers.invalid", errors)
+    ):
         label = f"protocols.blockers[{index}]"
-        item = _protocol_dict(blocker, label, errors)
-        code = _protocol_text(item.get("code"), f"{label}.code", errors)
-        _protocol_text(item.get("detail"), f"{label}.detail", errors)
+        item = _protocol_dict(blocker, label, "blockers.invalid", errors)
+        code = _protocol_text(item.get("code"), f"{label}.code", "blockers.invalid", errors)
+        _protocol_text(item.get("detail"), f"{label}.detail", "blockers.invalid", errors)
         if not code:
             continue
         if code in seen:
-            errors.append(f"{label}.code duplicate global blocker {code!r}")
+            errors.append(f"blockers.duplicate_code: {label}.code duplicates an earlier global blocker code")
             continue
         seen.append(code)
         cleared_by = item.get("cleared_by")
@@ -2798,20 +3248,22 @@ def _blocker_facts(protocols: dict, errors: list[str]) -> tuple[dict[str, str], 
             continue
         record_label = f"{label}.clearance_record"
         if not isinstance(record, dict):
-            errors.append(f"{record_label} must be an object to clear the blocker")
+            errors.append(f"blockers.clearance_invalid: {record_label} must be an object to clear the blocker")
             active.append(code)
             continue
         for key in record:
             if key not in CLEARANCE_RECORD_FIELDS + ("environment",):
                 errors.append(
-                    f"{record_label}.{key} is not an allowed clearance field; only reference, date "
-                    "and environment may be recorded"
+                    f"blockers.clearance_invalid: {record_label} has a field outside the clearance contract"
                 )
-        reference = _protocol_text(record.get("reference"), f"{record_label}.reference", errors)
-        _protocol_calendar_date(record.get("date"), f"{record_label}.date", errors)
+        reference = _protocol_text(
+            record.get("reference"), f"{record_label}.reference", "blockers.clearance_invalid", errors
+        )
+        _protocol_calendar_date(record.get("date"), f"{record_label}.date", "blockers.clearance_invalid", errors)
         if not isinstance(cleared_by, str) or not cleared_by.strip() or reference != cleared_by:
             errors.append(
-                f"{label}: cleared_by must be a non-empty reference matching clearance_record.reference"
+                f"blockers.clearance_mismatch: {label} requires cleared_by to match "
+                "clearance_record.reference exactly"
             )
             active.append(code)
             continue
@@ -2819,14 +3271,22 @@ def _blocker_facts(protocols: dict, errors: list[str]) -> tuple[dict[str, str], 
     for code in REQUIRED_GLOBAL_BLOCKER_CODES:
         if code not in seen:
             errors.append(
-                f"protocols.blockers must record {code!r} unless it is explicitly cleared with a "
-                "clearance record; removing the blocker is not clearance"
+                f"blockers.missing_required: protocols.blockers must record {code!r} unless it is explicitly "
+                "cleared with a clearance record; removing the blocker is not clearance"
             )
     return clearances, active
 
 
-def _s3_facts(s3_rows: Any, errors: list[str]) -> dict:
-    """Validate S3 rows against the frozen inventory and derive the source facts."""
+def _s3_row_label(index: int, name: Any, universe: dict) -> str:
+    """Label a row without echoing untrusted text: the name only when it is pinned."""
+    if isinstance(name, str) and name in universe["s3_universe"]:
+        return f"s3_rows[{index}] {name}"
+    return f"s3_rows[{index}]"
+
+
+def _s3_facts(s3_rows: Any, universe: dict | None, errors: list[str]) -> dict:
+    """Stage 1b: S3 rows validated against the authoritative universe, then counted."""
+    inventory = universe["s3_universe"] if universe else dict(S3_SOURCE_INVENTORY)
     facts: dict[str, Any] = {
         "documented": 0,
         "vendor_supported": 0,
@@ -2835,154 +3295,158 @@ def _s3_facts(s3_rows: Any, errors: list[str]) -> dict:
         "verified": 0,
         "rows": {},
     }
+    if universe is None:
+        errors.append("s3.universe_unavailable: no authoritative S3 universe is available")
+        return facts
+    rows = _protocol_list(s3_rows, "s3_rows", "s3.invalid", errors)
     seen: dict[str, int] = {}
-    for index, row in enumerate(_protocol_list(s3_rows, "s3_rows", errors)):
-        label = f"s3_rows[{index}]"
+    for index, row in enumerate(rows):
         if not isinstance(row, dict):
-            errors.append(f"{label} must be an object, got {type(row).__name__}")
+            errors.append(f"s3.invalid: s3_rows[{index}] must be an object, got {_shape(row)}")
             continue
         name = row.get("operation")
         if not isinstance(name, str) or not name:
-            errors.append(f"{label} has no operation name")
+            errors.append(f"s3.invalid: s3_rows[{index}] has no operation name")
             continue
         if name in seen:
             errors.append(
-                f"duplicate S3 operation {name!r} in s3_rows (indexes {seen[name]} and {index})"
+                f"s3.duplicate_identity: duplicate S3 operation identity in s3_rows (indexes "
+                f"{seen[name]} and {index})"
             )
             continue
         seen[name] = index
-        inventory_entry = S3_SOURCE_INVENTORY.get(name)
+        inventory_entry = inventory.get(name)
+        label = _s3_row_label(index, name, universe)
         if inventory_entry is None:
             errors.append(
-                f"{label}: operation {name!r} is not part of the pinned S3 source inventory"
+                f"s3.unknown_identity: {label} is not part of the authoritative S3 source universe"
             )
             continue
         expected_supported, expected_digest = inventory_entry
-        facts["documented"] += 1
-        facts["names"].append(name)
         supported = _csv_flag(row.get("cloudflare_supports_operation"))
         if supported is None:
             errors.append(
-                f"{label} {name}: cloudflare_supports_operation must be exactly 'true' or 'false', "
-                f"got {_safe_value(row.get('cloudflare_supports_operation'))}"
+                f"s3.flag_invalid: {label} cloudflare_supports_operation must be exactly 'true' or "
+                f"'false', got {_shape(row.get('cloudflare_supports_operation'))}"
             )
             continue
         if supported != expected_supported:
             errors.append(
-                f"{label} {name}: vendor support flag contradicts the pinned source inventory "
-                f"(expected {'true' if expected_supported else 'false'})"
+                f"s3.support_mismatch: {label} vendor support flag contradicts the authoritative source "
+                f"inventory (expected {'true' if expected_supported else 'false'})"
             )
             continue
-        if supported:
-            facts["vendor_supported"] += 1
-        else:
-            facts["provider_unsupported"] += 1
         for field in S3_REQUIRED_FIELDS:
             if not isinstance(row.get(field), str) or not row.get(field).strip():
-                errors.append(f"{label} {name}: {field} must be a non-empty string")
+                errors.append(f"s3.field_invalid: {label} {field} must be a non-empty string")
         for field in S3_FEATURE_COLUMNS:
             if not isinstance(row.get(field), str):
                 errors.append(
-                    f"{label} {name}: {field} must be a string of ' | ' separated items, got "
-                    f"{type(row.get(field)).__name__}"
+                    f"s3.field_invalid: {label} {field} must be a string of ' | ' separated items, got "
+                    f"{_shape(row.get(field))}"
                 )
         groups = row.get("feature_groups_reviewed")
         if isinstance(groups, str):
             for group in s3_feature_items(groups):
                 if not group.endswith(":"):
                     errors.append(
-                        f"{label} {name}: feature_groups_reviewed items must be group headers ending "
-                        f"with ':' (wire parameters and enum values belong in the feature columns), "
-                        f"got {_safe_value(group)}"
+                        f"s3.feature_group_invalid: {label} feature_groups_reviewed items must be group "
+                        "headers ending with ':'"
                     )
         if s3_feature_digest(row) != expected_digest:
-            errors.append(
-                f"{label} {name}: feature vectors do not match the pinned source inventory"
-            )
+            errors.append(f"s3.feature_mismatch: {label} feature vectors do not match the pinned source inventory")
         if row.get("source_name") != S3_SOURCE_NAME:
-            errors.append(
-                f"{label} {name}: source_name must be {S3_SOURCE_NAME!r}, got "
-                f"{_safe_value(row.get('source_name'))}"
-            )
+            errors.append(f"s3.source_mismatch: {label} source_name must be the pinned source name")
         if row.get("source_commit") != S3_SOURCE_COMMIT:
-            errors.append(f"{label} {name}: source_commit must be the pinned {S3_SOURCE_COMMIT!r}")
+            errors.append(f"s3.source_mismatch: {label} source_commit must be the pinned source commit")
         if row.get("source_sha256") != S3_SOURCE_SHA256:
-            errors.append(f"{label} {name}: source_sha256 must be the pinned {S3_SOURCE_SHA256!r}")
+            errors.append(f"s3.source_mismatch: {label} source_sha256 must be the pinned source digest")
         quote_ref = row.get("source_quote_ref")
         if isinstance(quote_ref, str) and (
             name not in quote_ref or "Feature column" not in quote_ref
         ):
             errors.append(
-                f"{label} {name}: source_quote_ref must point at this operation's Feature column"
+                f"s3.source_mismatch: {label} source_quote_ref must point at this operation's Feature column"
             )
         if row.get("official_compatibility_page") != S3_COMPAT_PAGE_URL:
-            errors.append(
-                f"{label} {name}: official_compatibility_page must be the pinned compatibility page"
-            )
+            errors.append(f"s3.source_mismatch: {label} official_compatibility_page must be the pinned page")
         aws_reference = row.get("aws_operation_reference")
         if not isinstance(aws_reference, str) or f"/API_{name}.html" not in aws_reference:
             errors.append(
-                f"{label} {name}: aws_operation_reference must reference API_{name}.html so an "
-                "unrecognized operation identity cannot pass"
+                f"s3.source_mismatch: {label} aws_operation_reference must reference the pinned operation "
+                "identity document"
             )
         status = row.get("verification_status")
         if status not in S3_VERIFICATION_STATUSES:
             errors.append(
-                f"{label} {name}: verification_status must be one of "
-                f"{', '.join(S3_VERIFICATION_STATUSES)}, got {_safe_value(status)}"
+                f"s3.status_mismatch: {label} verification_status must be one of "
+                f"{', '.join(S3_VERIFICATION_STATUSES)}, got {_shape(status)}"
             )
         if not supported:
             if status != "provider_unsupported":
                 errors.append(
-                    f"{label} {name}: provider-unsupported rows must keep "
+                    f"s3.status_mismatch: {label} provider-unsupported rows must keep "
                     "verification_status=provider_unsupported"
                 )
             if row.get("acceptance_target_level") != "n/a":
                 errors.append(
-                    f"{label} {name}: provider-unsupported rows are not FlareGo implementation "
+                    f"s3.target_mismatch: {label} provider-unsupported rows are not FlareGo implementation "
                     "targets and must not carry an acceptance target level"
                 )
             if row.get("test_prerequisites"):
                 errors.append(
-                    f"{label} {name}: provider-unsupported rows must not carry test prerequisites; "
-                    "they are vendor limitations, not pending FlareGo work"
+                    f"s3.target_mismatch: {label} provider-unsupported rows must not carry test prerequisites"
                 )
         else:
             if status != "awaiting_authorized_environment":
                 errors.append(
-                    f"{label} {name}: vendor-supported rows must stay "
+                    f"s3.status_mismatch: {label} vendor-supported rows must stay "
                     "verification_status=awaiting_authorized_environment"
                 )
             if row.get("acceptance_target_level") != "L2":
-                errors.append(f"{label} {name}: vendor-supported rows need an explicit L2 target")
+                errors.append(f"s3.target_mismatch: {label} vendor-supported rows need an explicit L2 target")
             if not row.get("test_prerequisites"):
-                errors.append(f"{label} {name}: vendor-supported rows need test prerequisites")
+                errors.append(f"s3.target_mismatch: {label} vendor-supported rows need test prerequisites")
         for field in ("flarego_implemented", "verified"):
             flag = _csv_flag(row.get(field))
             if flag is None:
-                errors.append(
-                    f"{label} {name}: {field} must be exactly 'true' or 'false', got "
-                    f"{_safe_value(row.get(field))}"
-                )
+                errors.append(f"s3.flag_invalid: {label} {field} must be exactly 'true' or 'false'")
             elif flag:
-                errors.append(f"{label} {name}: {field}=true is not supported by any pinned evidence")
+                errors.append(f"s3.evidence_invalid: {label} {field}=true is not supported by any pinned evidence")
         if row.get("feature_table_status") == "not_listed_in_pinned_table" and (
             row.get("vendor_supported_features") or row.get("vendor_unsupported_features")
         ):
             errors.append(
-                f"{label} {name}: feature_table_status says the pinned table lists no features, "
-                "so no feature names may be recorded"
+                f"s3.feature_mismatch: {label} feature_table_status says the pinned table lists no "
+                "features, so no feature names may be recorded"
             )
         if _csv_flag(row.get("verified")) is True:
             evidence = row.get("verification_evidence")
             if not isinstance(evidence, dict) or not evidence.get("environment") or not evidence.get("source"):
                 errors.append(
-                    f"{label} {name}: verification_evidence must be a structured record with "
+                    f"s3.evidence_invalid: {label} verification_evidence must be a structured record with "
                     "environment and source before verified can be true"
                 )
             else:
                 facts["verified"] += 1
         facts["rows"][name] = row
+    # Universe completeness: the input set must equal the authoritative universe.
+    missing = sorted(set(inventory) - set(seen))
+    extra = sorted(set(seen) - set(inventory))
+    if missing:
+        errors.append(
+            "s3.universe_incomplete: input S3 rows are missing authoritative identities "
+            f"({len(missing)}): {', '.join(missing)}"
+        )
+    if extra:
+        errors.append(
+            f"s3.universe_incomplete: input S3 rows contain {len(extra)} identities outside the "
+            "authoritative universe"
+        )
+    facts["documented"] = len(inventory)
+    facts["vendor_supported"] = sum(1 for supported, _ in inventory.values() if supported)
+    facts["provider_unsupported"] = len(inventory) - facts["vendor_supported"]
+    facts["names"] = sorted(inventory)
     return facts
 
 
@@ -2995,102 +3459,103 @@ def validate_protocols(
 ) -> list[str]:
     """Validate the independent protocol ledger. Read-only; returns readable errors.
 
-    One fact chain drives every derived status and count: trusted source and
-    context facts → unique typed identities → mutually linked authorization,
-    capture and schema matrix → in-scope independent acceptance → qualification,
-    status and counts. REST, S3, GraphQL and realtime keep separate denominators
-    and can never be summed into a combined coverage claim.
+    The pipeline resolves an authoritative universe, validates environment
+    authorization and entitlements, links one schema capture to one entitled
+    environment, requires same-environment plan and query evidence inside the
+    captured matrix, derives status/count/unit/source from those facts, and only
+    then compares the declared ledger. REST, S3, GraphQL and realtime keep
+    separate denominators and are never summed into a combined coverage claim.
     """
     if not isinstance(protocols, dict):
-        return [f"protocols ledger must be an object, got {type(protocols).__name__}"]
+        return [f"protocols.invalid: protocols ledger must be an object, got {_shape(protocols)}"]
     errors: list[str] = []
     if protocols.get("format") != PROTOCOLS_FORMAT:
         errors.append(
-            f"protocols.format must be {PROTOCOLS_FORMAT!r}, got {_safe_value(protocols.get('format'))}"
+            f"protocols.invalid: protocols.format must be {PROTOCOLS_FORMAT!r}, got "
+            f"{_shape(protocols.get('format'))}"
         )
     for key in FORBIDDEN_COMBINED_KEYS:
         if key in protocols:
             errors.append(
-                f"protocols must not declare a combined denominator {key!r}; REST, S3, GraphQL and "
-                "realtime stay separate and must not be summed"
+                f"protocols.combined_denominator: protocols must not declare {key!r}; REST, S3, GraphQL "
+                "and realtime stay separate and must not be summed"
             )
 
-    if context is not None:
-        raw_context = context
-    elif catalog_operations is not None:
-        raw_context = dict(_pinned_context(errors))
-        raw_context["operations"] = catalog_operations
-    else:
-        raw_context = _pinned_context(errors)
-    operations, rest_operations, s3_source = _validate_context(raw_context, errors)
-    catalog = _catalog_index(operations, errors)
+    universe = _protocol_universe(context, catalog_operations, errors)
+    catalog = _catalog_index(universe, errors)
 
-    # --- denominators -------------------------------------------------------
-    denominators = _protocol_list(protocols.get("denominators"), "protocols.denominators", errors)
+    # --- Stage 1: S3 facts and environments --------------------------------
+    facts = _s3_facts(s3_rows, universe, errors)
+    environments = _environment_facts(
+        _protocol_list(protocols.get("environments"), "protocols.environments", "qualification.environment_invalid", errors),
+        errors,
+    )
+    clearances, active_blockers = _blocker_facts(protocols, errors)
+
+    # --- denominators: declared claims to compare with derived facts -------
+    denominators = _protocol_list(
+        protocols.get("denominators"), "protocols.denominators", "denominator.invalid", errors
+    )
     seen_names: list[str] = []
     by_name: dict[str, dict] = {}
     for index, denominator in enumerate(denominators):
         label = f"protocols.denominators[{index}]"
-        entry = _protocol_dict(denominator, label, errors)
-        name = _protocol_text(entry.get("name"), f"{label}.name", errors)
+        entry = _protocol_dict(denominator, label, "denominator.invalid", errors)
+        name = _protocol_text(entry.get("name"), f"{label}.name", "denominator.invalid", errors)
         if name:
             if name in seen_names:
-                errors.append(f"{label}.name duplicate denominator {name!r}")
+                errors.append(f"denominator.duplicate: {label}.name duplicates an earlier denominator name")
             seen_names.append(name)
             by_name[name] = entry
             if any(word in name for word in FORBIDDEN_DENOMINATOR_NAMES):
                 errors.append(
-                    f"{label}.name {name!r} would combine protocols; keep separate denominators only"
+                    f"denominator.combined_name: {label}.name would combine protocols; keep separate "
+                    "denominators only"
                 )
-        _protocol_text(entry.get("unit"), f"{label}.unit", errors)
-        _protocol_text(entry.get("source"), f"{label}.source", errors)
+        unit = _protocol_text(entry.get("unit"), f"{label}.unit", "denominator.invalid", errors)
+        if name in DENOMINATOR_UNITS and unit and unit not in DENOMINATOR_UNITS[name]:
+            errors.append(
+                f"denominator.unit_mismatch: {label}.unit must be one of "
+                f"{', '.join(DENOMINATOR_UNITS[name])} for the {name} denominator, got {_shape(unit)}"
+            )
+        source = _protocol_text(entry.get("source"), f"{label}.source", "denominator.invalid", errors)
+        expected_source = (universe or {}).get("source_refs", {}).get(name)
+        if source and expected_source is not None and source != expected_source:
+            errors.append(
+                f"denominator.source_mismatch: {label}.source must match the authoritative source label "
+                "for this protocol"
+            )
         if entry.get("independent") is not True:
-            errors.append(f"{label}.independent must be true for every protocol denominator")
-        count = entry.get("count")
-        if count is None:
-            if entry.get("status") not in UNKNOWN_DENOMINATOR_STATUSES:
-                errors.append(
-                    f"{label}.count may only be null when the denominator status declares the "
-                    "universe unknown"
-                )
-        else:
-            _protocol_count(count, f"{label}.count", errors)
+            errors.append(f"denominator.invalid: {label}.independent must be true for every protocol denominator")
         if name in NON_REST_DENOMINATORS and entry.get("operation_ids"):
             for operation_id in _protocol_list(
-                entry.get("operation_ids"), f"{label}.operation_ids", errors
+                entry.get("operation_ids"), f"{label}.operation_ids", "denominator.invalid", errors
             ):
                 if not isinstance(operation_id, str) or not operation_id:
                     errors.append(
-                        f"{label}.operation_ids items must be non-empty strings, got "
-                        f"{_safe_value(operation_id)}"
+                        f"denominator.invalid: {label}.operation_ids items must be non-empty strings"
                     )
                 elif catalog is None or operation_id in catalog:
                     errors.append(
-                        f"{label}: REST operation {operation_id!r} must not be counted again in the "
-                        f"non-REST {name!r} denominator"
+                        f"denominator.rest_recount: {label} must not count a REST operation again in a "
+                        "non-REST denominator"
                     )
     for name in REQUIRED_DENOMINATOR_NAMES:
         if name not in by_name:
-            errors.append(f"protocols.denominators must include the {name!r} denominator exactly once")
+            errors.append(f"denominator.missing: protocols.denominators must include the {name!r} denominator")
 
-    # --- S3 ---------------------------------------------------------------
-    facts = _s3_facts(s3_rows, errors)
-    s3 = _protocol_dict(protocols.get("s3"), "protocols.s3", errors)
+    # --- S3 section and denominator consistency ---------------------------
+    s3 = _protocol_dict(protocols.get("s3"), "protocols.s3", "s3.invalid", errors)
     for field in ("documented", "vendor_supported", "provider_unsupported"):
         if s3.get(field) != facts[field]:
             errors.append(
-                f"protocols.s3.{field}={_safe_value(s3.get(field))} does not match the "
-                f"{facts[field]} derived from the S3 rows"
+                f"s3.count_mismatch: protocols.s3.{field} must equal the authoritative universe count "
+                f"{facts[field]}"
             )
-    if facts["provider_unsupported"] and not s3.get("provider_unsupported"):
-        errors.append(
-            "protocols.s3 must record the provider_unsupported count; those rows are vendor-"
-            "unsupported, not pending FlareGo work"
-        )
     if s3.get("verified") != facts["verified"]:
         errors.append(
-            f"protocols.s3.verified={_safe_value(s3.get('verified'))} does not match the "
-            f"{facts['verified']} rows with structured verification evidence"
+            f"s3.count_mismatch: protocols.s3.verified must equal the {facts['verified']} rows with "
+            "structured verification evidence"
         )
     s3_denominator = by_name.get("s3") or {}
     for field, derived in (
@@ -3100,17 +3565,10 @@ def validate_protocols(
     ):
         if s3_denominator.get(field) != derived:
             errors.append(
-                f"protocols.denominators s3.{field}={_safe_value(s3_denominator.get(field))} must "
-                f"match the {derived} derived from the S3 rows"
+                f"denominator.count_mismatch: protocols.denominators s3.{field} must equal the "
+                f"authoritative universe count {derived}"
             )
-    rest_denominator = by_name.get("rest") or {}
-    rest_count = rest_denominator.get("count")
-    if rest_operations is None or rest_count != rest_operations:
-        errors.append(
-            f"protocols.denominators rest.count={_safe_value(rest_count)} must match the pinned REST "
-            f"fact {rest_operations!r}"
-        )
-    source = _protocol_dict(s3.get("source"), "protocols.s3.source", errors)
+    source = _protocol_dict(s3.get("source"), "protocols.s3.source", "s3.invalid", errors)
     expected_source = {
         "name": S3_SOURCE_NAME,
         "commit": S3_SOURCE_COMMIT,
@@ -3120,244 +3578,263 @@ def validate_protocols(
     for field, expected in expected_source.items():
         if source.get(field) != expected:
             errors.append(
-                f"protocols.s3.source.{field} must be the pinned {_safe_value(expected)}, got "
-                f"{_safe_value(source.get(field))}"
+                f"s3.source_mismatch: protocols.s3.source.{field} must equal the frozen source contract"
             )
-    if s3_source:
-        for field, expected in (
-            ("sha256", S3_SOURCE_SHA256),
-            ("commit", S3_SOURCE_COMMIT),
-        ):
-            if s3_source.get(field) != expected:
-                errors.append(
-                    f"pinned snapshot s3 source {field} does not match the frozen source contract"
-                )
-    _protocol_text(s3.get("operations_file"), "protocols.s3.operations_file", errors)
-    if not _protocol_list(s3.get("limitations"), "protocols.s3.limitations", errors):
-        errors.append("protocols.s3.limitations must list the preserved vendor limitations")
-    k2 = _protocol_dict(s3.get("k2_stream_host"), "protocols.s3.k2_stream_host", errors)
-    host = _protocol_text(k2.get("host"), "protocols.s3.k2_stream_host.host", errors)
+    _protocol_text(s3.get("operations_file"), "protocols.s3.operations_file", "s3.invalid", errors)
+    if not _protocol_list(s3.get("limitations"), "protocols.s3.limitations", "s3.invalid", errors):
+        errors.append("s3.invalid: protocols.s3.limitations must list the preserved vendor limitations")
+    k2 = _protocol_dict(s3.get("k2_stream_host"), "protocols.s3.k2_stream_host", "s3.invalid", errors)
+    host = _protocol_text(k2.get("host"), "protocols.s3.k2_stream_host.host", "s3.invalid", errors)
     if host and host != K2_STREAM_HOST:
         errors.append(
-            f"protocols.s3.k2_stream_host.host must be exactly the pinned stream host "
-            f"{K2_STREAM_HOST!r}, got {_safe_value(host)}"
+            "s3.k2_host_mismatch: protocols.s3.k2_stream_host.host must equal the pinned K2 stream host "
+            "template exactly"
         )
     if k2.get("rest_denominator") is not True:
-        errors.append("protocols.s3.k2_stream_host.rest_denominator must be true; those operations are REST")
-    k2_operations = _protocol_list(
-        k2.get("rest_operations"), "protocols.s3.k2_stream_host.rest_operations", errors
-    )
-    for index, entry in enumerate(k2_operations):
+        errors.append("s3.invalid: protocols.s3.k2_stream_host.rest_denominator must be true; those operations are REST")
+    for index, entry in enumerate(
+        _protocol_list(k2.get("rest_operations"), "protocols.s3.k2_stream_host.rest_operations", "s3.invalid", errors)
+    ):
         label = f"protocols.s3.k2_stream_host.rest_operations[{index}]"
         _check_operation_reference(entry, label, catalog, errors)
         if isinstance(entry, dict) and entry.get("rest_denominator") is not True:
-            errors.append(f"{label}.rest_denominator must be true")
-    _protocol_text(k2.get("acceptance"), "protocols.s3.k2_stream_host.acceptance", errors)
+            errors.append(f"s3.invalid: {label}.rest_denominator must be true")
+    _protocol_text(k2.get("acceptance"), "protocols.s3.k2_stream_host.acceptance", "s3.invalid", errors)
 
-    # --- authorization, capture and acceptance facts ----------------------
-    environments = _environment_facts(
-        _protocol_list(protocols.get("environments"), "protocols.environments", errors), errors
-    )
-    clearances, active_blockers = _blocker_facts(protocols, errors)
-
-    graphql = _protocol_dict(protocols.get("graphql"), "protocols.graphql", errors)
-    _protocol_text(graphql.get("endpoint"), "protocols.graphql.endpoint", errors)
-    _protocol_text(graphql.get("transport"), "protocols.graphql.transport", errors)
-    status = graphql.get("review_status")
-    if status not in GRAPHQL_REVIEW_STATUSES:
-        errors.append(
-            f"protocols.graphql.review_status must be one of {', '.join(GRAPHQL_REVIEW_STATUSES)}, "
-            f"got {_safe_value(status)}"
-        )
+    # --- Stage 2/3: capture, plan evidence and query acceptance -----------
+    graphql = _protocol_dict(protocols.get("graphql"), "protocols.graphql", "qualification.graphql_invalid", errors)
+    _protocol_text(graphql.get("endpoint"), "protocols.graphql.endpoint", "qualification.graphql_invalid", errors)
+    _protocol_text(graphql.get("transport"), "protocols.graphql.transport", "qualification.graphql_invalid", errors)
     account_scope = graphql.get("account_scope")
     if account_scope not in ("unknown", "account", "user", "organization"):
         errors.append(
-            "protocols.graphql.account_scope must be unknown/account/user/organization; the scope "
-            "must be recorded even when it is not verified"
+            "qualification.graphql_invalid: protocols.graphql.account_scope must be "
+            "unknown/account/user/organization"
         )
-    if graphql.get("plan_limits") not in ("unverified", "verified", "unknown"):
+    plan_limits = graphql.get("plan_limits")
+    if plan_limits not in ("unverified", "verified", "unknown"):
         errors.append(
-            "protocols.graphql.plan_limits must record the plan-limit verification state "
-            "(unverified/verified/unknown)"
+            "qualification.graphql_invalid: protocols.graphql.plan_limits must record the plan-limit "
+            "verification state (unverified/verified/unknown)"
         )
     scope_blockers = _protocol_list(
-        graphql.get("account_scope_blockers"), "protocols.graphql.account_scope_blockers", errors
+        graphql.get("account_scope_blockers"),
+        "protocols.graphql.account_scope_blockers",
+        "qualification.graphql_invalid",
+        errors,
     )
     for blocker in scope_blockers:
         if not isinstance(blocker, str) or not blocker.strip():
-            errors.append("protocols.graphql.account_scope_blockers items must be non-empty strings")
-    capture = _capture_facts(graphql, environments, clearances, errors)
-    records = _capability_facts(graphql, environments, capture, errors)
+            errors.append(
+                "qualification.graphql_invalid: protocols.graphql.account_scope_blockers items must be "
+                "non-empty strings"
+            )
+    capture = _capture_facts(graphql, environments, errors)
+    plan = _plan_evidence_facts(graphql, environments, capture, errors)
+    records = _capability_facts(graphql, environments, capture, plan, errors)
+
+    if capture is None:
+        derived_status = "awaiting_authorized_schema"
+    elif not records:
+        derived_status = "awaiting_query_acceptance"
+    else:
+        derived_status = "verified"
+    declared_status = graphql.get("review_status")
+    if declared_status not in GRAPHQL_REVIEW_STATUSES:
+        errors.append(
+            f"qualification.graphql_invalid: protocols.graphql.review_status must be one of "
+            f"{', '.join(GRAPHQL_REVIEW_STATUSES)}, got {_shape(declared_status)}"
+        )
+    elif declared_status != derived_status:
+        reason = {
+            "awaiting_authorized_schema": "no validated schema_evidence.authorized_introspection capture",
+            "awaiting_query_acceptance": "capture validated but no plan-qualified capability_acceptance record",
+            "verified": "capture, plan evidence and at least one capability acceptance record are validated",
+        }[derived_status]
+        errors.append(
+            f"qualification.status_mismatch: protocols.graphql.review_status must match the validated fact "
+            f"state ({derived_status}: {reason})"
+        )
     verified = graphql.get("verified")
     if isinstance(verified, bool) or not isinstance(verified, int) or verified < 0:
-        errors.append("protocols.graphql.verified must be a non-negative integer, not a boolean")
+        errors.append("qualification.graphql_invalid: protocols.graphql.verified must be a non-negative integer")
         verified_count = None
     else:
         verified_count = verified
         if verified != len(records):
             errors.append(
-                f"protocols.graphql.verified={verified} must equal the {len(records)} independently "
-                "valid capability acceptance records"
+                f"qualification.verified_mismatch: protocols.graphql.verified must equal the "
+                f"{len(records)} independently valid capability acceptance records"
             )
-    if status == "verified":
-        if capture is None:
+    if plan is None:
+        if plan_limits == "verified":
             errors.append(
-                "protocols.graphql review_status=verified requires a valid structured "
-                "schema_evidence.authorized_introspection capture"
+                "qualification.plan_limits_mismatch: protocols.graphql.plan_limits must not claim verified "
+                "without validated plan evidence"
             )
-        if not records:
+    elif plan_limits != "verified":
+        errors.append(
+            "qualification.plan_limits_mismatch: protocols.graphql.plan_limits must be 'verified' when "
+            "plan evidence is validated"
+        )
+    if capture is None:
+        if graphql.get("plan_evidence") is not None:
             errors.append(
-                "protocols.graphql review_status=verified requires independent "
-                "protocols.graphql.capability_acceptance records; a schema capture alone does not "
-                "verify query or field capability"
-            )
-        if capture is None:
-            for field in ("dataset_count", "field_count"):
-                if graphql.get(field) is not None:
-                    errors.append(
-                        f"protocols.graphql.{field} must stay unknown (null) while the authorized "
-                        "schema capture is invalid or absent"
-                    )
-            if graphql.get("datasets"):
-                errors.append(
-                    "protocols.graphql.datasets must stay empty while the authorized schema capture "
-                    "is invalid or absent"
-                )
-        if account_scope == "unknown":
-            errors.append(
-                "protocols.graphql account_scope must be identified before the schema can be verified"
-            )
-        if scope_blockers:
-            errors.append(
-                "protocols.graphql.account_scope_blockers must be empty once the account scope is "
-                "identified and authorized"
-            )
-    elif status == "awaiting_query_acceptance":
-        if capture is None:
-            errors.append(
-                "protocols.graphql review_status=awaiting_query_acceptance requires a valid "
-                "structured schema_evidence.authorized_introspection capture"
-            )
-        if records or verified_count:
-            errors.append(
-                "protocols.graphql.capability_acceptance must stay empty and protocols.graphql.verified "
-                "must be 0 while awaiting query acceptance; a schema capture only proves field discovery"
-            )
-    else:
-        evidence = _protocol_dict(graphql.get("schema_evidence"), "protocols.graphql.schema_evidence", errors)
-        if evidence.get("authorized_introspection") is not None:
-            errors.append(
-                "protocols.graphql must not carry an introspection record while awaiting the "
-                "authorized schema"
+                "qualification.plan_evidence_invalid: protocols.graphql.plan_evidence must be null without a "
+                "validated schema capture"
             )
         if graphql.get("datasets"):
             errors.append(
-                "protocols.graphql.datasets must stay empty: no dataset or field name may be invented "
-                "without authorized introspection"
+                "qualification.graphql_invalid: protocols.graphql.datasets must stay empty without a "
+                "validated schema capture"
             )
         for field in ("dataset_count", "field_count"):
             if graphql.get(field) is not None:
                 errors.append(
-                    f"protocols.graphql.{field} must stay unknown (null) while awaiting the authorized "
-                    "schema; 0 would claim the schema was enumerated"
+                    f"qualification.graphql_invalid: protocols.graphql.{field} must stay unknown (null) "
+                    "without a validated schema capture"
                 )
-        if verified_count not in (0, None):
-            errors.append("protocols.graphql.verified must be 0 without authorized schema evidence")
-        if account_scope != "unknown" or graphql.get("plan_limits") not in ("unverified", "unknown"):
+        if account_scope != "unknown" or plan_limits not in ("unverified", "unknown"):
             errors.append(
-                "protocols.graphql account_scope and plan_limits must stay unknown/unverified while "
-                "the authorized schema and plan evidence are missing"
+                "qualification.graphql_invalid: protocols.graphql account_scope and plan_limits must stay "
+                "unknown/unverified while no authorized schema capture exists"
             )
-    if capture is not None:
+        if not scope_blockers:
+            errors.append(
+                "qualification.graphql_invalid: protocols.graphql.account_scope_blockers must record the "
+                "concrete account-scope gap while no capture exists"
+            )
+    else:
         declared_datasets = graphql.get("datasets")
         if not isinstance(declared_datasets, list):
             errors.append(
-                f"protocols.graphql.datasets must be a list, got {type(declared_datasets).__name__}"
+                f"qualification.graphql_invalid: protocols.graphql.datasets must be a list, got "
+                f"{_shape(declared_datasets)}"
             )
         else:
             declared_matrix: dict[str, list[str]] = {}
             for index, entry in enumerate(declared_datasets):
                 label = f"protocols.graphql.datasets[{index}]"
-                item = _protocol_dict(entry, label, errors)
-                dataset = _protocol_text(item.get("dataset"), f"{label}.dataset", errors)
-                fields = _protocol_list(item.get("fields"), f"{label}.fields", errors)
+                item = _protocol_dict(entry, label, "qualification.graphql_invalid", errors)
+                dataset = _protocol_text(
+                    item.get("dataset"), f"{label}.dataset", "qualification.graphql_invalid", errors
+                )
+                fields = _protocol_list(
+                    item.get("fields"), f"{label}.fields", "qualification.graphql_invalid", errors
+                )
                 clean: list[str] = []
                 for field in fields:
                     if not isinstance(field, str) or not field.strip():
-                        errors.append(f"{label}.fields items must be non-empty strings")
+                        errors.append(
+                            f"qualification.graphql_invalid: {label}.fields items must be non-empty strings"
+                        )
                         continue
                     clean.append(field)
                 if dataset:
                     declared_matrix[dataset] = clean
             if declared_matrix != {name: sorted(fields) for name, fields in capture["matrix"].items()}:
                 errors.append(
-                    "protocols.graphql.datasets must match the captured dataset/field matrix"
+                    "qualification.matrix_mismatch: protocols.graphql.datasets must match the captured "
+                    "dataset/field matrix exactly"
                 )
-            dataset_count = _protocol_count(
-                graphql.get("dataset_count"), "protocols.graphql.dataset_count", errors
+            for field, expected in (("dataset_count", capture["dataset_count"]), ("field_count", capture["field_count"])):
+                value = graphql.get(field)
+                if value is None:
+                    continue
+                count = _protocol_count(
+                    value, f"protocols.graphql.{field}", "qualification.graphql_invalid", errors
+                )
+                if count is not None and count != expected:
+                    errors.append(
+                        f"qualification.matrix_mismatch: protocols.graphql.{field} must equal the captured "
+                        f"{expected}"
+                    )
+        if scope_blockers:
+            errors.append(
+                "qualification.graphql_invalid: protocols.graphql.account_scope_blockers must be empty once "
+                "an authorized capture is validated"
             )
-            field_count = _protocol_count(
-                graphql.get("field_count"), "protocols.graphql.field_count", errors
-            )
-            if dataset_count is not None and dataset_count != capture["dataset_count"]:
-                errors.append(
-                    f"protocols.graphql.dataset_count={dataset_count} must equal the captured "
-                    f"{capture['dataset_count']} datasets"
-                )
-            if field_count is not None and field_count != capture["field_count"]:
-                errors.append(
-                    f"protocols.graphql.field_count={field_count} must equal the captured "
-                    f"{capture['field_count']} fields"
-                )
-    else:
-        for field in ("dataset_count", "field_count"):
-            if graphql.get(field) is not None:
-                _protocol_count(graphql.get(field), f"protocols.graphql.{field}", errors)
-    if not _protocol_list(graphql.get("acceptance_prerequisites"), "protocols.graphql.acceptance_prerequisites", errors):
-        errors.append("protocols.graphql.acceptance_prerequisites must list the GraphQL-specific gates")
-    for index, family in enumerate(_protocol_list(graphql.get("families"), "protocols.graphql.families", errors)):
+    if not _protocol_list(
+        graphql.get("acceptance_prerequisites"),
+        "protocols.graphql.acceptance_prerequisites",
+        "qualification.graphql_invalid",
+        errors,
+    ):
+        errors.append(
+            "qualification.graphql_invalid: protocols.graphql.acceptance_prerequisites must list the "
+            "GraphQL-specific gates"
+        )
+    for index, family in enumerate(
+        _protocol_list(graphql.get("families"), "protocols.graphql.families", "qualification.graphql_invalid", errors)
+    ):
         label = f"protocols.graphql.families[{index}]"
-        entry = _protocol_dict(family, label, errors)
+        entry = _protocol_dict(family, label, "qualification.graphql_invalid", errors)
         for field in ("family", "need", "owner_role", "phase", "target_level", "evidence_status"):
-            _protocol_text(entry.get(field), f"{label}.{field}", errors)
-        if not _protocol_list(entry.get("blockers"), f"{label}.blockers", errors):
-            errors.append(f"{label}.blockers must record the concrete evidence gap")
+            _protocol_text(entry.get(field), f"{label}.{field}", "qualification.graphql_invalid", errors)
+        if not _protocol_list(entry.get("blockers"), f"{label}.blockers", "qualification.graphql_invalid", errors):
+            errors.append(
+                f"qualification.graphql_invalid: {label}.blockers must record the concrete evidence gap"
+            )
 
+    # --- GraphQL denominator derived from the same facts -------------------
     graphql_denominator = by_name.get("graphql") or {}
     graphql_count = graphql_denominator.get("count")
-    if graphql_count is not None:
+    if graphql_count is None:
+        if graphql_denominator.get("status") not in (None, "awaiting_authorized_schema", "awaiting_query_acceptance"):
+            errors.append(
+                "denominator.status_mismatch: protocols.denominators graphql.status must describe the "
+                "validated fact state when the count is unknown"
+            )
+    else:
+        count = _protocol_count(
+            graphql_count, "protocols.denominators graphql.count", "denominator.count_mismatch", errors
+        )
         unit = graphql_denominator.get("unit")
         if unit not in GRAPHQL_SINGLE_UNITS:
             errors.append(
-                f"protocols.denominators graphql.count may only be declared for a single unit "
-                f"({', '.join(GRAPHQL_SINGLE_UNITS)}); mixed dataset/field totals must stay null"
+                "denominator.unit_mismatch: protocols.denominators graphql.count requires the single unit "
+                f"{'/'.join(GRAPHQL_SINGLE_UNITS)}; mixed dataset/field totals must stay null"
             )
-        elif capture is None or records == []:
+        elif capture is None:
             errors.append(
-                "protocols.denominators graphql.count must stay unknown (null) while no validated "
-                "capture and acceptance record exists"
+                "denominator.count_mismatch: protocols.denominators graphql.count requires a validated "
+                "schema capture"
             )
-        else:
+        elif count is not None:
             expected = capture["dataset_count"] if unit == "datasets" else capture["field_count"]
-            if graphql_count != expected:
+            if count != expected:
                 errors.append(
-                    f"protocols.denominators graphql.count={_safe_value(graphql_count)} must equal the "
+                    f"denominator.count_mismatch: protocols.denominators graphql.count must equal the "
                     f"validated {unit} count {expected}"
                 )
+        if graphql_denominator.get("status") != derived_status:
+            errors.append(
+                "denominator.status_mismatch: protocols.denominators graphql.status must match the "
+                "validated fact state"
+            )
+    # REST denominator count comes from the authoritative universe.
+    rest_denominator = by_name.get("rest") or {}
+    if universe is not None and rest_denominator.get("count") != universe["rest_operations"]:
+        errors.append(
+            f"denominator.count_mismatch: protocols.denominators rest.count must equal the authoritative "
+            f"REST universe count {universe['rest_operations']}"
+        )
+    if rest_denominator.get("status") not in (None,):
+        errors.append("denominator.status_mismatch: the rest denominator is a known universe and must not declare a status")
 
     # --- realtime ---------------------------------------------------------
-    realtime = _protocol_dict(protocols.get("realtime"), "protocols.realtime", errors)
+    realtime = _protocol_dict(protocols.get("realtime"), "protocols.realtime", "realtime.invalid", errors)
     protocols_seen: list[str] = []
     realtime_verified = 0
     for index, entry in enumerate(
-        _protocol_list(realtime.get("protocols"), "protocols.realtime.protocols", errors)
+        _protocol_list(realtime.get("protocols"), "protocols.realtime.protocols", "realtime.invalid", errors)
     ):
         label = f"protocols.realtime.protocols[{index}]"
-        item = _protocol_dict(entry, label, errors)
-        protocol_id = _protocol_text(item.get("protocol_id"), f"{label}.protocol_id", errors)
+        item = _protocol_dict(entry, label, "realtime.invalid", errors)
+        protocol_id = _protocol_text(item.get("protocol_id"), f"{label}.protocol_id", "realtime.invalid", errors)
         if protocol_id:
             if protocol_id in protocols_seen:
-                errors.append(f"{label}.protocol_id duplicate {protocol_id!r}")
+                errors.append(f"realtime.duplicate: {label}.protocol_id duplicates an earlier protocol id")
             protocols_seen.append(protocol_id)
         for field in (
             "connection_protocol",
@@ -3368,141 +3845,143 @@ def validate_protocols(
             "target_level",
             "enumeration_status",
         ):
-            _protocol_text(item.get(field), f"{label}.{field}", errors)
-        sessions = _protocol_list(item.get("session_operations"), f"{label}.session_operations", errors)
+            _protocol_text(item.get(field), f"{label}.{field}", "realtime.invalid", errors)
+        sessions = _protocol_list(item.get("session_operations"), f"{label}.session_operations", "realtime.invalid", errors)
         if not sessions:
-            errors.append(f"{label}.session_operations must reference the catalog session operations")
+            errors.append(f"realtime.invalid: {label}.session_operations must reference the catalog session operations")
         for session_index, session in enumerate(sessions):
             _check_operation_reference(
                 session, f"{label}.session_operations[{session_index}]", catalog, errors
             )
-        if not _protocol_list(item.get("blockers"), f"{label}.blockers", errors):
-            errors.append(f"{label}.blockers must record the concrete protocol evidence gap")
+        if not _protocol_list(item.get("blockers"), f"{label}.blockers", "realtime.invalid", errors):
+            errors.append(f"realtime.invalid: {label}.blockers must record the concrete protocol evidence gap")
         if item.get("verified") not in (0, None):
-            errors.append(f"{label}.verified must stay 0 without protocol evidence")
+            errors.append(f"realtime.invalid: {label}.verified must stay 0 without protocol evidence")
         else:
             realtime_verified += int(item.get("verified") or 0)
     realtime_denominator = by_name.get("realtime") or {}
-    if realtime_denominator.get("count") is not None and realtime_verified == 0:
+    if realtime_denominator.get("count") is not None:
         errors.append(
-            "protocols.denominators realtime.count must stay unknown (null) while no realtime "
-            "acceptance record exists"
+            "denominator.count_mismatch: protocols.denominators realtime.count must stay unknown (null); the "
+            "realtime universe is not enumerated and no acceptance record exists"
+        )
+    if realtime_denominator.get("status") != "awaiting_protocol_evidence":
+        errors.append(
+            "denominator.status_mismatch: protocols.denominators realtime.status must be "
+            "awaiting_protocol_evidence"
+        )
+    if realtime_denominator.get("unit") != REALTIME_UNIT:
+        errors.append(
+            f"denominator.unit_mismatch: protocols.denominators realtime.unit must be {REALTIME_UNIT!r}"
         )
 
     # --- P1/P2 admission --------------------------------------------------
-    admission = _protocol_dict(protocols.get("p1_p2_admission"), "protocols.p1_p2_admission", errors)
+    admission = _protocol_dict(protocols.get("p1_p2_admission"), "protocols.p1_p2_admission", "admission.invalid", errors)
     lists: dict[str, list[str]] = {}
     for field in ("p1_new", "p1_existing_compat", "p2_candidates"):
         identifiers: list[str] = []
         for index, entry in enumerate(
-            _protocol_list(admission.get(field), f"protocols.p1_p2_admission.{field}", errors)
+            _protocol_list(admission.get(field), f"protocols.p1_p2_admission.{field}", "admission.invalid", errors)
         ):
             label = f"protocols.p1_p2_admission.{field}[{index}]"
-            item = _protocol_dict(entry, label, errors)
+            item = _protocol_dict(entry, label, "admission.invalid", errors)
             for required in ADMISSION_FIELDS:
                 if required not in item:
-                    errors.append(f"{label}.{required} is required")
-            operation_id = _check_operation_reference(item, label, catalog, errors)
-            if operation_id:
+                    errors.append(f"admission.invalid: {label}.{required} is required")
+            operation_id = item.get("operation_id")
+            if _check_operation_reference(item, label, catalog, errors) and isinstance(operation_id, str):
                 if operation_id in identifiers:
-                    errors.append(f"{label}: duplicate operationId {operation_id!r} in {field}")
+                    errors.append(f"admission.duplicate: {label}.operation_id duplicates an earlier entry")
                 identifiers.append(operation_id)
             if item.get("risk") not in ADMISSION_RISKS:
                 errors.append(
-                    f"{label}.risk must be one of {', '.join(ADMISSION_RISKS)}, got "
-                    f"{_safe_value(item.get('risk'))}"
+                    f"admission.invalid: {label}.risk must be one of {', '.join(ADMISSION_RISKS)}, got "
+                    f"{_shape(item.get('risk'))}"
                 )
             if item.get("risk_review") != "pending_manual_review":
                 errors.append(
-                    f"{label}.risk_review must stay 'pending_manual_review'; a proposed HTTP-method "
-                    "hint is not a reviewed risk decision"
+                    f"admission.risk_review: {label}.risk_review must stay 'pending_manual_review'; a "
+                    "proposed HTTP-method hint is not a reviewed risk decision"
                 )
             method = item.get("method")
             read_like = method in ("GET", "HEAD")
             for boundary in ADMISSION_BOUNDARY_FIELDS:
-                _protocol_text(item.get(boundary), f"{label}.{boundary}", errors)
+                _protocol_text(item.get(boundary), f"{label}.{boundary}", "admission.invalid", errors)
             if not isinstance(item.get("confirmation_required"), bool):
-                errors.append(f"{label}.confirmation_required must be a boolean")
+                errors.append(f"admission.invalid: {label}.confirmation_required must be a boolean")
             if not isinstance(item.get("auto_replay"), bool):
-                errors.append(f"{label}.auto_replay must be a boolean")
+                errors.append(f"admission.invalid: {label}.auto_replay must be a boolean")
             elif item.get("auto_replay"):
                 errors.append(
-                    f"{label}.auto_replay must stay false; no reviewed write policy exists and an "
-                    "unknown write must never be automatically replayed"
+                    f"admission.no_replay: {label}.auto_replay must stay false; no reviewed write policy "
+                    "exists and an unknown write must never be automatically replayed"
                 )
             if not isinstance(item.get("readback_required"), bool):
-                errors.append(f"{label}.readback_required must be a boolean")
+                errors.append(f"admission.invalid: {label}.readback_required must be a boolean")
             if read_like:
                 if item.get("confirmation_required") is True:
-                    errors.append(f"{label}: read operations must not require a write confirmation")
+                    errors.append(f"admission.invalid: {label} read operations must not require a write confirmation")
                 if item.get("readback_required") is True:
-                    errors.append(f"{label}: read operations do not need a write read-back step")
+                    errors.append(f"admission.invalid: {label} read operations do not need a write read-back step")
             else:
                 if item.get("confirmation_required") is not True:
-                    errors.append(
-                        f"{label}: write or unknown semantics require explicit user confirmation"
-                    )
+                    errors.append(f"admission.invalid: {label} write or unknown semantics require explicit confirmation")
                 if item.get("readback_required") is not True:
-                    errors.append(
-                        f"{label}: write or unknown semantics require a cloud read-back step"
-                    )
+                    errors.append(f"admission.invalid: {label} write or unknown semantics require a cloud read-back step")
                 if item.get("risk") == "low":
-                    errors.append(
-                        f"{label}: write or unknown semantics must not be proposed as low risk"
-                    )
-            _protocol_text(item.get("source"), f"{label}.source", errors)
+                    errors.append(f"admission.invalid: {label} write or unknown semantics must not be proposed as low risk")
+            _protocol_text(item.get("source"), f"{label}.source", "admission.invalid", errors)
             if item.get("proposed") is not True:
-                errors.append(f"{label}.proposed must be true; this is a proposal, not an approval")
+                errors.append(f"admission.invalid: {label}.proposed must be true; this is a proposal, not an approval")
         lists[field] = identifiers
-    counts = _protocol_dict(admission.get("counts"), "protocols.p1_p2_admission.counts", errors)
+    counts = _protocol_dict(admission.get("counts"), "protocols.p1_p2_admission.counts", "admission.invalid", errors)
     for field in ("p1_new", "p1_existing_compat", "p2_candidates"):
         if counts.get(field) != len(lists.get(field, [])):
             errors.append(
-                f"protocols.p1_p2_admission.counts.{field}={_safe_value(counts.get(field))} does not "
-                f"match the {len(lists.get(field, []))} listed operations"
+                f"admission.count_mismatch: protocols.p1_p2_admission.counts.{field} must match the "
+                f"{len(lists.get(field, []))} listed operations"
             )
     overlap = sum(
-        1
-        for operation_id in set(lists.get("p1_existing_compat", [])) & set(lists.get("p2_candidates", []))
+        1 for operation_id in set(lists.get("p1_existing_compat", [])) & set(lists.get("p2_candidates", []))
     )
     if counts.get("overlap") != overlap:
         errors.append(
-            f"protocols.p1_p2_admission.counts.overlap={_safe_value(counts.get('overlap'))} does not "
-            f"match the computed overlap {overlap}"
+            f"admission.count_mismatch: protocols.p1_p2_admission.counts.overlap must equal the computed "
+            f"overlap {overlap}"
         )
     union = len(set().union(*[set(value) for value in lists.values()])) if lists else 0
     if counts.get("unique") != union:
         errors.append(
-            f"protocols.p1_p2_admission.counts.unique={_safe_value(counts.get('unique'))} does not "
-            f"match the computed unique operation count {union}; the lists overlap and must not be summed"
+            f"admission.count_mismatch: protocols.p1_p2_admission.counts.unique must equal the computed "
+            f"unique operation count {union}; the lists overlap and must not be summed"
         )
     if counts.get("sum_of_lists") != sum(len(value) for value in lists.values()):
         errors.append(
-            f"protocols.p1_p2_admission.counts.sum_of_lists={_safe_value(counts.get('sum_of_lists'))} "
-            "does not match the total number of listed entries"
+            "admission.count_mismatch: protocols.p1_p2_admission.counts.sum_of_lists must equal the total "
+            "number of listed entries"
         )
-    policy = _protocol_dict(admission.get("policy"), "protocols.p1_p2_admission.policy", errors)
+    policy = _protocol_dict(admission.get("policy"), "protocols.p1_p2_admission.policy", "admission.invalid", errors)
     if policy.get("runtime_allowlist") is not False:
         errors.append(
-            "protocols.p1_p2_admission.policy.runtime_allowlist must be false; admission is a review "
-            "proposal, not a runtime allowlist"
+            "admission.runtime_allowlist: protocols.p1_p2_admission.policy.runtime_allowlist must be false; "
+            "admission is a review proposal, not a runtime allowlist"
         )
 
-    # --- qualification gating from the same validated facts ----------------
+    # --- Stage 4: qualification gating from the same validated facts -------
     if active_blockers:
         if verified_count:
             errors.append(
-                "protocols.graphql.verified must be 0 while global qualification blockers are active: "
-                + ", ".join(active_blockers)
+                "qualification.blocker_active: protocols.graphql.verified must be 0 while global "
+                f"qualification blockers are active ({len(active_blockers)} active)"
             )
         if s3.get("verified"):
             errors.append(
-                "protocols.s3.verified must be 0 while global qualification blockers are active: "
-                + ", ".join(active_blockers)
+                "qualification.blocker_active: protocols.s3.verified must be 0 while global qualification "
+                "blockers are active"
             )
         if realtime_verified:
             errors.append(
-                "realtime verified counts must be 0 while global qualification blockers are active: "
-                + ", ".join(active_blockers)
+                "qualification.blocker_active: realtime verified counts must be 0 while global qualification "
+                "blockers are active"
             )
     return errors
