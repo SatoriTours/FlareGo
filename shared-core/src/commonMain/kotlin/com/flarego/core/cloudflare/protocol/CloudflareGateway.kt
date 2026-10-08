@@ -53,7 +53,9 @@ class CloudflareGateway(
         while (true) {
             if (retries >= policy.retry.maxRetries) throw rateLimited()
             val waitMs = suggestedWaitMs(response) ?: backoffMs(retries)
-            if (spentMs + waitMs > policy.retry.maxWaitMs) throw rateLimited()
+            // `spentMs` never exceeds the budget, so the remaining budget and the
+            // cumulative comparison are both overflow-free.
+            if (waitMs > policy.retry.maxWaitMs - spentMs) throw rateLimited()
             sleeper(waitMs)
             spentMs += waitMs
             retries++
@@ -68,21 +70,27 @@ class CloudflareGateway(
      * shorter backoff, so a request is never sent earlier than the provider asked.
      */
     private fun suggestedWaitMs(response: HttpResponse): Long? {
-        val values = response.headers.entries.filter { it.key.equals(RETRY_AFTER, ignoreCase = true) }.flatMap { it.value }
-        if (values.isEmpty()) return null
-        if (values.size > 1) throw rateLimited()
+        val entries = response.headers.entries.filter { it.key.equals(RETRY_AFTER, ignoreCase = true) }
+        if (entries.isEmpty()) return null
+        val values = entries.flatMap { it.value }
+        // A header that is present with no usable value is not a missing header: it
+        // fails closed instead of falling back to the shorter backoff.
+        if (values.isEmpty() || values.size > 1) throw rateLimited()
         val raw = values.single().trim()
         if (raw.isEmpty()) throw rateLimited()
-        val seconds = raw.toLongOrNull()
-        if (seconds != null) {
-            if (seconds < 0) throw rateLimited()
-            // Anything beyond the safety limit is over budget; never overflow.
+        if (raw.all { it in '0'..'9' }) {
+            // delta-seconds is strictly a sequence of digits: no sign, no spaces.
+            val seconds = raw.toLongOrNull() ?: return ReadRetryPolicy.MAX_READ_WAIT_MS + 1
             if (seconds > ReadRetryPolicy.MAX_READ_WAIT_MS / 1000) return ReadRetryPolicy.MAX_READ_WAIT_MS + 1
             return seconds * 1000
         }
         val epochMs = parseHttpDate(raw) ?: throw rateLimited()
-        val waitMs = epochMs - nowMs()
-        return if (waitMs < 0) 0L else waitMs
+        val now = nowMs()
+        if (epochMs <= now) return 0L
+        // Saturating difference: an overflowing subtraction is far beyond the budget,
+        // never a negative "past date" that would send immediately.
+        val waitMs = epochMs - now
+        return if (waitMs < 0) ReadRetryPolicy.MAX_READ_WAIT_MS + 1 else waitMs
     }
 
     private fun backoffMs(retries: Int): Long = if (retries == 0) 1_000L else 2_000L

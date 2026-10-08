@@ -92,32 +92,37 @@ data class ActionRegistration(
     }
 
     /**
-     * True when [method] and the relative [path] (query allowed, ignored for
-     * matching) match this registration's method and template. Dangerous
-     * structures — a missing leading slash, a protocol-relative or absolute URL,
-     * backslash, fragment, control characters, empty or extra placeholders and
-     * traversal in raw or encoded form — never match, so they are rejected before
-     * the transport is called. Legitimate opaque identifiers are matched verbatim.
+     * True when [method] and the relative [path] (query included) match this
+     * registration's method and template.
+     *
+     * The whole request target is validated before the transport is ever called:
+     * a missing leading slash, a protocol-relative or absolute URL, backslash,
+     * fragment (raw or encoded), control characters, invalid percent escapes,
+     * malformed UTF-8, traversal and dangerous structures in the raw text *and* in
+     * every decoded stage are rejected. The decoded path must not cross a
+     * placeholder boundary, so an encoded slash cannot turn one placeholder into
+     * extra segments. Legitimate opaque identifiers — encoded Unicode, emoji,
+     * combining marks, literal percent signs, encoded spaces and query separators —
+     * are matched and passed through verbatim.
      */
     internal fun matches(method: String, path: String): Boolean {
         if (method != this.method) return false
-        val relative = path.substringBefore('?')
-        if (relative.length < 2 || relative.length > MAX_MATCH_LENGTH) return false
-        if (!relative.startsWith("/") || relative.startsWith("//")) return false
-        for (character in relative) {
-            if (character.code !in 0x21..0x7E || character == '\\' || character == '#') return false
-        }
-        if (!hasValidEscapes(relative) || hasDangerousStructure(relative)) return false
+        if (!requestShapeIsSafe(path)) return false
+        val rawPath = path.substringBefore('?')
         val templateSegments = pathTemplate.split('/').drop(1)
-        val actualSegments = relative.split('/').drop(1)
-        if (templateSegments.size != actualSegments.size) return false
-        for ((template, actual) in templateSegments.zip(actualSegments)) {
+        val rawSegments = rawPath.split('/').drop(1)
+        if (templateSegments.size != rawSegments.size) return false
+        for ((template, actual) in templateSegments.zip(rawSegments)) {
             if (template.startsWith("{") && template.endsWith("}")) {
                 if (actual.isEmpty() || actual.contains('{') || actual.contains('}')) return false
             } else if (template != actual) {
                 return false
             }
         }
+        // `requestShapeIsSafe` already rejected invalid UTF-8, so no decoded stage
+        // simply means the raw path is its own fully decoded form.
+        val decodedPath = decodedStages(rawPath)?.lastOrNull() ?: rawPath
+        if (decodedPath.split('/').drop(1).size != templateSegments.size) return false
         return true
     }
 
@@ -194,6 +199,39 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
     )
 }
 
+/** Validates the complete request target: raw text, escapes and every decoded stage. */
+private fun requestShapeIsSafe(request: String): Boolean {
+    if (request.length < 2 || request.length > MAX_MATCH_LENGTH) return false
+    if (!request.startsWith("/") || request.startsWith("//")) return false
+    for (character in request) {
+        if (character.code !in 0x21..0x7E || character == '\\' || character == '#') return false
+    }
+    if (!hasValidEscapes(request)) return false
+    val stages = decodedStages(request) ?: return false
+    return stages.all { stageIsSafe(it) }
+}
+
+/**
+ * Structural safety of one decoded stage. Control code points (C0, DEL, C1) and a
+ * fragment are rejected everywhere; the path part must stay a single rooted path
+ * without `//`, backslash or `.`/`..` segments; a query value may legitimately
+ * contain encoded separators (`/`, `+`, `=`, space), so only controls and
+ * backslashes are rejected there.
+ */
+private fun stageIsSafe(stage: String): Boolean {
+    for (character in stage) {
+        if (character == '#' || character.isIsoControlCodePoint()) return false
+    }
+    val pathPart = stage.substringBefore('?')
+    val queryPart = stage.substringAfter('?', "")
+    if (!pathPart.startsWith("/") || pathPart.contains("//") || pathPart.contains('\\')) return false
+    if (pathPart.split('/').any { it == "." || it == ".." }) return false
+    if (queryPart.contains('\\')) return false
+    return true
+}
+
+private fun Char.isIsoControlCodePoint(): Boolean = code <= 0x1F || code in 0x7F..0x9F
+
 private fun hasValidEscapes(value: String): Boolean {
     var index = 0
     while (index < value.length) {
@@ -209,39 +247,82 @@ private fun hasValidEscapes(value: String): Boolean {
 }
 
 /**
- * Decodes every valid escape level and reports whether any level contains a
- * dangerous structure (`//`, backslash, `.`/`..` segments). A literal percent is
- * copied verbatim, so an opaque identifier is never rejected for containing one.
+ * Every decoded stage of [value], or null when a stage is not valid UTF-8.
+ *
+ * Only valid escapes are decoded, so a literal percent owned by an opaque
+ * identifier is copied verbatim; each round strictly shrinks the string, and the
+ * bound below only guards against a pathological input.
  */
-private fun hasDangerousStructure(path: String): Boolean {
-    var current = path
+private fun decodedStages(value: String): List<String>? {
+    val stages = mutableListOf<String>()
+    var current = value
     var rounds = 0
     while (true) {
-        if (current.contains("//") || current.contains('\\')) return true
-        if (current.split('/').any { it == "." || it == ".." }) return true
-        val next = decodeValidEscapes(current) ?: return false
-        if (next == current) return false
-        current = next
-        if (++rounds > path.length) return true
+        val bytes = decodeValidEscapesToBytes(current) ?: return stages
+        if (!bytesAreValidUtf8(bytes)) return null
+        current = bytes.decodeToString()
+        stages += current
+        if (++rounds > value.length) return null
     }
 }
 
-private fun decodeValidEscapes(value: String): String? {
-    val decoded = StringBuilder(value.length)
-    var index = 0
+/** Decodes one level of valid escapes into bytes; null when nothing was decoded. */
+private fun decodeValidEscapesToBytes(value: String): ByteArray? {
+    var buffer = ByteArray(value.length + 8)
+    var size = 0
     var changed = false
+    fun push(byte: Byte) {
+        if (size == buffer.size) buffer = buffer.copyOf(buffer.size * 2)
+        buffer[size++] = byte
+    }
+    var index = 0
     while (index < value.length) {
         val character = value[index]
         if (character == '%' && index + 2 < value.length && value[index + 1].isHexDigit() && value[index + 2].isHexDigit()) {
-            decoded.append(value.substring(index + 1, index + 3).toInt(16).toChar())
+            push(value.substring(index + 1, index + 3).toInt(16).toByte())
             index += 3
             changed = true
         } else {
-            decoded.append(character)
+            for (byte in character.toString().encodeToByteArray()) push(byte)
             index++
         }
     }
-    return if (changed) decoded.toString() else null
+    return if (changed) buffer.copyOf(size) else null
+}
+
+/**
+ * Strict UTF-8: rejects stray continuation bytes, overlong encodings, surrogate
+ * code points and anything above U+10FFFF. A legal multi-byte character is opaque
+ * identity, and its continuation bytes are never inspected as individual controls.
+ */
+private fun bytesAreValidUtf8(bytes: ByteArray): Boolean {
+    var index = 0
+    while (index < bytes.size) {
+        val first = bytes[index].toInt() and 0xFF
+        val extra =
+            when {
+                first < 0x80 -> 0
+                first in 0xC2..0xDF -> 1
+                first in 0xE0..0xEF -> 2
+                first in 0xF0..0xF4 -> 3
+                else -> return false
+            }
+        if (index + extra >= bytes.size) return false
+        for (offset in 1..extra) {
+            if ((bytes[index + offset].toInt() and 0xFF) !in 0x80..0xBF) return false
+        }
+        if (extra >= 1) {
+            val second = bytes[index + 1].toInt() and 0xFF
+            when (first) {
+                0xE0 -> if (second !in 0xA0..0xBF) return false
+                0xED -> if (second !in 0x80..0x9F) return false
+                0xF0 -> if (second !in 0x90..0xBF) return false
+                0xF4 -> if (second !in 0x80..0x8F) return false
+            }
+        }
+        index += extra + 1
+    }
+    return true
 }
 
 private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'

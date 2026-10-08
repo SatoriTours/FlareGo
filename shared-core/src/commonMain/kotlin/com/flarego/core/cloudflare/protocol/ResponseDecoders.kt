@@ -70,7 +70,9 @@ object ResponseDecoders {
             409 -> CloudFailure(CloudFailureCode.CONFLICT, "资源状态已变化，请刷新后重试")
             429 -> CloudFailure(CloudFailureCode.RATE_LIMITED, "请求过于频繁，请稍后重试", uncertain = writing)
             in 500..599 -> CloudFailure(CloudFailureCode.UNAVAILABLE, "服务暂不可用，请稍后重试", uncertain = writing)
-            else -> CloudFailure(CloudFailureCode.INVALID_RESPONSE, "响应状态无法识别（HTTP $status），请稍后重试")
+            // An unrecognized status after a write is not evidence that it was not
+            // executed, so it stays uncertain for a write.
+            else -> CloudFailure(CloudFailureCode.INVALID_RESPONSE, "响应状态无法识别（HTTP $status），请稍后重试", uncertain = writing)
         }
     }
 }

@@ -62,7 +62,9 @@ class CloudflareSession(
             throw CloudException("$label 已被接受但尚未完成；结果待核对，请刷新后检查，勿重复提交", true)
         }
         if (ResponseDecoders.isExplicitlyEmpty(response.status)) {
-            throw CloudException("$label 返回了无内容状态（HTTP ${response.status}），请刷新后重试")
+            // An explicit no-content status cannot be expressed by this legacy API; for
+            // a write it is not evidence that nothing was executed.
+            throw CloudException("$label 返回了无内容状态（HTTP ${response.status}），请刷新后核对", writing)
         }
         val root =
             try {

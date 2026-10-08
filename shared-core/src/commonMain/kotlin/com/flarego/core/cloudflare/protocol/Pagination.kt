@@ -82,7 +82,9 @@ object Pagination {
         val total = info?.countOrNull("total_count")
         val cursor = info?.cursorOrNull()
         if (cursor.isNullOrBlank()) return PageMetadata(null, total)
-        if (cursor in strategy.seen) throw repeatedCursor()
+        // The cursor being requested right now is part of the loop detection, so a
+        // provider that keeps echoing it cannot drive an endless loop.
+        if (cursor == strategy.cursor || cursor in strategy.seen) throw repeatedCursor()
         return PageMetadata(PageToken.Cursor(cursor), total)
     }
 
@@ -94,13 +96,37 @@ object Pagination {
         val hasNext =
             when {
                 totalPages != null -> strategy.page.toLong() < totalPages
-                total != null && perPage != null -> strategy.page.toLong() * perPage < total
+                total != null && perPage != null -> pageIsNotTheLast(strategy.page.toLong(), perPage, total)
                 else -> false
             }
-        return PageMetadata(if (hasNext) PageToken.Number(strategy.page + 1) else null, total)
+        if (!hasNext) return PageMetadata(null, total)
+        if (strategy.page == Int.MAX_VALUE) {
+            // The provider says there is more, but the next page number cannot be
+            // represented: a stable response error, never a fabricated page.
+            throw malformedMetadata()
+        }
+        return PageMetadata(PageToken.Number(strategy.page + 1), total)
     }
 
-    private fun JsonObject.resultInfo(): JsonObject? = this["result_info"] as? JsonObject
+    /**
+     * Whether a further page exists, without multiplying page numbers that could
+     * overflow: `page * perPage < total` is evaluated with division and remainder.
+     */
+    private fun pageIsNotTheLast(page: Long, perPage: Long, total: Long): Boolean {
+        val wholePages = total / perPage
+        if (page < wholePages) return true
+        return page == wholePages && total % perPage != 0L
+    }
+
+    /**
+     * The provider metadata object. Absent is `null`; anything present that is not
+     * an object (an array, a scalar, JSON null) is a stable response error instead
+     * of being silently treated as missing.
+     */
+    private fun JsonObject.resultInfo(): JsonObject? {
+        val element = this["result_info"] ?: return null
+        return element as? JsonObject ?: throw malformedMetadata()
+    }
 
     /** A present non-negative integer count, or null when absent. Malformed values are rejected. */
     private fun JsonObject.countOrNull(key: String): Long? {

@@ -420,7 +420,9 @@ class CloudflareGatewayTest {
 
             val write = assertFailsWith<CloudFailure>(status.toString()) { ResponseDecoders.envelope(HttpResponse(status, "{}"), writing = true) }
             assertEquals(code, write.code, status.toString())
-            val expectedUncertain = status >= 500 || status == 429
+            // A write is uncertain whenever the outcome is rate limited, unavailable or
+            // unrecognized; a definite client-side rejection stays certain.
+            val expectedUncertain = code == CloudFailureCode.RATE_LIMITED || code == CloudFailureCode.UNAVAILABLE || code == CloudFailureCode.INVALID_RESPONSE
             assertEquals(expectedUncertain, write.uncertain, "writing uncertainty for $status")
         }
     }
@@ -595,6 +597,199 @@ class CloudflareGatewayTest {
         assertEquals(1, transport.requests.size)
         assertEquals("GET", transport.requests.single().method)
         assertEquals("/accounts/account-1", transport.requests.single().path)
+    }
+
+
+    // ---------------------------------------------------------------- R1 request shape
+
+    @Test
+    fun unsafeRequestShapesAreRejectedBeforeAnyCall() = runTest {
+        val unsafe =
+            listOf(
+                "/accounts/a?x=1#fragment",
+                "/accounts/a%23fragment",
+                "/accounts/a%2Fb",
+                "/accounts/a%C0%AF",
+                "/accounts/a?cursor=%GG",
+                "/accounts/a%5c..%5c..",
+                "/accounts/%252e%252e/x",
+                "/accounts/a%00",
+                "/accounts/a%7f",
+                "/accounts/a%c2%80",
+            )
+        val transport = ScriptedTransport(listOf(ok()))
+        val gateway = gateway(transport, ActionPolicies.registry)
+        for (path in unsafe) {
+            val failure = assertFailsWith<CloudFailure>(path) { gateway.send("accounts-account-details", HttpRequest("GET", path)) }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+            assertNull(failure.cause, path)
+        }
+        assertEquals(0, transport.requests.size, "no unsafe request shape may reach the transport")
+    }
+
+    @Test
+    fun controlCodePointsAreRejectedAtEveryDepthAndPositionBeforeAnyCall() = runTest {
+        val transport = ScriptedTransport(listOf(ok()))
+        val gateway = gateway(transport, ActionPolicies.registry)
+        var attempts = 0
+        var rejected = 0
+        for (code in (0..31).toList() + (127..159).toList()) {
+            var value = code.toChar().toString()
+            repeat(5) {
+                value = encodePath(value)
+                for (path in listOf("/accounts/a$value", "/accounts/a?cursor=$value")) {
+                    attempts++
+                    try {
+                        gateway.send("accounts-account-details", HttpRequest("GET", path))
+                    } catch (failure: CloudFailure) {
+                        assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, path)
+                        assertNull(failure.cause, path)
+                        rejected++
+                    }
+                }
+            }
+        }
+        assertEquals(650, attempts)
+        assertEquals(650, rejected)
+        assertEquals(0, transport.requests.size)
+    }
+
+    @Test
+    fun encodedUnicodeAndOpaqueIdentitiesPassUnchangedThroughTheGateway() = runTest {
+        for (value in listOf("é", "汉字", "🙂", "e\u0301", "id%GG", "x y", "a+b")) {
+            val path = "/accounts/${encodePath(value)}"
+            val transport = ScriptedTransport(listOf(ok()))
+            assertEquals(
+                200,
+                gateway(transport, ActionPolicies.registry).send("accounts-account-details", HttpRequest("GET", path)).status,
+                value,
+            )
+            assertEquals(path, transport.requests.single().path, value)
+        }
+        val cursor = "/accounts/a?cursor=${encodePath("next+/=汉字%GG")}"
+        val transport = ScriptedTransport(listOf(ok()))
+        assertEquals(200, gateway(transport, ActionPolicies.registry).send("accounts-account-details", HttpRequest("GET", cursor)).status)
+        assertEquals(cursor, transport.requests.single().path)
+    }
+
+    // ---------------------------------------------------------------- R2 pagination shape
+
+    @Test
+    fun presentButUnusableResultInfoIsAStableError() {
+        for (body in listOf("""{"result_info":[]}""", """{"result_info":3}""", """{"result_info":null}""", """{"result_info":"x"}""")) {
+            val failure =
+                assertFailsWith<CloudFailure>(body) {
+                    Pagination.decode(Json.parseToJsonElement(body).jsonObject, PaginationStrategy.Number())
+                }
+            assertEquals(CloudFailureCode.INVALID_RESPONSE, failure.code, body)
+        }
+        val cursorFailure =
+            assertFailsWith<CloudFailure> {
+                Pagination.decode(Json.parseToJsonElement("""{"result_info":3}""").jsonObject, PaginationStrategy.Cursor())
+            }
+        assertEquals(CloudFailureCode.INVALID_RESPONSE, cursorFailure.code)
+    }
+
+    @Test
+    fun theCurrentCursorAlsoCountsAsARepeatedCursor() {
+        val root = Json.parseToJsonElement("""{"result_info":{"cursor":"again"}}""").jsonObject
+        val failure = assertFailsWith<CloudFailure> { Pagination.decode(root, PaginationStrategy.Cursor("again")) }
+        assertEquals(CloudFailureCode.INVALID_RESPONSE, failure.code)
+    }
+
+    @Test
+    fun paginationArithmeticNeverOverflowsOrInventsAPage() {
+        val huge =
+            Json.parseToJsonElement("""{"result_info":{"total_count":9223372036854775807,"per_page":9223372036854775807}}""").jsonObject
+        assertNull(Pagination.decode(huge, PaginationStrategy.Number(2)).next, "a multiplied page budget must not overflow into a next page")
+        val maxPage = Json.parseToJsonElement("""{"result_info":{"total_pages":2147483648}}""").jsonObject
+        val failure = assertFailsWith<CloudFailure> { Pagination.decode(maxPage, PaginationStrategy.Number(Int.MAX_VALUE)) }
+        assertEquals(CloudFailureCode.INVALID_RESPONSE, failure.code, "unrepresentable provider metadata is a stable response error")
+        val more = Json.parseToJsonElement("""{"result_info":{"total_pages":3}}""").jsonObject
+        assertEquals(PageToken.Number(2), Pagination.decode(more, PaginationStrategy.Number(1)).next)
+        val manyItems = Json.parseToJsonElement("""{"result_info":{"total_count":101,"per_page":50}}""").jsonObject
+        assertEquals(PageToken.Number(3), Pagination.decode(manyItems, PaginationStrategy.Number(2)).next)
+        val exactlyConsumed = Json.parseToJsonElement("""{"result_info":{"total_count":100,"per_page":50}}""").jsonObject
+        assertNull(Pagination.decode(exactlyConsumed, PaginationStrategy.Number(2)).next)
+    }
+
+    // ---------------------------------------------------------------- R3 retry arithmetic and header shapes
+
+    @Test
+    fun retryBudgetAndDateArithmeticNeverOverflow() = runTest {
+        val sleeps = mutableListOf<Long>()
+        val transport = ScriptedTransport(listOf(HttpResponse(429, "{}").withHeader("Retry-After", "date"), ok()))
+        val failure =
+            assertFailsWith<CloudFailure> {
+                gateway(transport, registry(registration("retry-read")), sleeps, now = { Long.MIN_VALUE }, parseDate = { 1L })
+                    .send("retry-read", HttpRequest("GET", "$account/d1/database"))
+            }
+        assertEquals(CloudFailureCode.RATE_LIMITED, failure.code)
+        assertEquals(1, transport.requests.size)
+        assertEquals(0, sleeps.size)
+
+        val cumulative =
+            ScriptedTransport(
+                listOf(
+                    HttpResponse(429, "{}").withHeader("Retry-After", "1"),
+                    HttpResponse(429, "{}").withHeader("Retry-After", "date"),
+                    ok(),
+                )
+            )
+        val cumulativeSleeps = mutableListOf<Long>()
+        val cumulativeFailure =
+            assertFailsWith<CloudFailure> {
+                gateway(cumulative, registry(registration("retry-read")), cumulativeSleeps, now = { 0L }, parseDate = { Long.MAX_VALUE })
+                    .send("retry-read", HttpRequest("GET", "$account/d1/database"))
+            }
+        assertEquals(CloudFailureCode.RATE_LIMITED, cumulativeFailure.code)
+        assertEquals(2, cumulative.requests.size)
+        assertEquals(listOf(1000L), cumulativeSleeps, "the cumulative budget must not overflow into an early send")
+    }
+
+    @Test
+    fun presentButEmptyRetryHeaderIsNotMissingAndSignedSecondsAreNotDeltaSeconds() = runTest {
+        val empty = ScriptedTransport(listOf(HttpResponse(429, "{}".encodeToByteArray(), mapOf("Retry-After" to emptyList())), ok()))
+        val emptySleeps = mutableListOf<Long>()
+        val emptyFailure =
+            assertFailsWith<CloudFailure> {
+                gateway(empty, registry(registration("retry-read")), emptySleeps).send("retry-read", HttpRequest("GET", "$account/d1/database"))
+            }
+        assertEquals(CloudFailureCode.RATE_LIMITED, emptyFailure.code)
+        assertEquals(1, empty.requests.size)
+        assertEquals(0, emptySleeps.size, "a present but empty header is not a missing header")
+
+        val signed = ScriptedTransport(listOf(HttpResponse(429, "{}").withHeader("Retry-After", "+1"), ok()))
+        val signedSleeps = mutableListOf<Long>()
+        val signedFailure =
+            assertFailsWith<CloudFailure> {
+                gateway(signed, registry(registration("retry-read")), signedSleeps).send("retry-read", HttpRequest("GET", "$account/d1/database"))
+            }
+        assertEquals(CloudFailureCode.RATE_LIMITED, signedFailure.code)
+        assertEquals(1, signed.requests.size)
+        assertEquals(0, signedSleeps.size, "a signed value is not a valid delta-seconds value")
+    }
+
+    // ---------------------------------------------------------------- R4 write uncertainty
+
+    @Test
+    fun unrecognizedWriteStatusesStayUncertain() {
+        for (status in listOf(302, 418)) {
+            val write = assertFailsWith<CloudFailure>(status.toString()) { ResponseDecoders.envelope(HttpResponse(status, "{}"), writing = true) }
+            assertEquals(CloudFailureCode.INVALID_RESPONSE, write.code, status.toString())
+            assertTrue(write.uncertain, "an unrecognized status after a write must stay uncertain")
+            assertNull(write.cause, status.toString())
+            val read = assertFailsWith<CloudFailure> { ResponseDecoders.envelope(HttpResponse(status, "{}"), writing = false) }
+            assertEquals(CloudFailureCode.INVALID_RESPONSE, read.code)
+            assertFalse(read.uncertain)
+        }
+    }
+
+    @Test
+    fun legacyEmptyWriteIsNotReportedAsDefinitelyFailed() = runTest {
+        val api = CloudflareSession(Connection("live", "Live", "account-1"), ScriptedTransport(listOf(HttpResponse(204, ""))))
+        val failure = assertFailsWith<CloudException> { api.delete("zone", "record") }
+        assertTrue(failure.uncertain, "204 is not evidence that a write was not executed")
     }
 
     private fun registry(vararg registrations: ActionRegistration): ActionRegistry = ActionRegistry.of(*registrations)
