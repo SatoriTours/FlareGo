@@ -7,6 +7,8 @@ import com.flarego.core.cloudflare.protocol.ActionSemantics
 import com.flarego.core.model.*
 import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,6 +23,64 @@ internal class ExecutionClaim {
 }
 
 internal class AdmittedConfirmation(val plan: ChangePlan, val claim: ExecutionClaim, val owner: Boolean)
+
+/** Immutable coordination state, published with compare-and-set so it is shared immediately. */
+@OptIn(ExperimentalAtomicApi::class)
+internal data class CoordinationState(
+    val resources: Map<String, Mutex>,
+    val metadataGates: Map<String, Mutex>,
+    val invalidated: Set<String>,
+    val generations: Map<String, Long>,
+)
+
+/**
+ * The one coordination domain of an issuer: resource locks, metadata latches,
+ * invalidation and generations are shared by every engine that uses this issuer, so
+ * no engine can hold a different lock or miss another engine's invalidation.
+ */
+@OptIn(ExperimentalAtomicApi::class)
+internal class CoordinationDomain {
+    private val current =
+        AtomicReference(
+            CoordinationState(
+                resources = emptyMap(),
+                metadataGates = emptyMap(),
+                invalidated = emptySet(),
+                generations = emptyMap(),
+            )
+        )
+
+    /** One stable lock per key, published with compare-and-set. */
+    fun stableLock(key: String, metadata: Boolean): Mutex {
+        while (true) {
+            val now = current.load()
+            val table = if (metadata) now.metadataGates else now.resources
+            table[key]?.let { return it }
+            val created = Mutex()
+            val next =
+                if (metadata) now.copy(metadataGates = now.metadataGates + (key to created))
+                else now.copy(resources = now.resources + (key to created))
+            if (current.compareAndSet(now, next)) return created
+        }
+    }
+
+    /** Immediate invalidation with a generation bump; visible to every engine at once. */
+    fun invalidate(connectionId: String) {
+        while (true) {
+            val now = current.load()
+            val next =
+                now.copy(
+                    invalidated = now.invalidated + connectionId,
+                    generations = now.generations + (connectionId to (now.generations[connectionId] ?: 0L) + 1L),
+                )
+            if (current.compareAndSet(now, next)) return
+        }
+    }
+
+    fun isInvalidated(connectionId: String): Boolean = connectionId in current.load().invalidated
+
+    fun generationOf(connectionId: String): Long = current.load().generations[connectionId] ?: 0L
+}
 
 /** Trusted wall clock for plan validity. */
 fun interface OperationClock {
@@ -93,6 +153,9 @@ class ChangePlans(
     private val clock: OperationClock,
     private val ids: OperationIds,
 ) {
+    /** Shared by every engine built on this issuer. */
+    internal val coordination = CoordinationDomain()
+
     private val gate = Mutex()
     private val prepared = mutableMapOf<String, ChangePlan>()
     private val issued = linkedMapOf<String, Issued>()

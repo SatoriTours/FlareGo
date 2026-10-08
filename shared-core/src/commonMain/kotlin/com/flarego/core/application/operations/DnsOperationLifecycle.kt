@@ -139,7 +139,12 @@ class DnsOperationLifecycle(
             if (live.requestFingerprint != command.requestFingerprint) throw inputChanged()
             if (!resolver.isLive(zone, live.credentialRevision)) throw invalidInputFailure()
         }
-        return coordinator.execute(confirmed) { receipts.write(command, beforeSend) }
+        // The coordinator composes this guard with the original generation/expiry/context
+        // checks and hands the composed closure to the adapter, which calls it right
+        // before the typed send.
+        return coordinator.executeGuarded(confirmed, beforeSend) { composed ->
+            receipts.write(command, composed)
+        }
     }
 
     /**

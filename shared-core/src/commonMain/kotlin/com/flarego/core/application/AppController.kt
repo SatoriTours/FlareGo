@@ -195,10 +195,14 @@ class AppController(
 
     private fun OperationTask.toOperation(connection: Connection): Operation {
         val summary = OperationTaskPersistence.summaryFor(this)
-        val operation = Operation(summary.id, connection.id, summary.title, summary.status, summary.detail)
-        store.putOperation(operation)
+        // The coordinator already persisted this canonical summary under its own metadata
+        // latch, so the UI must not write a second lifecycle row (that would bypass the
+        // deletion latch and could revive a removed operation). Publish only when the
+        // original selection is still current.
+        // Refresh only: no second lifecycle row is written here, so a deleted task cannot
+        // be recreated by a late result.
         mutable.update { it.copy(operations = store.operations()) }
-        return operation
+        return Operation(summary.id, connection.id, summary.title, summary.status, summary.detail)
     }
 
     suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation {

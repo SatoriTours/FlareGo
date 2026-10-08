@@ -4,20 +4,9 @@ import com.flarego.core.model.*
 import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
 import com.flarego.core.ports.OperationStore
-import kotlin.concurrent.atomics.AtomicReference
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-
-/** Immutable coordinator state, replaced by compare-and-set so invalidation is immediate. */
-@OptIn(ExperimentalAtomicApi::class)
-private data class CoordinatorState(
-    val resources: Map<String, Mutex>,
-    val metadataGates: Map<String, Mutex>,
-    val invalidated: Set<String>,
-    val generations: Map<String, Long>,
-)
 
 /**
  * What a trusted write adapter observed. [Unknown] exists for information that was
@@ -62,16 +51,9 @@ class OperationCoordinator(
     private val appScope: CoroutineScope,
     private val storeDispatcher: CoroutineDispatcher,
 ) {
-    @OptIn(ExperimentalAtomicApi::class)
-    private val state =
-        AtomicReference(
-            CoordinatorState(
-                resources = emptyMap(),
-                metadataGates = emptyMap(),
-                invalidated = emptySet(),
-                generations = emptyMap(),
-            )
-        )
+    /** Resource locks, metadata latches, invalidation and generations all live in the
+     * issuer's coordination domain, so sibling engines share exactly one set. */
+    private val coordination = plans.coordination
 
     /**
      * Runs the confirmed write at most once and returns the authoritative task.
@@ -81,27 +63,56 @@ class OperationCoordinator(
      * or poison a result. The owner starts an app-scope job (a cancelled UI waiter
      * never cancels it); every later caller shares that job's result.
      */
-    suspend fun execute(plan: ConfirmedPlan, write: suspend () -> ExecutionReceipt): OperationTask {
+    suspend fun execute(plan: ConfirmedPlan, write: suspend () -> ExecutionReceipt): OperationTask =
+        executeGuarded(plan, {}, { beforeSend -> beforeSend(); write() })
+
+    /**
+     * Same as [execute], plus an operation-bound [guard] that the write adapter must call
+     * immediately before its typed send (after any suspending session acquisition). The
+     * coordinator composes it with the original generation/expiry/context checks.
+     */
+    internal suspend fun executeGuarded(
+        plan: ConfirmedPlan,
+        guard: () -> Unit,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): OperationTask {
         val admitted = plans.admit(plan) ?: throw invalidInputFailure()
         if (admitted.owner) {
             appScope.launch {
-                val result = attempt(admitted.plan, write)
+                // The shared outcome always completes, even when this engine is cancelled
+                // while the write is in flight, so parked waiters can never hang.
+                val result =
+                    try {
+                        attempt(admitted.plan, guard, write)
+                    } catch (cancelled: CancellationException) {
+                        Result.failure(cancelled)
+                    } catch (failure: Throwable) {
+                        Result.failure(failure)
+                    }
                 admitted.claim.outcome.complete(result)
             }
         }
         return admitted.claim.outcome.await().getOrThrow()
     }
 
-    private suspend fun attempt(plan: ChangePlan, write: suspend () -> ExecutionReceipt): Result<OperationTask> =
+    private suspend fun attempt(
+        plan: ChangePlan,
+        guard: () -> Unit,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): Result<OperationTask> =
         try {
-            Result.success(runConfirmed(plan, write))
+            Result.success(runConfirmed(plan, guard, write))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
             Result.failure(failure)
         }
 
-    private suspend fun runConfirmed(confirmed: ChangePlan, write: suspend () -> ExecutionReceipt): OperationTask {
+    private suspend fun runConfirmed(
+        confirmed: ChangePlan,
+        guard: () -> Unit,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): OperationTask {
         return resourceLock(confirmed).withLock {
             val generation = generationOf(connectionIdOf(confirmed.scope))
             requireAuthorized(confirmed, generation)
@@ -113,9 +124,15 @@ class OperationCoordinator(
             // Re-check immediately before the write, not only at the entry: an
             // invalidation that happened while this call was queued must be seen here.
             requireAuthorized(confirmed, generation)
+            // Bound to this execution: generation/expiry/context first, then the
+            // operation guard, evaluated right before the typed send.
+            val beforeSend = {
+                requireAuthorized(confirmed, generation)
+                guard()
+            }
             val receipt =
                 try {
-                    write()
+                    write(beforeSend)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Throwable) {
@@ -149,8 +166,12 @@ class OperationCoordinator(
     suspend fun reconcile(taskId: String, read: suspend (OperationTask) -> Reconciliation): OperationTask {
         val task = storeOnIo { store.get(taskId) } ?: throw invalidInputFailure()
         requireLiveMetadata(task)
+        val generation = generationOf(task.connectionId)
         val outcome = read(task)
         requireLiveMetadata(task)
+        // The read may have suspended: the original generation and the row must still hold.
+        if (isInvalidated(task.connectionId) || generationOf(task.connectionId) != generation) throw invalidInputFailure()
+        if (storeOnIo { store.get(taskId) } == null) throw invalidInputFailure()
         val updated =
             when (outcome) {
                 is Reconciliation.Matched -> {
@@ -188,7 +209,11 @@ class OperationCoordinator(
             if (!gate.tryLock()) continue
             try {
                 if (isInvalidated(connection.id)) continue
+                val generation = generationOf(connection.id)
                 for (task in store.list(connection.id)) {
+                    // The list callback may have invalidated this connection: re-check the
+                    // original generation before any put.
+                    if (isInvalidated(connection.id) || generationOf(connection.id) != generation) break
                     if (!context.isLive(task.scope, null)) continue
                     val updated =
                         when (task.state) {
@@ -209,18 +234,7 @@ class OperationCoordinator(
     }
 
     /** Immediately invalidates confirmations, sends and metadata updates for a connection. */
-    @OptIn(ExperimentalAtomicApi::class)
-    fun invalidateConnection(connectionId: String) {
-        while (true) {
-            val current = state.load()
-            val next =
-                current.copy(
-                    invalidated = current.invalidated + connectionId,
-                    generations = current.generations + (connectionId to (current.generations[connectionId] ?: 0L) + 1L),
-                )
-            if (state.compareAndSet(current, next)) return
-        }
-    }
+    fun invalidateConnection(connectionId: String) = coordination.invalidate(connectionId)
 
     /**
      * Runs [remove] under the same latch that guards metadata updates, on the store
@@ -240,24 +254,13 @@ class OperationCoordinator(
         val key =
             plan.resourceRef?.let { "${it.kind}:${it.externalId}:${plan.scope}" }
                 ?: "${plan.actionKey}:${plan.scope}"
-        return stableLock(key) { it.resources }
+        return stableLock(key, metadata = false)
     }
 
     /** One stable lock per key, published with compare-and-set so all callers share it. */
-    @OptIn(ExperimentalAtomicApi::class)
-    private fun stableLock(key: String, table: (CoordinatorState) -> Map<String, Mutex>): Mutex {
-        while (true) {
-            val current = state.load()
-            table(current)[key]?.let { return it }
-            val created = Mutex()
-            val next =
-                if (table(current) === current.resources) current.copy(resources = current.resources + (key to created))
-                else current.copy(metadataGates = current.metadataGates + (key to created))
-            if (state.compareAndSet(current, next)) return created
-        }
-    }
+    private fun stableLock(key: String, metadata: Boolean): Mutex = coordination.stableLock(key, metadata)
 
-    private fun metadataGate(connectionId: String): Mutex = stableLock(connectionId) { it.metadataGates }
+    private fun metadataGate(connectionId: String): Mutex = stableLock(connectionId, metadata = true)
 
     private suspend fun <T> withMetadataGate(connectionId: String, block: suspend () -> T): T =
         metadataGate(connectionId).withLock {
@@ -265,11 +268,9 @@ class OperationCoordinator(
             block()
         }
 
-    @OptIn(ExperimentalAtomicApi::class)
-    private fun isInvalidated(connectionId: String): Boolean = connectionId in state.load().invalidated
+    private fun isInvalidated(connectionId: String): Boolean = coordination.isInvalidated(connectionId)
 
-    @OptIn(ExperimentalAtomicApi::class)
-    private fun generationOf(connectionId: String): Long = state.load().generations[connectionId] ?: 0L
+    private fun generationOf(connectionId: String): Long = coordination.generationOf(connectionId)
 
     private suspend fun <T> storeOnIo(block: suspend () -> T): T = withContext(storeDispatcher) { block() }
 
@@ -321,7 +322,10 @@ class OperationCoordinator(
     }
 
     private fun advance(task: OperationTask, state: TaskState): OperationTask {
-        val now = maxOf(clock.nowMs().coerceAtLeast(0), task.updatedAtMs)
+        val read = clock.nowMs()
+        // A negative clock is refused; a small backward step stays monotonic.
+        if (read < 0) throw invalidInputFailure()
+        val now = maxOf(read, task.updatedAtMs)
         return task.copy(
             state = state,
             safeDetail = OperationTaskPersistence.summaryDetailFor(state),
