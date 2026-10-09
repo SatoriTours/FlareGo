@@ -55,18 +55,32 @@ class OperationCoordinatorTest {
     }
 
     private class Resolver(
-        var live: LiveOperationContext?,
+        initial: LiveOperationContext?,
         private val liveConnections: List<Connection> = emptyList(),
     ) : OperationContextResolver {
         private val lock = Any()
-        val invalidatedScopes = mutableListOf<CloudScope>()
-        override fun current(): LiveOperationContext? = synchronized(lock) { live }
+        private var currentContext: LiveOperationContext? = initial
+        private val revoked = mutableListOf<CloudScope>()
+
+        override fun current(): LiveOperationContext? = synchronized(lock) { currentContext }
         override fun liveConnections() = liveConnections
+
+        /** Controlled mutation: the backing field is never touched directly. */
+        fun setLive(context: LiveOperationContext?) {
+            synchronized(lock) { currentContext = context }
+        }
+
+        fun invalidateScope(scope: CloudScope) {
+            synchronized(lock) { revoked += scope }
+        }
+
+        fun revokedScopes(): List<CloudScope> = synchronized(lock) { revoked.toList() }
+
         override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
             val context: LiveOperationContext?
             synchronized(lock) {
-                if (scope in invalidatedScopes) return false
-                context = live
+                if (scope in revoked) return false
+                context = currentContext
             }
             val current = context ?: return credentialRevision != null
             if (credentialRevision != null && current.credentialRevision != credentialRevision) return false
@@ -197,7 +211,7 @@ class OperationCoordinatorTest {
         // Two confirms in this case: four real ids for its local factory.
         val queue = mutableListOf("plan-1", "confirm-1", "plan-2", "confirm-2")
         val plans = ChangePlans(resolver, { clock }, { queue.removeFirst() })
-        val coordinator = OperationCoordinator(plans, store, resolver, { clock }, CoroutineScope(Dispatchers.Unconfined), Dispatchers.Unconfined)
+        val coordinator = OperationCoordinator(plans, store, resolver, { clock }, newScope(), Dispatchers.Unconfined)
         val confirmation = confirmOne(plans)
         // The trusted clock has moved past the 300 s window.
         clock = 1_000 + ChangePlans.TTL_MS
@@ -208,7 +222,7 @@ class OperationCoordinatorTest {
         // A changed credential revision after confirmation is refused too.
         clock = 1_000L
         val fresh = confirmOne(plans)
-        resolver.live = live(revision = 9)
+        resolver.setLive(live(revision = 9))
         assertFailsWith<CloudFailure> { coordinator.execute(fresh) { writes++; ExecutionReceipt.Completed() } }
         assertEquals(0, writes)
     }
@@ -360,7 +374,7 @@ class OperationCoordinatorTest {
         store.put(task("partial", TaskState.PARTIAL))
         store.put(task("succeeded", TaskState.SUCCEEDED))
         val plans = ChangePlans(resolver, { 1_000 }, { "plan-1" })
-        val coordinator = OperationCoordinator(plans, store, resolver, { 5_000 }, CoroutineScope(Dispatchers.Unconfined), Dispatchers.Unconfined)
+        val coordinator = OperationCoordinator(plans, store, resolver, { 5_000 }, newScope(), Dispatchers.Unconfined)
         val recovered = coordinator.recoverPending().associateBy { it.id }
         assertEquals(TaskState.ACTION_REQUIRED, recovered.getValue("queued").state)
         assertEquals(TaskState.UNKNOWN, recovered.getValue("running").state)
@@ -453,10 +467,10 @@ class OperationCoordinatorTest {
     @Test
     fun aChangedInputScopeOrRevisionBeforeTheWriteProducesNoWrite() = runTest {
         for (mutate in listOf<(Resolver) -> Unit>(
-            { it.live = live(fp = "c".repeat(64)) },
-            { it.live = live(revision = 99) },
-            { it.live = live(scope = AccountScope("connection-1", "account-1")) },
-            { it.invalidatedScopes += zone },
+            { it.setLive(live(fp = "c".repeat(64))) },
+            { it.setLive(live(revision = 99)) },
+            { it.setLive(live(scope = AccountScope("connection-1", "account-1"))) },
+            { it.invalidateScope(zone) },
         )) {
             val resolver = Resolver(live(), listOf(liveConnection))
             val store = TestStore()
@@ -752,7 +766,9 @@ class OperationCoordinatorTest {
             assertEquals("Cloudflare 操作", repeatSummary.title)
             assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
             assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
-            assertEquals(returned.id, store.tasks[returned.id]?.id, "the stored row must keep the original identity")
+            // The initial row and the row after the repeat must both be the same whole object.
+            assertEquals(stored, store.tasks[returned.id], "the stored row must be unchanged by the repeat")
+            assertEquals(stored.safeDetail, store.tasks[returned.id]?.safeDetail)
         }
     }
 
@@ -1127,7 +1143,7 @@ class OperationCoordinatorTest {
         assertFalse(contender.isCompleted, "the contender must be parked")
         assertEquals(0, writes)
         try {
-            resolver.live = live(revision = 99)
+            resolver.setLive(live(revision = 99))
         } finally {
             release.countDown()
         }
