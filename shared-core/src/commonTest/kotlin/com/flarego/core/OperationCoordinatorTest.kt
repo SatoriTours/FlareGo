@@ -817,12 +817,8 @@ class OperationCoordinatorTest {
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
         val holderScope = newScope(Dispatchers.Default)
-        extraScopes += holderScope
-        ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
         val waitingScope = newScope(queue)
-        extraScopes += waitingScope
-        ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
         val waitingEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, waitingScope, Dispatchers.Unconfined)
         val one = confirmOne(plans, zone)
@@ -864,8 +860,6 @@ class OperationCoordinatorTest {
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-a", "confirm-a", "plan-b", "confirm-b"))
         val app = newScope(Dispatchers.Default)
-        extraScopes += app
-        ownedJobs.add(app.coroutineContext[kotlinx.coroutines.Job]!!)
         val engineA = engine(plans, resolver, store, app, Dispatchers.Default)
         val engineB = engine(plans, resolver, store, app, Dispatchers.Default)
         val refA = ResourceRef(zone, "dns_record", "rec-1")
@@ -973,19 +967,15 @@ class OperationCoordinatorTest {
 
     @Test
     fun theSecondOwnerContinuesIntoTheResourceLockBeforeAuthorityChanges() = runTest {
-        var now = 1_000L
+        val now = java.util.concurrent.atomic.AtomicLong(1_000L)
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
-        val plans = ChangePlans(resolver, { now }, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
+        val plans = ChangePlans(resolver, { now.get() }, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
         val holderScope = newScope(Dispatchers.Default)
-        extraScopes += holderScope
-        ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
-        val holderEngine = OperationCoordinator(plans, store, resolver, { now }, holderScope, Dispatchers.Unconfined)
+        val holderEngine = OperationCoordinator(plans, store, resolver, { now.get() }, holderScope, Dispatchers.Unconfined)
         val waitingScope = newScope(queue)
-        extraScopes += waitingScope
-        ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
-        val waitingEngine = OperationCoordinator(plans, store, resolver, { now }, waitingScope, Dispatchers.Unconfined)
+        val waitingEngine = OperationCoordinator(plans, store, resolver, { now.get() }, waitingScope, Dispatchers.Unconfined)
         val blocker = confirmOne(plans, zone)
         val waiting = confirmOne(plans, zone)
         val holderEntered = java.util.concurrent.CountDownLatch(1)
@@ -1008,7 +998,7 @@ class OperationCoordinatorTest {
         assertEquals(0, writes, "the contender must not have sent")
         try {
             // Only now, with the contender provably parked, does authority change.
-            now = 1_000L + 400_000L
+            now.set(1_000L + 400_000L)
         } finally {
             release.countDown()
         }
@@ -1114,12 +1104,8 @@ class OperationCoordinatorTest {
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
         val holderScope = newScope(Dispatchers.Default)
-        extraScopes += holderScope
-        ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
         val waitingScope = newScope(queue)
-        extraScopes += waitingScope
-        ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
         val waitingEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, waitingScope, Dispatchers.Unconfined)
         val blocker = confirmOne(plans, zone)
@@ -1230,8 +1216,6 @@ class OperationCoordinatorTest {
         val resolverB = Resolver(live(scope = zoneB), listOf(liveConnection))
         val store = TestStore()
         val app = newScope(Dispatchers.Default)
-        extraScopes += app
-        ownedJobs.add(app.coroutineContext[kotlinx.coroutines.Job]!!)
         // One domain, one plans: only the engines have their own trusted resolvers.
         val engineA = OperationCoordinator(plans, store, resolverA, { 1_000 }, app, Dispatchers.Unconfined)
         val engineB = OperationCoordinator(plans, store, resolverB, { 1_000 }, app, Dispatchers.Unconfined)
@@ -1319,12 +1303,8 @@ class OperationCoordinatorTest {
         val planB = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, ref, null, desired, fingerprint, 7, 1_000)
         val confirmB = plans.confirm(planB.id, zone, 7, fingerprint, 1_000)
         val holderScope = newScope(Dispatchers.Default)
-        extraScopes += holderScope
-        ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
         val waitingScope = newScope(queue)
-        extraScopes += waitingScope
-        ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
         val waitingEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, waitingScope, Dispatchers.Unconfined)
         val holderEntered = java.util.concurrent.CountDownLatch(1)

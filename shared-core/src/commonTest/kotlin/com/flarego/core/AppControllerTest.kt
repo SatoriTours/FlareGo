@@ -264,36 +264,66 @@ class AppControllerTest {
 
     /** A dispatcher that really holds queued work until it is explicitly drained. */
     private class PausableDispatcher : CoroutineDispatcher() {
+        private val lock = Any()
         private val queued = ArrayDeque<Runnable>()
-        var paused = false
+        private var held = false
+
+        var paused: Boolean
+            get() = synchronized(lock) { held }
+            set(value) { synchronized(lock) { held = value } }
 
         fun drain() {
-            paused = false
-            while (queued.isNotEmpty()) queued.removeFirst().run()
+            synchronized(lock) { held = false }
+            while (true) {
+                val next: Runnable
+                synchronized(lock) { next = if (queued.isEmpty()) return else queued.removeFirst() }
+                next.run()
+            }
         }
 
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
-            if (paused) queued.addLast(block) else block.run()
+            val hold: Boolean
+            synchronized(lock) {
+                hold = held
+                if (hold) queued.addLast(block)
+            }
+            if (!hold) block.run()
         }
     }
 
     /** A coordination store whose read can be held on a queued dispatcher and then fail. */
     private class FailingGetStore(private val onFail: () -> Unit) : OperationStore {
-        val tasks = linkedMapOf<String, OperationTask>()
-        var failNext = false
-        var reads = 0
+        private val lock = Any()
+        private val rows = linkedMapOf<String, OperationTask>()
+        private var nextFails = false
+        private var readCount = 0
+
+        /** Immutable snapshot; the internal container never escapes. */
+        val tasks: Map<String, OperationTask> get() = synchronized(lock) { rows.toMap() }
+
+        var failNext: Boolean
+            get() = synchronized(lock) { nextFails }
+            set(value) { synchronized(lock) { nextFails = value } }
+
+        val reads: Int get() = synchronized(lock) { readCount }
+
         override fun get(id: String): OperationTask? {
-            reads++
-            if (failNext) {
+            val fails: Boolean
+            synchronized(lock) {
+                readCount++
+                fails = nextFails
+            }
+            // The collaborating callback runs outside the lock: it may touch the same fixture.
+            if (fails) {
                 onFail()
                 throw IllegalStateException("synthetic store failure")
             }
-            return tasks[id]
+            return synchronized(lock) { rows[id] }
         }
-        override fun list(connectionId: String) = tasks.values.filter { it.connectionId == connectionId }
-        override fun put(task: OperationTask) { tasks[task.id] = task }
-        override fun removeConnection(connectionId: String) { tasks.entries.removeAll { it.value.connectionId == connectionId } }
-        override fun putWithSummary(task: OperationTask, summary: Operation) { tasks[task.id] = task }
+        override fun list(connectionId: String): List<OperationTask> = synchronized(lock) { rows.values.filter { it.connectionId == connectionId } }
+        override fun put(task: OperationTask) { synchronized(lock) { rows[task.id] = task } }
+        override fun removeConnection(connectionId: String) { synchronized(lock) { rows.entries.removeAll { it.value.connectionId == connectionId } } }
+        override fun putWithSummary(task: OperationTask, summary: Operation) { synchronized(lock) { rows[task.id] = task } }
     }
 
     private val real1 = Connection("a", "Production", "aa", demo = false)
