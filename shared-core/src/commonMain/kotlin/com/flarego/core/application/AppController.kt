@@ -187,7 +187,9 @@ class AppController(
                         title,
                         failure,
                         publish = stillPublishing(connection.id, selectionId, sessionVersion, epoch),
-                        persist = dnsOperations == null,
+                        // The opt-in path always refuses a caller-side summary; the default
+                        // factory keeps the historical behaviour.
+                        persist = false,
                     )
                 }
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
