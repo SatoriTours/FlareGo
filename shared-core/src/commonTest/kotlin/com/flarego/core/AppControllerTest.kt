@@ -211,7 +211,7 @@ class AppControllerTest {
         assertEquals("new.example", controller.state.value.inventory.domains.single().name)
     }
 
-    // ------------------------------------------- fix 6 tracked publication contracts
+    // ------------------------------------------- tracked publication contracts (real receipt path)
 
     private class CoordinationStore : OperationStore {
         val tasks = linkedMapOf<String, OperationTask>()
@@ -222,11 +222,37 @@ class AppControllerTest {
         override fun putWithSummary(task: OperationTask, summary: Operation) { tasks[task.id] = task }
     }
 
+    /**
+     * A receipt source that really runs the write: it must call [beforeSend] and then the
+     * session, so a suspended gate is genuinely inside the confirmed-write path.
+     */
+    private class ReceiptPath(
+        private val session: CloudSession,
+        private val gate: CompletableDeferred<Unit>? = null,
+    ) : DnsReceiptSource {
+        val entered = CompletableDeferred<Unit>()
+        val sends = java.util.concurrent.atomic.AtomicInteger(0)
+        var failure: (() -> Throwable)? = null
+
+        override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
+            beforeSend()
+            entered.complete(Unit)
+            gate?.await()
+            failure?.let { throw it() }
+            sends.incrementAndGet()
+            when (command.recordId) {
+                null -> session.save(command.scope.zoneId, null, command.draft)
+                else -> session.delete(command.scope.zoneId, command.recordId!!)
+            }
+            return ExecutionReceipt.Completed()
+        }
+    }
+
     private val real1 = Connection("a", "Production", "aa", demo = false)
     private val real2 = Connection("b", "Sandbox", "bb", demo = false)
 
-    /** Opt-in wiring for real (non-demo) connections: the confirmed-write path is only active there. */
-    private fun optIn(scope: kotlinx.coroutines.CoroutineScope): DnsOperationLifecycle {
+    /** Opt-in wiring for real (non-demo) connections: only there is the confirmed path active. */
+    private fun optIn(scope: kotlinx.coroutines.CoroutineScope, receipts: ReceiptPath): DnsOperationLifecycle {
         val zone = ZoneScope(AccountScope(real1.id, real1.accountId), "z")
         val live = LiveOperationContext(real1, zone, 7, "a".repeat(64))
         val resolver =
@@ -237,175 +263,164 @@ class AppControllerTest {
             }
         val plans = ChangePlans(resolver, { 1_000 }, OperationIds { java.util.UUID.randomUUID().toString() })
         val coordinator = OperationCoordinator(plans, CoordinationStore(), resolver, { 1_000 }, scope, kotlinx.coroutines.Dispatchers.Unconfined)
-        return DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }) { _, beforeSend ->
-            beforeSend()
-            ExecutionReceipt.Completed()
-        }
+        return DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }, receipts)
     }
 
-    private fun domain() = Domain("z", "example.com", "active", a.id)
+    private fun domain() = Domain("z", "example.com", "active", real1.id)
 
     private fun draft() = DnsDraft("A", "@", "192.0.2.1")
 
-    private fun marker() = Operation("marker", a.id, "marker", OperationStatus.SUCCESS, "marker")
+    private fun marker() = Operation("marker", real1.id, "marker", OperationStatus.SUCCESS, "marker")
 
     @Test
-    fun lateSaveFailureAfterASelectionRoundTripKeepsTheFrozenUiSnapshot() = runTest {
+    fun lateSaveFailureInsideTheReceiptPathNeverPublishesOrPersists() = runTest {
         val gate = CompletableDeferred<Unit>()
         val store = MemoryStore()
-        val session =
-            object : CloudSession by DemoSession(real1) {
-                override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) {
-                    gate.await()
-                    throw IllegalStateException("synthetic provider failure")
-                }
-            }
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope))
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session, gate)
+        receipts.failure = { IllegalStateException("synthetic provider failure") }
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
         val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
         runCurrent()
-        // The UI genuinely round-trips while the write is suspended.
-        controller.selectConnection(b)
+        assertTrue(receipts.entered.isCompleted, "the write must really be suspended inside the receipt path")
+        assertTrue(job.isActive, "the save must still be in flight")
+        controller.selectConnection(real2)
         runCurrent()
-        controller.selectConnection(a)
+        controller.selectConnection(real1)
         runCurrent()
-        // Freeze the resulting UI snapshot, then let an independent known marker land in the store.
+        val frozen = controller.state.value.operations.map { it.id }
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
         job.join()
-        assertTrue(
-            controller.state.value.operations.none { it.id == "marker" },
-            "a late failure must not publish into the frozen UI snapshot",
-        )
+        assertEquals(0, receipts.sends.get(), "no session write may happen after a pre-send failure")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late failure must not refresh the frozen UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }
 
     @Test
-    fun lateDeleteFailureAfterAReloadKeepsTheFrozenUiSnapshot() = runTest {
+    fun lateDeleteFailureInsideTheReceiptPathNeverPublishesOrPersists() = runTest {
         val gate = CompletableDeferred<Unit>()
         val store = MemoryStore()
         val record = DnsRecord("rec-1", "A", "@", "192.0.2.1", 300, false)
-        val session =
-            object : CloudSession by DemoSession(real1) {
-                override suspend fun delete(zoneId: String, recordId: String) {
-                    gate.await()
-                    throw IllegalStateException("synthetic provider failure")
-                }
-            }
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope))
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session, gate)
+        receipts.failure = { IllegalStateException("synthetic provider failure") }
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
         val job = launch { runCatching { controller.deleteDns(domain(), record) } }
         runCurrent()
-        controller.reloadConnections(listOf(b))
+        assertTrue(receipts.entered.isCompleted, "the delete must really be suspended inside the receipt path")
+        assertTrue(job.isActive, "the delete must still be in flight")
+        controller.reloadConnections(listOf(real2))
         runCurrent()
         controller.reloadConnections(listOf(real1, real2))
         runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
         job.join()
-        assertTrue(
-            controller.state.value.operations.none { it.id == "marker" },
-            "a late delete failure must not publish into the frozen UI snapshot",
-        )
+        assertEquals(0, receipts.sends.get(), "no session write may happen after a pre-send failure")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late failure must not refresh the frozen UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+    }
+
+    @Test
+    fun lateSaveSuccessAfterANavigationKeepsTheFrozenUiAndNeverWrites() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val store = MemoryStore()
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session, gate)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
+        controller.refresh()
+        runCurrent()
+        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
+        runCurrent()
+        assertTrue(receipts.entered.isCompleted)
+        controller.navigate(Page.RESOURCES)
+        runCurrent()
+        controller.navigate(Page.DOMAINS)
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        job.join()
+        assertEquals(1, receipts.sends.get(), "the legitimate session write must happen exactly once")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late success must not refresh the frozen UI")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+    }
+
+    @Test
+    fun lateSaveSuccessAfterASessionRevisionChangeKeepsTheFrozenUi() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val store = MemoryStore()
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session, gate)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
+        controller.refresh()
+        runCurrent()
+        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
+        runCurrent()
+        assertTrue(receipts.entered.isCompleted)
+        controller.invalidateSession(real1.id)
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        job.join()
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late success must not refresh a new session revision's UI")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+    }
+
+    @Test
+    fun aPublicationControlStillRefreshesTheCurrentUi() = runTest {
+        val store = MemoryStore()
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
+        controller.refresh()
+        runCurrent()
+        store.putOperation(marker())
+        controller.saveDns(domain(), null, draft())
+        runCurrent()
+        assertEquals(1, receipts.sends.get())
+        assertTrue(
+            controller.state.value.operations.any { it.id == "marker" },
+            "a legitimate result must still refresh the current UI",
+        )
     }
 
     @Test
     fun optInValidationFailurePersistsNoCallerSummaryAndReportsFailed() = runTest {
         val store = MemoryStore()
         val session = DemoSession(real1)
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1), optIn(backgroundScope))
+        val receipts = ReceiptPath(session)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
         val operation = controller.saveDns(domain(), null, DnsDraft("SRV", "@", "192.0.2.1"))
         runCurrent()
         assertEquals(OperationStatus.FAILED, operation.status, "a synchronous input error stays a deterministic FAILED")
-    }
-
-    @Test
-    fun optInValidationFailurePersistsNoCallerSideSummaryAtAll() = runTest {
-        val store = MemoryStore()
-        val session = DemoSession(real1)
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1), optIn(backgroundScope))
-        controller.refresh()
-        runCurrent()
-        controller.saveDns(domain(), null, DnsDraft("SRV", "@", "192.0.2.1"))
-        runCurrent()
+        assertEquals(0, receipts.sends.get())
         assertEquals(0, store.operations().size, "the opt-in path must not persist a caller-side summary")
     }
 
     @Test
     fun legacyValidationFailureStillPersistsAFailureSummary() = runTest {
         val store = MemoryStore()
-        val session = DemoSession(real1)
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1))
+        val session = DemoSession(a)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(a))
         controller.refresh()
         runCurrent()
         val operation = controller.saveDns(domain(), null, DnsDraft("SRV", "@", "192.0.2.1"))
         runCurrent()
         assertEquals(OperationStatus.FAILED, operation.status)
         assertEquals(1, store.operations().size, "the default path keeps its historical behaviour")
-    }
-
-    @Test
-    fun lateSaveSuccessAfterANavigationKeepsTheStoreAndUiClean() = runTest {
-        val gate = CompletableDeferred<Unit>()
-        val store = MemoryStore()
-        val session =
-            object : CloudSession by DemoSession(real1) {
-                override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) {
-                    gate.await()
-                }
-            }
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope))
-        controller.refresh()
-        runCurrent()
-        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
-        runCurrent()
-        controller.navigate(Page.RESOURCES)
-        runCurrent()
-        controller.navigate(Page.DOMAINS)
-        runCurrent()
-        store.putOperation(marker())
-        gate.complete(Unit)
-        runCurrent()
-        job.join()
-        assertTrue(
-            controller.state.value.operations.none { it.id == "marker" },
-            "a late success must not publish into a UI that navigated away and back",
-        )
-        assertEquals(0, store.operations().count { it.id != "marker" }, "a late success must not write caller-side summaries")
-    }
-
-    @Test
-    fun lateSaveSuccessAfterASessionRevisionChangeKeepsTheUiAndStoreClean() = runTest {
-        val gate = CompletableDeferred<Unit>()
-        val store = MemoryStore()
-        val session =
-            object : CloudSession by DemoSession(real1) {
-                override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) {
-                    gate.await()
-                }
-            }
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope))
-        controller.refresh()
-        runCurrent()
-        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
-        runCurrent()
-        controller.invalidateSession(real1.id)
-        runCurrent()
-        store.putOperation(marker())
-        gate.complete(Unit)
-        runCurrent()
-        job.join()
-        assertTrue(
-            controller.state.value.operations.none { it.id == "marker" },
-            "a late success must not publish after the session revision changed",
-        )
-        assertEquals(0, store.operations().count { it.id != "marker" }, "a late success must not write caller-side summaries")
     }
 }

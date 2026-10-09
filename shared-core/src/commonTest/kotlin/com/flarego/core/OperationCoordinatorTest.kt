@@ -509,7 +509,11 @@ class OperationCoordinatorTest {
 
         fun enter() {
             val now = inside.incrementAndGet()
-            maxInside.set(maxOf(maxInside.get(), now))
+            // Compare-and-set loop: no read-modify-write race can lose a peak.
+            while (true) {
+                val seen = maxInside.get()
+                if (now <= seen || maxInside.compareAndSet(seen, now)) break
+            }
             if (now > 1) overlapped.set(true)
         }
 
@@ -661,7 +665,10 @@ class OperationCoordinatorTest {
             assertEquals(returned.id, stored.id)
             assertEquals(returned.state, stored.state)
             val canonical = OperationTaskPersistence.summaryFor(returned)
-            assertNotNull(canonical, "a canonical summary must exist for the returned task")
+            // Non-terminal states map to UNKNOWN by contract; a failing clock must never produce
+            // a success summary.
+            assertEquals(OperationStatus.UNKNOWN, canonical.status, "a conservative task must map to UNKNOWN")
+            assertEquals(returned.id, canonical.id)
         }
     }
 
@@ -720,7 +727,7 @@ class OperationCoordinatorTest {
     }
 
     @Test
-    fun oneConfirmedIdentitySerializesAcrossEnginesWhileDistinctScopesRunInParallel() = runTest {
+    fun sameZoneCreateWritesSerializeAcrossEnginesWhileDistinctScopesRunInParallel() = runTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2", "plan-3", "confirm-3", "plan-4", "confirm-4"))
