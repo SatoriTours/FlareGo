@@ -139,6 +139,12 @@ class OperationCoordinator(
             val beforeSend = {
                 requireAuthorized(confirmed, generation)
                 guard()
+                // Final local check after every external and operation-guard callback: the
+                // typed send must not start once the original generation is gone, and nothing
+                // that could change the generation runs after this point.
+                if (isInvalidated(connectionId) || generationOf(connectionId) != generation) {
+                    throw invalidInputFailure()
+                }
             }
             val receipt =
                 try {

@@ -175,7 +175,21 @@ class AppController(
             val sessionVersion = sessionVersions[connection.id] ?: 0
             val epoch = uiEpoch
             // A user input error becomes a recorded failure, exactly as the legacy path.
-            val validated = try { validateDns(domain, draft) } catch (failure: Exception) { return recordedFailure(connection, title, failure) }
+            val validated =
+                try {
+                    validateDns(domain, draft)
+                } catch (failure: Exception) {
+                    // The opt-in path never writes a caller-side summary for any failure: only
+                    // the coordinator's metadata latch may persist, and the default path keeps
+                    // its legacy behaviour.
+                    return recordedFailure(
+                        connection,
+                        title,
+                        failure,
+                        publish = stillPublishing(connection.id, selectionId, sessionVersion, epoch),
+                        persist = dnsOperations == null,
+                    )
+                }
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
             val task =
                 try {
@@ -188,7 +202,7 @@ class AppController(
                         connection,
                         title,
                         failure,
-                        publish = true,
+                        publish = stillPublishing(connection.id, selectionId, sessionVersion, epoch),
                         persist = false,
                     )
                 }
@@ -259,7 +273,13 @@ class AppController(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure, publish = true, persist = false)
+                    return recordedFailure(
+                        connection,
+                        "删除 ${record.type} · ${record.name}",
+                        failure,
+                        publish = stillPublishing(connection.id, selectionId, sessionVersion, epoch),
+                        persist = false,
+                    )
                 }
             return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion, epoch))
         }

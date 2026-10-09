@@ -42,6 +42,8 @@ class OperationCoordinatorTest {
     private class Resolver(
         var live: LiveOperationContext?,
         private val liveConnections: List<Connection> = emptyList(),
+        /** When set, a liveness request without an explicit revision also requires the original. */
+        private val strictRevision: Long? = null,
     ) : OperationContextResolver {
         val invalidatedScopes = mutableListOf<CloudScope>()
         override fun current() = live
@@ -50,6 +52,7 @@ class OperationCoordinatorTest {
             if (scope in invalidatedScopes) return false
             val context = live ?: return credentialRevision != null
             if (credentialRevision != null && context.credentialRevision != credentialRevision) return false
+            if (credentialRevision == null && strictRevision != null && context.credentialRevision != strictRevision) return false
             return true
         }
     }
@@ -58,10 +61,21 @@ class OperationCoordinatorTest {
 
     private var appScope: CoroutineScope? = null
 
+    private val extraScopes = mutableListOf<CoroutineScope>()
+
+    /** Every fixture scope is registered here and released, even when a test fails. */
+    private fun newScope(cancelled: Boolean = false): CoroutineScope {
+        val job = SupervisorJob()
+        if (cancelled) job.cancel()
+        return CoroutineScope(job + Dispatchers.Unconfined).also { extraScopes += it }
+    }
+
     @AfterTest
     fun stopApplicationScope() {
         appScope?.cancel()
         appScope = null
+        extraScopes.forEach { it.cancel() }
+        extraScopes.clear()
     }
 
     private fun live(revision: Long = 7, fp: String = fingerprint, scope: CloudScope = zone) =
@@ -522,52 +536,60 @@ class OperationCoordinatorTest {
         ChangePlans(resolver, clock, ids)
 
     @Test
-    fun livenessCallbackInvalidationIsCaughtByTheFinalGenerationCheck() = runTest {
-        val resolver = Resolver(live(), listOf(liveConnection))
-        val inner = TestStore()
+    fun livenessCallbackInvalidationBeforeTheFinalCheckLeavesNoPutAndNoWrite() = runTest {
+        val base = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(base, idsOf("plan-1", "confirm-1"))
         var coordinator: OperationCoordinator? = null
-        val store =
-            object : OperationStore {
-                override fun get(id: String): OperationTask? = inner.get(id)
-                override fun list(connectionId: String) = inner.list(connectionId)
-                override fun put(task: OperationTask) = inner.put(task)
-                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
-                override fun putWithSummary(task: OperationTask, summary: Operation) {
-                    coordinator?.invalidateConnection(task.connectionId)
-                    inner.putWithSummary(task, summary)
+        // A real resolver callback: it invalidates while reporting the connection live.
+        val resolver =
+            object : OperationContextResolver {
+                override fun current() = base.current()
+                override fun liveConnections() = base.liveConnections()
+                override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
+                    coordinator?.invalidateConnection("connection-1")
+                    return base.isLive(scope, credentialRevision)
                 }
             }
-        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
-        coordinator = engine(plans, resolver, store, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        coordinator = engine(plans, resolver, store, newScope())
         val confirmation = confirmOne(plans)
-        runCatching { coordinator.execute(confirmation) { ExecutionReceipt.Completed() } }
-        // QUEUED is the only phase allowed to create a row; a later phase must not.
-        assertTrue(inner.putCount <= 1, "a phase after a callback-driven invalidation must not put")
+        var writes = 0
+        val result = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
+        assertEquals(0, store.putCount, "a callback-driven invalidation must leave zero metadata writes")
+        assertEquals(0, writes)
+        assertTrue(result.isFailure)
     }
 
     @Test
-    fun everyReceiptWithAThrowingClockKeepsTheOriginalRunningIdentity() = runTest {
-        val receipts = listOf<ExecutionReceipt>(
-            ExecutionReceipt.Completed(),
-            ExecutionReceipt.Accepted(pollPath = "/zones/zone-1/dns_records/record-1"),
-            ExecutionReceipt.Partial(safeDetail = "synthetic"),
-            ExecutionReceipt.Unknown(),
-        )
+    fun everyReceiptWithAFailingClockAfterTheWriteKeepsTheOriginalRunningIdentity() = runTest {
+        val receipts =
+            listOf<ExecutionReceipt>(
+                ExecutionReceipt.Completed(),
+                ExecutionReceipt.Accepted(pollPath = "/zones/zone-1/dns_records/record-1"),
+                ExecutionReceipt.Partial(safeDetail = "synthetic"),
+                ExecutionReceipt.Unknown(),
+            )
         receipts.forEachIndexed { index, receipt ->
             val resolver = Resolver(live(), listOf(liveConnection))
             val store = TestStore()
             val plans = scopedIssuer(resolver, idsOf("plan-$index", "confirm-$index"))
-            var calls = 0
+            var writes = 0
+            // The clock only fails once the receipt has really been produced.
             val coordinator =
-                engine(plans, resolver, store, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), clock = {
-                    calls++
-                    if (calls > 1) throw IllegalStateException("clock unavailable") else 1_000
+                engine(plans, resolver, store, newScope(), clock = {
+                    if (writes > 0) throw IllegalStateException("clock unavailable") else 1_000
                 })
             val confirmation = confirmOne(plans)
-            val task = runCatching { coordinator.execute(confirmation) { receipt } }.getOrNull()
+            val planId = confirmation.plan.id
+            val task = runCatching { coordinator.execute(confirmation) { writes++; receipt } }.getOrNull()
+            assertEquals(1, writes, "the typed send must really have run")
             val stored = store.tasks[task?.id] ?: store.tasks.values.firstOrNull()
-            assertNotNull(stored, "the original task must stay addressable")
-            assertTrue(stored.state != TaskState.SUCCEEDED, "a failed timestamp must never fabricate success")
+            assertNotNull(stored)
+            assertEquals(planId, stored.id, "the original plan identity must be preserved")
+            assertTrue(
+                stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN,
+                "a failing clock must never fabricate a terminal state",
+            )
         }
     }
 
@@ -585,20 +607,31 @@ class OperationCoordinatorTest {
             val plans = scopedIssuer(resolver, idsOf("plan-$index", "confirm-$index"))
             val coordinator = engine(plans, resolver, store, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
             val confirmation = confirmOne(plans)
+            val planId = confirmation.plan.id
             store.failPut = false
-            val task = coordinator.execute(confirmation) {
-                store.failPut = true
-                receipt
-            }
-            val stored = store.tasks[task.id]
+            var writes = 0
+            val task =
+                runCatching {
+                    coordinator.execute(confirmation) {
+                        writes++
+                        store.failPut = true
+                        receipt
+                    }
+                }.getOrNull()
+            assertEquals(1, writes, "the typed send must really have run")
+            val stored = store.tasks[task?.id] ?: store.tasks.values.firstOrNull()
             assertNotNull(stored)
-            assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
+            assertEquals(planId, stored.id, "the original plan identity must survive a store failure")
+            assertTrue(
+                stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN,
+                "a failed settlement store must keep the conservative state",
+            )
         }
     }
 
     @Test
-    fun ttlAndFingerprintDriftDuringTheMetadataWaitRefusesToWrite() = runTest {
-        val resolver = Resolver(live(), listOf(liveConnection))
+    fun credentialRevisionDriftDuringTheMetadataWaitRefusesTheWrite() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection), strictRevision = 7)
         val inner = TestStore()
         val store =
             object : OperationStore {
@@ -612,12 +645,93 @@ class OperationCoordinatorTest {
                 override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
             }
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
-        val coordinator = engine(plans, resolver, store, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        val coordinator = engine(plans, resolver, store, newScope())
         val confirmation = confirmOne(plans)
         var writes = 0
         val result = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
         assertTrue(result.isFailure, "a credential revision change must refuse the write")
         assertEquals(0, writes)
+        assertEquals(0, inner.putCount)
+    }
+
+    @Test
+    fun ttlExpiryDuringTheMetadataWaitRefusesTheWrite() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var now = 1_000L
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    now = 1_000_000L
+                    return inner.get(id)
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = ChangePlans(resolver, { now }, idsOf("plan-1", "confirm-1"))
+        val coordinator = OperationCoordinator(plans, store, resolver, { now }, newScope(), Dispatchers.Unconfined)
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val result = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
+        assertTrue(result.isFailure, "an expired confirmation must not reach the send")
+        assertEquals(0, writes)
+    }
+
+    @Test
+    fun cancelledOwnerBeforeTheBodyRunsLeavesEveryWaiterAbleToExitWithoutWriting() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, store, newScope(cancelled = true))
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val waiters = (1..2).map { async { runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } } } }
+        var released = false
+        withTimeoutOrNull(500) {
+            waiters.forEach { it.await() }
+            released = true
+        }
+        assertTrue(released, "a never-started owner must still release its waiters")
+        assertEquals(0, writes)
+        assertEquals(0, store.putCount)
+    }
+
+    @Test
+    fun sameConfirmedIdentitySerializesAcrossEnginesOnRealThreads() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
+        val app = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        extraScopes += app
+        val first = engine(plans, resolver, store, app, Dispatchers.Default)
+        val second = engine(plans, resolver, store, app, Dispatchers.Default)
+        val one = confirmOne(plans, zone)
+        val two = confirmOne(plans, zone)
+        val inside = java.util.concurrent.atomic.AtomicInteger(0)
+        val peak = java.util.concurrent.atomic.AtomicInteger(0)
+        val jobs =
+            listOf(
+                async(Dispatchers.Default) {
+                    first.execute(one) {
+                        peak.set(maxOf(peak.get(), inside.incrementAndGet()))
+                        Thread.sleep(15)
+                        inside.decrementAndGet()
+                        ExecutionReceipt.Completed()
+                    }
+                },
+                async(Dispatchers.Default) {
+                    second.execute(two) {
+                        peak.set(maxOf(peak.get(), inside.incrementAndGet()))
+                        Thread.sleep(15)
+                        inside.decrementAndGet()
+                        ExecutionReceipt.Completed()
+                    }
+                },
+            )
+        jobs.awaitAll()
+        assertEquals(1, peak.get(), "one confirmed identity must serialize across engines on real threads")
     }
 
 }
