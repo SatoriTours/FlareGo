@@ -7,6 +7,8 @@ import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 
@@ -240,19 +242,57 @@ class AppControllerTest {
             gate?.await()
             failure?.let { throw it() }
             sends.incrementAndGet()
-            when (command.recordId) {
-                null -> session.save(command.scope.zoneId, null, command.draft)
-                else -> session.delete(command.scope.zoneId, command.recordId!!)
-            }
+            val recordId = command.recordId
+            if (recordId == null) session.save(command.scope.zoneId, null, command.draft)
+            else session.delete(command.scope.zoneId, recordId)
             return ExecutionReceipt.Completed()
         }
+    }
+
+    /** A dispatcher that really holds queued work until it is explicitly drained. */
+    private class PausableDispatcher : CoroutineDispatcher() {
+        private val queued = ArrayDeque<Runnable>()
+        var paused = false
+
+        fun drain() {
+            paused = false
+            while (queued.isNotEmpty()) queued.removeFirst().run()
+        }
+
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            if (paused) queued.addLast(block) else block.run()
+        }
+    }
+
+    /** A coordination store whose read can be held on a queued dispatcher and then fail. */
+    private class FailingGetStore(private val onFail: () -> Unit) : OperationStore {
+        val tasks = linkedMapOf<String, OperationTask>()
+        var failNext = false
+        var reads = 0
+        override fun get(id: String): OperationTask? {
+            reads++
+            if (failNext) {
+                onFail()
+                throw IllegalStateException("synthetic store failure")
+            }
+            return tasks[id]
+        }
+        override fun list(connectionId: String) = tasks.values.filter { it.connectionId == connectionId }
+        override fun put(task: OperationTask) { tasks[task.id] = task }
+        override fun removeConnection(connectionId: String) { tasks.entries.removeAll { it.value.connectionId == connectionId } }
+        override fun putWithSummary(task: OperationTask, summary: Operation) { tasks[task.id] = task }
     }
 
     private val real1 = Connection("a", "Production", "aa", demo = false)
     private val real2 = Connection("b", "Sandbox", "bb", demo = false)
 
     /** Opt-in wiring for real (non-demo) connections: only there is the confirmed path active. */
-    private fun optIn(scope: kotlinx.coroutines.CoroutineScope, receipts: ReceiptPath): DnsOperationLifecycle {
+    private fun optIn(
+        scope: kotlinx.coroutines.CoroutineScope,
+        receipts: ReceiptPath,
+        coordination: OperationStore = CoordinationStore(),
+        storeDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+    ): DnsOperationLifecycle {
         val zone = ZoneScope(AccountScope(real1.id, real1.accountId), "z")
         val live = LiveOperationContext(real1, zone, 7, "a".repeat(64))
         val resolver =
@@ -262,7 +302,7 @@ class AppControllerTest {
                 override fun isLive(scope: CloudScope, credentialRevision: Long?) = true
             }
         val plans = ChangePlans(resolver, { 1_000 }, OperationIds { java.util.UUID.randomUUID().toString() })
-        val coordinator = OperationCoordinator(plans, CoordinationStore(), resolver, { 1_000 }, scope, kotlinx.coroutines.Dispatchers.Unconfined)
+        val coordinator = OperationCoordinator(plans, coordination, resolver, { 1_000 }, scope, storeDispatcher)
         return DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }, receipts)
     }
 
@@ -422,5 +462,86 @@ class AppControllerTest {
         runCurrent()
         assertEquals(OperationStatus.FAILED, operation.status)
         assertEquals(1, store.operations().size, "the default path keeps its historical behaviour")
+    }
+
+    @Test
+    fun queuedSavePreSendFailureIsReportedFailedAndNeverPublished() = runTest {
+        val store = MemoryStore()
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session)
+        var markerInserted = false
+        val dispatcher = PausableDispatcher()
+        dispatcher.paused = true
+        val coordination = FailingGetStore { store.putOperation(marker()); markerInserted = true }
+        val controller =
+            AppController(
+                backgroundScope,
+                SessionFactory { session },
+                store,
+                listOf(real1, real2),
+                optIn(backgroundScope, receipts, coordination, dispatcher),
+            )
+        controller.refresh()
+        runCurrent()
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertFalse(deferred.isCompleted, "the save must still be queued on the store dispatcher")
+        assertEquals(0, coordination.reads, "the queued store read must not have run yet")
+        assertFalse(markerInserted)
+        controller.selectConnection(real2)
+        runCurrent()
+        controller.selectConnection(real1)
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        coordination.failNext = true
+        dispatcher.drain()
+        advanceUntilIdle()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.FAILED, operation.status, "a pre-send store failure is a deterministic FAILED")
+        assertEquals(0, receipts.sends.get(), "no session write may happen")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "the frozen UI must not be republished")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+        assertTrue(coordination.tasks.isEmpty(), "no task row may be created by a failed pre-send read")
+    }
+
+    @Test
+    fun queuedDeletePreSendFailureIsReportedFailedAndNeverPublished() = runTest {
+        val store = MemoryStore()
+        val record = DnsRecord("rec-1", "A", "@", "192.0.2.1", 300, false)
+        val session = DemoSession(real1)
+        val receipts = ReceiptPath(session)
+        var markerInserted = false
+        val dispatcher = PausableDispatcher()
+        dispatcher.paused = true
+        val coordination = FailingGetStore { store.putOperation(marker()); markerInserted = true }
+        val controller =
+            AppController(
+                backgroundScope,
+                SessionFactory { session },
+                store,
+                listOf(real1, real2),
+                optIn(backgroundScope, receipts, coordination, dispatcher),
+            )
+        controller.refresh()
+        runCurrent()
+        val deferred = async { controller.deleteDns(domain(), record) }
+        runCurrent()
+        assertFalse(deferred.isCompleted, "the delete must still be queued on the store dispatcher")
+        assertEquals(0, coordination.reads, "the queued store read must not have run yet")
+        assertFalse(markerInserted)
+        controller.reloadConnections(listOf(real2))
+        runCurrent()
+        controller.reloadConnections(listOf(real1, real2))
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        coordination.failNext = true
+        dispatcher.drain()
+        advanceUntilIdle()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.FAILED, operation.status, "a pre-send store failure is a deterministic FAILED")
+        assertEquals(0, receipts.sends.get(), "no session write may happen")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "the frozen UI must not be republished")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+        assertTrue(coordination.tasks.isEmpty(), "no task row may be created by a failed pre-send read")
     }
 }

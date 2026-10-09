@@ -520,11 +520,6 @@ class OperationCoordinatorTest {
         fun leave() {
             inside.decrementAndGet()
         }
-
-        fun awaitInside(count: Int, millis: Long = 2_000) {
-            val deadline = System.nanoTime() + millis * 1_000_000
-            while (inside.get() < count && System.nanoTime() < deadline) Thread.sleep(1)
-        }
     }
 
     private class HookStore(
@@ -743,7 +738,6 @@ class OperationCoordinatorTest {
                 async(Dispatchers.Default) {
                     first.execute(one) {
                         serial.enter()
-                        serial.awaitInside(2, millis = 300)
                         serial.leave()
                         ExecutionReceipt.Completed()
                     }
@@ -751,7 +745,6 @@ class OperationCoordinatorTest {
                 async(Dispatchers.Default) {
                     second.execute(two) {
                         serial.enter()
-                        serial.awaitInside(2, millis = 300)
                         serial.leave()
                         ExecutionReceipt.Completed()
                     }
@@ -776,12 +769,14 @@ class OperationCoordinatorTest {
         val engineA = engine(plansA, resolverA, store, app, Dispatchers.Default)
         val engineB = engine(plansB, resolverB, store, app, Dispatchers.Default)
         val concurrent = Concurrency()
+        val bothInside = java.util.concurrent.CountDownLatch(2)
         val jobs =
             listOf(
                 async(Dispatchers.Default) {
                     engineA.execute(confirmOne(plansA, zoneA)) {
                         concurrent.enter()
-                        concurrent.awaitInside(2)
+                        bothInside.countDown()
+                        bothInside.await(2, java.util.concurrent.TimeUnit.SECONDS)
                         concurrent.leave()
                         ExecutionReceipt.Completed()
                     }
@@ -789,7 +784,8 @@ class OperationCoordinatorTest {
                 async(Dispatchers.Default) {
                     engineB.execute(confirmOne(plansB, zoneB)) {
                         concurrent.enter()
-                        concurrent.awaitInside(2)
+                        bothInside.countDown()
+                        bothInside.await(2, java.util.concurrent.TimeUnit.SECONDS)
                         concurrent.leave()
                         ExecutionReceipt.Completed()
                     }
@@ -797,6 +793,7 @@ class OperationCoordinatorTest {
             )
         jobs.awaitAll()
         assertEquals(2, concurrent.maxInside.get(), "distinct scopes must be able to send simultaneously")
+        assertEquals(0, bothInside.count, "both writes must have been inside at the same time")
     }
 
     @Test
@@ -819,11 +816,14 @@ class OperationCoordinatorTest {
                 }
             }
         assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS), "the blocker must hold the resource")
-        // The queued confirmation really waits for the resource lock while time runs out.
-        now = 1_000L + 400_000L
         var writes = 0
         val second = async(Dispatchers.Default) { runCatching { coordinator.execute(waiting) { writes++; ExecutionReceipt.Completed() } } }
-        release.countDown()
+        try {
+            // The queued confirmation waits for the resource lock while authority expires.
+            now = 1_000L + 400_000L
+        } finally {
+            release.countDown()
+        }
         holder.await()
         val result = second.await()
         assertEquals(0, writes, "an expired confirmation must not reach the send")
@@ -849,14 +849,68 @@ class OperationCoordinatorTest {
                 }
             }
         assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS), "the blocker must hold the resource")
-        // The credential revision is revoked while the second write waits for the lock.
-        resolver.live = live(revision = 99)
         var writes = 0
         val second = async(Dispatchers.Default) { runCatching { coordinator.execute(waiting) { writes++; ExecutionReceipt.Completed() } } }
-        release.countDown()
+        try {
+            // The credential revision is revoked while the second write waits for the lock.
+            resolver.live = live(revision = 99)
+        } finally {
+            release.countDown()
+        }
         holder.await()
         val result = second.await()
         assertEquals(0, writes, "a revoked credential revision must not reach the send")
         assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun repeatingTheSameConfirmationReturnsTheSameResultWithoutSendingAgain() = runTest {
+        val (plans, coordinator, store) = fixture()
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val first = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        val second = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        assertEquals(1, writes, "one confirmed execution must be sent exactly once")
+        assertEquals(first.id, second.id, "a repeat must share the original task identity")
+        assertEquals(first.state, second.state)
+        assertEquals(1, store.tasks.size, "no second row may appear")
+    }
+
+    @Test
+    fun theFinalRowCheckCannotRecreateARowDeletedInsideTheMetadataCallback() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var coordinator: OperationCoordinator? = null
+        var deleted = false
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    val row = inner.get(id)
+                    // The metadata row check itself deletes the row and revokes the connection.
+                    if (!deleted && row != null && row.state == TaskState.RUNNING) {
+                        deleted = true
+                        inner.tasks.remove(id)
+                        coordinator?.invalidateConnection("connection-1")
+                    }
+                    return row
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        coordinator = engine(plans, resolver, store, newScope())
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val returned = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
+        assertTrue(deleted, "the metadata callback must really have run")
+        assertEquals(1, writes, "the send happened before the settlement callback")
+        assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated by the settlement write")
+        assertTrue(inner.putCount <= 2, "only the QUEUED and RUNNING writes may precede the deletion")
+        assertTrue(
+            returned.getOrNull()?.state != TaskState.SUCCEEDED,
+            "a settlement rejected by its own callback must never report success",
+        )
     }
 }
