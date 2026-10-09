@@ -23,6 +23,7 @@ class AppController(
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private val sessions = mutableMapOf<String, CloudSession>()
     private val sessionVersions = mutableMapOf<String, Int>()
+    private var uiEpoch = 0
     private var revision = 0
     private var dnsRevision = 0
     private val writeLock = Mutex()
@@ -42,6 +43,7 @@ class AppController(
     }
 
     fun navigate(page: Page) {
+        bumpUiEpoch()
         dnsRevision++
         mutable.update {
             it.copy(
@@ -66,6 +68,7 @@ class AppController(
         )
 
     fun selectConnection(connection: Connection) {
+        bumpUiEpoch()
         if (connection !in state.value.connections) return
         revision++
         dnsRevision++
@@ -83,20 +86,24 @@ class AppController(
     }
 
     fun invalidateSession(id: String) {
+        bumpUiEpoch()
         sessions.remove(id)
         sessionVersions[id] = (sessionVersions[id] ?: 0) + 1
     }
 
     fun reloadConnections(connections: List<Connection>) {
+        bumpUiEpoch()
         mutable.update { it.copy(connections = connections, operations = store.operations()) }
         sessions.keys.retainAll(connections.map { it.id }.toSet())
     }
 
     fun openResource(resource: CloudResource) {
+        bumpUiEpoch()
         mutable.update { it.copy(page = Page.RESOURCE, resource = resource, error = null) }
     }
 
     fun openDomain(domain: Domain) {
+        bumpUiEpoch()
         if (domain.connectionId != state.value.selected.id) return
         mutable.update {
             it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null)
@@ -166,6 +173,7 @@ class AppController(
             // published into the UI when both are still current.
             val selectionId = connection.id
             val sessionVersion = sessionVersions[connection.id] ?: 0
+            val epoch = uiEpoch
             // A user input error becomes a recorded failure, exactly as the legacy path.
             val validated = try { validateDns(domain, draft) } catch (failure: Exception) { return recordedFailure(connection, title, failure) }
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
@@ -176,11 +184,27 @@ class AppController(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    return recordedFailure(connection, title, failure, stillPublishing(connection.id, selectionId, sessionVersion))
+                    return recordedFailure(
+                        connection,
+                        title,
+                        failure,
+                        publish = true,
+                        persist = false,
+                    )
                 }
-            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion))
+            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion, epoch))
         }
         return scope.async { mutate(domain, title) { api -> api.save(domain.id, recordId, validateDns(domain, draft)) } }.await()
+    }
+
+    /**
+     * Monotonic publication epoch: every UI ownership change (navigation, selection,
+     * opening a domain or resource, reloading or removing connections) invalidates it, so a
+     * result that started under an older epoch can never be published — not even when the
+     * user navigated away and back to the same selection or the same connection id.
+     */
+    private fun bumpUiEpoch() {
+        uiEpoch += 1
     }
 
     private fun operationsActive(): Boolean = !state.value.selected.demo
@@ -190,6 +214,7 @@ class AppController(
         title: String,
         failure: Exception,
         publish: Boolean = true,
+        persist: Boolean = true,
     ): Operation {
         // An opt-in failure is only FAILED when nothing was sent and the failure is
         // certain; anything else stays UNKNOWN so a possible send is never denied.
@@ -197,10 +222,10 @@ class AppController(
             if (failure is CloudException && failure.uncertain) OperationStatus.UNKNOWN
             else OperationStatus.FAILED
         val operation = Operation(Random.nextLong().toString(16), connection.id, title, status, safeMessage(failure))
-        if (publish) {
-            store.putOperation(operation)
-            mutable.update { it.copy(operations = store.operations()) }
-        }
+        // The opt-in path never writes a caller-side summary: a deleted operation must not be
+        // recreated outside the coordinator's metadata latch. Only the legacy path persists.
+        if (persist) store.putOperation(operation)
+        if (publish) mutable.update { it.copy(operations = store.operations()) }
         return operation
     }
 
@@ -214,8 +239,11 @@ class AppController(
     }
 
     /** True when the frozen original selection/session revision is still the current one. */
-    private fun stillPublishing(connectionId: String, selectionId: String, sessionVersion: Int): Boolean =
-        state.value.selected.id == selectionId && (sessionVersions[connectionId] ?: 0) == sessionVersion
+    private fun stillPublishing(connectionId: String, selectionId: String, sessionVersion: Int, epoch: Int): Boolean =
+        uiEpoch == epoch &&
+            state.value.selected.id == selectionId &&
+            (sessionVersions[connectionId] ?: 0) == sessionVersion &&
+            connectionId in state.value.connections.map { it.id }
 
     suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation {
         val operations = dnsOperations
@@ -223,6 +251,7 @@ class AppController(
             val connection = state.value.selected
             val selectionId = connection.id
             val sessionVersion = sessionVersions[connection.id] ?: 0
+            val epoch = uiEpoch
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
             val task =
                 try {
@@ -230,9 +259,9 @@ class AppController(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure, stillPublishing(connection.id, selectionId, sessionVersion))
+                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure, publish = true, persist = false)
                 }
-            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion))
+            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion, epoch))
         }
         return scope
             .async {

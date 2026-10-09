@@ -232,11 +232,12 @@ class OperationCoordinator(
                         }
                     if (updated !== task) {
                         // isLive and advance(clock) callbacks may have invalidated since the
-                        // iteration check: re-verify the original generation, liveness and the
-                        // row immediately before the put, and never recreate a deleted row.
-                        if (isInvalidated(connection.id) || generationOf(connection.id) != generation) break
+                        // iteration check: take the liveness and row evidence first, then make
+                        // the original generation the very last local check before the put, so
+                        // nothing can invalidate in between and a deleted row is never recreated.
                         if (!context.isLive(task.scope, null)) break
                         if (store.get(task.id) == null) break
+                        if (isInvalidated(connection.id) || generationOf(connection.id) != generation) break
                         store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
                     }
                     recovered += updated
@@ -321,9 +322,13 @@ class OperationCoordinator(
     ) {
         withMetadataGate(connectionId) {
             storeOnIo {
-                if (isInvalidated(connectionId) || generationOf(connectionId) != generation) throw invalidInputFailure()
+                // Every external callback first: liveness and row evidence may themselves
+                // invalidate, so the original generation is only checked afterwards.
                 if (!context.isLive(task.scope, null)) throw invalidInputFailure()
                 if (requireExisting && store.get(task.id) == null) throw invalidInputFailure()
+                // Final local check, immediately before the put: nothing that can change the
+                // generation runs after it, and a new generation is never sampled as consent.
+                if (isInvalidated(connectionId) || generationOf(connectionId) != generation) throw invalidInputFailure()
                 store.putWithSummary(task, OperationTaskPersistence.summaryFor(task))
             }
         }
