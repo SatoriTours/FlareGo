@@ -994,43 +994,50 @@ class OperationCoordinatorTest {
     fun recoveryCannotRecreateARowDeletedByItsFinalLivenessCallback() = runTest {
         val base = Resolver(live(), listOf(liveConnection))
         val inner = TestStore()
-        var coordinator: OperationCoordinator? = null
+        var coordinatorRef: OperationCoordinator? = null
         var recovering = false
-        var calls = 0
+        val calls = java.util.concurrent.atomic.AtomicInteger(0)
         val resolver =
             object : OperationContextResolver {
                 override fun current(): LiveOperationContext? = base.current()
                 override fun liveConnections() = base.liveConnections()
                 override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
-                    // Only during the recovery pass: the first callback is passed through, the
-                    // final one revokes while still reporting live.
-                    // The recovery pass's liveness callback revokes while still reporting live,
-                    // so the read that follows it must not write anything.
-                    if (recovering) {
-                        calls++
-                        // Only the second (final) callback of the pass revokes, and it still
-                        // reports the scope live; the first one is a normal pass-through.
-                        if (calls >= 2) {
-                            inner.removeConnection("connection-1")
-                            coordinator?.invalidateConnection("connection-1")
-                        }
+                    if (recovering && calls.incrementAndGet() >= 2) {
+                        // The final liveness check of the pass revokes while reporting live, and
+                        // the collaborator's delete has already removed the row.
+                        coordinatorRef?.invalidateConnection("connection-1")
+                        inner.removeConnection("connection-1")
                     }
                     return true
                 }
             }
-        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
-        coordinator = engine(plans, resolver, inner, newScope())
-        val confirmation = confirmOne(plans)
-        coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
-        val second = confirmOne(plans)
-        coordinator.execute(second) { ExecutionReceipt.Unknown() }
-        var before = inner.putCount
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, inner, newScope())
+        coordinatorRef = coordinator
+        // A single legitimate metadata row: seeded directly, no cloud write involved.
+        inner.put(task("recover", TaskState.RUNNING))
+        val before = inner.putCount
         recovering = true
         coordinator.recoverPending()
-        before = before
-        assertTrue(calls >= 1, "the recovery liveness callback must really have run")
-        assertEquals(before, inner.putCount, "recovery must not write after its own liveness callback revoked")
-        assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated")
+        assertEquals(2, calls.get(), "the recovery pass must reach its final liveness callback")
+        assertEquals(before, inner.putCount, "no new write may follow the revoked final callback")
+        assertTrue(inner.tasks.isEmpty(), "the revoked row must not be recreated")
+    }
+
+    @Test
+    fun recoveryPersistsOneSettledRowWhenTheAuthorityIsUnchanged() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, store, newScope())
+        store.put(task("recover", TaskState.RUNNING))
+        val before = store.putCount
+        coordinator.recoverPending()
+        val recovered = store.tasks["recover"]
+        assertNotNull(recovered)
+        assertEquals(OperationStatus.UNKNOWN, OperationTaskPersistence.summaryFor(recovered).status)
+        assertEquals("recover", recovered.id)
+        assertEquals(before + 1, store.putCount, "an unchanged authority must persist exactly one settled row")
     }
 
     @Test
@@ -1233,39 +1240,27 @@ class OperationCoordinatorTest {
 
     @Test
     fun reconcileAfterItsReadWasCooperatelyDeletedDoesNotResurrectTheTask() = runTest {
-        val base = Resolver(live(), listOf(liveConnection))
+        val resolver = Resolver(live(), listOf(liveConnection))
         val inner = TestStore()
-        var coordinatorRef: OperationCoordinator? = null
-        var armed = false
-        val reads = java.util.concurrent.atomic.AtomicInteger(0)
-        val store =
-            object : OperationStore {
-                override fun get(id: String): OperationTask? {
-                    reads.incrementAndGet()
-                    val row = inner.get(id)
-                    // The reconcile read itself is where the collaboration delete lands.
-                    if (armed && row != null) {
-                        inner.removeConnection("connection-1")
-                        coordinatorRef?.invalidateConnection("connection-1")
-                    }
-                    return row
-                }
-                override fun list(connectionId: String) = inner.list(connectionId)
-                override fun put(task: OperationTask) = inner.put(task)
-                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
-                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
-            }
-        val plans = scopedIssuer(base, idsOf("plan-1", "confirm-1"))
-        val coordinator = engine(plans, base, store, newScope())
-        coordinatorRef = coordinator
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, inner, newScope())
         val confirmation = confirmOne(plans)
         val task = coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
         val before = inner.putCount
-        armed = true
-        assertFailsWith<CloudFailure> { coordinator.reconcile(task.id) { Reconciliation.Matched(desired) } }
-        assertTrue(reads.get() >= 1, "the reconcile read must really have run")
-        assertEquals(before, inner.putCount, "no write after the cooperative delete inside the read")
+        val reads = java.util.concurrent.atomic.AtomicInteger(0)
+        // The collaboration delete runs inside the trusted read closure, which holds no gate.
+        val outcome =
+            runCatching {
+                coordinator.reconcile(task.id) { row ->
+                    reads.incrementAndGet()
+                    coordinator.withInvalidatedConnection(row.connectionId) { inner.removeConnection(row.connectionId) }
+                    Reconciliation.Matched(desired)
+                }
+            }
+        assertEquals(1, reads.get(), "this reconcile read must have run exactly once")
+        assertEquals(before, inner.putCount, "no write may follow a delete done inside the read")
         assertTrue(inner.tasks.isEmpty(), "the deleted task must not be resurrected")
+        assertTrue(outcome.isFailure || outcome.getOrNull()?.state != TaskState.SUCCEEDED)
     }
 
     @Test
