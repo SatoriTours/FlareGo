@@ -387,12 +387,14 @@ class AppControllerTest {
         val store = MemoryStore()
         val session = DemoSession(real1)
         val receipts = ReceiptPath(session, gate)
-        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
+        val fixture = optInFixture(backgroundScope, receipts)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
         controller.refresh()
         runCurrent()
-        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
         runCurrent()
         assertTrue(receipts.entered.isCompleted)
+        assertFalse(deferred.isCompleted, "the write must still be in flight")
         controller.navigate(Page.RESOURCES)
         runCurrent()
         controller.navigate(Page.DOMAINS)
@@ -401,10 +403,20 @@ class AppControllerTest {
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
-        job.join()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.SUCCESS, operation.status, "the legitimate result must succeed")
         assertEquals(1, receipts.sends.get(), "the legitimate session write must happen exactly once")
+        assertEquals(
+            ZoneScope(AccountScope(real1.id, real1.accountId), "z"),
+            receipts.lastCommand?.scope,
+            "the write must stay bound to the original scope",
+        )
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late success must not refresh the frozen UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+        val stored = fixture.tasks.tasks.values.single()
+        assertEquals(operation.id, stored.id, "the published result must be the original task identity")
+        assertEquals(TaskState.SUCCEEDED, stored.state)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
     }
 
     @Test
@@ -627,10 +639,13 @@ class AppControllerTest {
                 }
             }
         val receipts = ReceiptPath(DemoSession(real1), gate)
-        val replaced = object : CloudSession by DemoSession(real1) {
-            override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) = Unit
-        }
-        receipts.alternate = replaced
+        var replacedSends = java.util.concurrent.atomic.AtomicInteger(0)
+        val replaced =
+            object : CloudSession by DemoSession(real1) {
+                override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) {
+                    replacedSends.incrementAndGet()
+                }
+            }
         val fixture = optInFixture(backgroundScope, receipts)
         val controller = AppController(backgroundScope, factory, store, listOf(real1, real2), fixture.lifecycle)
         controller.refresh()
@@ -646,11 +661,14 @@ class AppControllerTest {
         runCurrent()
         val frozen = controller.state.value.operations.map { it.id }
         store.putOperation(marker())
+        // The credential identity is swapped only now, while the write is provably suspended.
+        receipts.alternate = replaced
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
         assertEquals(OperationStatus.SUCCESS, operation.status)
         assertEquals(1, receipts.sends.get())
+        assertEquals(1, replacedSends.get(), "the write must really have used the replaced credential")
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a replaced credential must not publish the old result")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }

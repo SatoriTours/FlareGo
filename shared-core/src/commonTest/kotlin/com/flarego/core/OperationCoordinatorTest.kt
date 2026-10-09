@@ -687,6 +687,10 @@ class OperationCoordinatorTest {
             assertEquals(1, writes, "a repeated confirmation must not send twice")
             assertEquals(returned.id, repeat.id)
             assertEquals(returned.state, repeat.state)
+            val repeatSummary = OperationTaskPersistence.summaryFor(repeat)
+            assertEquals("Cloudflare 操作", repeatSummary.title)
+            assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
+            assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
         }
     }
 
@@ -731,6 +735,12 @@ class OperationCoordinatorTest {
             val repeat = coordinator.execute(confirmation) { writes++; receipt }
             assertEquals(1, writes, "a repeated confirmation must not send twice")
             assertEquals(returned.id, repeat.id)
+            assertEquals(returned.state, repeat.state)
+            val repeatSummary = OperationTaskPersistence.summaryFor(repeat)
+            assertEquals("Cloudflare 操作", repeatSummary.title)
+            assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
+            assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
+            assertEquals(returned.id, store.tasks[returned.id]?.id)
         }
     }
 
@@ -865,7 +875,9 @@ class OperationCoordinatorTest {
         } finally {
             holdBoth.countDown()
         }
-        jobs.awaitAll()
+        val returns = jobs.awaitAll()
+        assertEquals(setOf(confirmA.plan.id, confirmB.plan.id), returns.map { it.id }.toSet())
+        returns.forEach { assertEquals(TaskState.SUCCEEDED, it.state, "each distinct-ref write must succeed") }
     }
 
     @Test
@@ -920,7 +932,12 @@ class OperationCoordinatorTest {
         coordinator = engine(plans, resolver, inner, newScope())
         val confirmation = confirmOne(plans)
         var writes = 0
-        val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        val returned =
+            coordinator.executeGuarded(confirmation, {}) { beforeSend ->
+                beforeSend()
+                writes++
+                ExecutionReceipt.Completed()
+            }
         assertEquals(1, writes, "a legitimate adapter must send exactly once")
         assertEquals(confirmation.plan.id, returned.id)
         assertEquals(TaskState.SUCCEEDED, returned.state)
@@ -992,19 +1009,26 @@ class OperationCoordinatorTest {
                     // so the read that follows it must not write anything.
                     if (recovering) {
                         calls++
-                        inner.tasks.clear()
-                        coordinator?.invalidateConnection("connection-1")
+                        // Only the second (final) callback of the pass revokes, and it still
+                        // reports the scope live; the first one is a normal pass-through.
+                        if (calls >= 2) {
+                            inner.removeConnection("connection-1")
+                            coordinator?.invalidateConnection("connection-1")
+                        }
                     }
                     return true
                 }
             }
-        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
         coordinator = engine(plans, resolver, inner, newScope())
         val confirmation = confirmOne(plans)
         coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
-        val before = inner.putCount
+        val second = confirmOne(plans)
+        coordinator.execute(second) { ExecutionReceipt.Unknown() }
+        var before = inner.putCount
         recovering = true
         coordinator.recoverPending()
+        before = before
         assertTrue(calls >= 1, "the recovery liveness callback must really have run")
         assertEquals(before, inner.putCount, "recovery must not write after its own liveness callback revoked")
         assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated")
@@ -1099,18 +1123,31 @@ class OperationCoordinatorTest {
     fun theQueuedMetadataLivenessCallbackCanRevokeBeforeAnyWrite() = runTest {
         val inner = TestStore()
         var coordinatorRef: OperationCoordinator? = null
+        // Armed only once the confirmation has been signed and the collision read has happened:
+        // the QUEUED metadata write's own final liveness callback then revokes.
+        var armed = false
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    armed = true
+                    return inner.get(id)
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
         val resolver =
             object : OperationContextResolver {
                 override fun current(): LiveOperationContext = live()
                 override fun liveConnections() = listOf(liveConnection)
                 override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
-                    // The QUEUED write's own liveness callback revokes while reporting live.
-                    coordinatorRef?.invalidateConnection("connection-1")
+                    if (armed) coordinatorRef?.invalidateConnection("connection-1")
                     return true
                 }
             }
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
-        val coordinator = engine(plans, resolver, inner, newScope())
+        val coordinator = engine(plans, resolver, store, newScope())
         coordinatorRef = coordinator
         val confirmation = confirmOne(plans)
         var writes = 0
@@ -1193,5 +1230,102 @@ class OperationCoordinatorTest {
         val results = jobs.awaitAll()
         assertEquals(setOf(confirmationA.plan.id, confirmationB.plan.id), results.map { it.id }.toSet())
         results.forEach { assertEquals(TaskState.SUCCEEDED, it.state, "each scope's write must succeed") }
+    }
+
+    @Test
+    fun reconcileAfterItsReadWasCooperatelyDeletedDoesNotResurrectTheTask() = runTest {
+        val base = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var coordinatorRef: OperationCoordinator? = null
+        var armed = false
+        val reads = java.util.concurrent.atomic.AtomicInteger(0)
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    reads.incrementAndGet()
+                    val row = inner.get(id)
+                    // The reconcile read itself is where the collaboration delete lands.
+                    if (armed && row != null) {
+                        inner.removeConnection("connection-1")
+                        coordinatorRef?.invalidateConnection("connection-1")
+                    }
+                    return row
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = scopedIssuer(base, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, base, store, newScope())
+        coordinatorRef = coordinator
+        val confirmation = confirmOne(plans)
+        val task = coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
+        val before = inner.putCount
+        armed = true
+        assertFailsWith<CloudFailure> { coordinator.reconcile(task.id) { Reconciliation.Matched(desired) } }
+        assertTrue(reads.get() >= 1, "the reconcile read must really have run")
+        assertEquals(before, inner.putCount, "no write after the cooperative delete inside the read")
+        assertTrue(inner.tasks.isEmpty(), "the deleted task must not be resurrected")
+    }
+
+    @Test
+    fun reconcileWithUnchangedAuthorityStillMatchesTheOriginalTask() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, store, newScope())
+        val confirmation = confirmOne(plans)
+        val task = coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
+        val matched = coordinator.reconcile(task.id) { Reconciliation.Matched(desired) }
+        assertEquals(task.id, matched.id, "an unchanged authority must still reconcile the original task")
+        assertTrue(matched.state == TaskState.SUCCEEDED || matched.state == TaskState.UNKNOWN || matched.state == TaskState.RECONCILING)
+    }
+
+    @Test
+    fun twoPatchesOnTheSameFullResourceRefSerializeAcrossEngines() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-a", "confirm-a", "plan-b", "confirm-b"))
+        val ref = ResourceRef(zone, "dns_record", "rec-1")
+        val planA = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, ref, null, desired, fingerprint, 7, 1_000)
+        val confirmA = plans.confirm(planA.id, zone, 7, fingerprint, 1_000)
+        val planB = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, ref, null, desired, fingerprint, 7, 1_000)
+        val confirmB = plans.confirm(planB.id, zone, 7, fingerprint, 1_000)
+        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        extraScopes += holderScope
+        ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
+        val queue = RecordingQueue()
+        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        extraScopes += waitingScope
+        ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
+        val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
+        val waitingEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, waitingScope, Dispatchers.Unconfined)
+        val holderEntered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val holder =
+            async(Dispatchers.Default) {
+                holderEngine.execute(confirmA) {
+                    holderEntered.countDown()
+                    assertTrue(release.await(5, java.util.concurrent.TimeUnit.SECONDS), "the holder must be released")
+                    ExecutionReceipt.Completed()
+                }
+            }
+        assertTrue(holderEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the holder must be inside")
+        var writes = 0
+        val contender = async { waitingEngine.execute(confirmB) { writes++; ExecutionReceipt.Completed() } }
+        runCurrent()
+        queue.runAll()
+        assertTrue(queue.runs.get() > 0, "the contender's continuation must really have run")
+        assertFalse(contender.isCompleted, "the contender must be parked at the same full reference")
+        assertEquals(0, writes, "the contender must not have sent while the reference is held")
+        release.countDown()
+        holder.await()
+        queue.runAll()
+        val second = contender.await()
+        assertEquals(1, writes, "the contender must send exactly once after release")
+        val first = store.tasks.values.firstOrNull { it.id.contains("plan-a") }
+        assertNotNull(first)
+        assertEquals(TaskState.SUCCEEDED, second.state)
     }
 }
