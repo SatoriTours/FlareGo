@@ -235,8 +235,10 @@ class AppControllerTest {
         val entered = CompletableDeferred<Unit>()
         val sends = java.util.concurrent.atomic.AtomicInteger(0)
         var failure: (() -> Throwable)? = null
+        var lastCommand: DnsWriteCommand? = null
 
         override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
+            lastCommand = command
             beforeSend()
             entered.complete(Unit)
             gate?.await()
@@ -404,16 +406,19 @@ class AppControllerTest {
         val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
-        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
         runCurrent()
         assertTrue(receipts.entered.isCompleted)
+        assertFalse(deferred.isCompleted)
         controller.invalidateSession(real1.id)
         runCurrent()
         val frozen = controller.state.value.operations.map { it.id }
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
-        job.join()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.SUCCESS, operation.status)
+        assertEquals(1, receipts.sends.get())
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late success must not refresh a new session revision's UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }

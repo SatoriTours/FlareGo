@@ -20,22 +20,26 @@ class OperationCoordinatorTest {
     private val desired = "b".repeat(64)
     private val createKey = DnsOperationLifecycle.ACTION_CREATE
 
+    /** Shared across real worker threads: every mutation is guarded by one monitor. */
     private class TestStore : OperationStore {
+        private val lock = Any()
         val tasks = linkedMapOf<String, OperationTask>()
         val summaries = mutableListOf<Operation>()
         var putCount = 0
         var failPut = false
 
-        override fun get(id: String) = tasks[id]
-        override fun list(connectionId: String) = tasks.values.filter { it.connectionId == connectionId }
-        override fun put(task: OperationTask) { tasks[task.id] = task }
-        override fun removeConnection(connectionId: String) { tasks.entries.removeAll { it.value.connectionId == connectionId } }
+        override fun get(id: String): OperationTask? = synchronized(lock) { tasks[id] }
+        override fun list(connectionId: String): List<OperationTask> = synchronized(lock) { tasks.values.filter { it.connectionId == connectionId } }
+        override fun put(task: OperationTask) { synchronized(lock) { tasks[task.id] = task } }
+        override fun removeConnection(connectionId: String) { synchronized(lock) { tasks.entries.removeAll { it.value.connectionId == connectionId } } }
 
         override fun putWithSummary(task: OperationTask, summary: Operation) {
-            putCount++
-            if (failPut) throw IllegalStateException("synthetic store failure")
-            tasks[task.id] = task
-            summaries += summary
+            synchronized(lock) {
+                putCount++
+                if (failPut) throw IllegalStateException("synthetic store failure")
+                tasks[task.id] = task
+                summaries += summary
+            }
         }
     }
 
@@ -43,13 +47,18 @@ class OperationCoordinatorTest {
         var live: LiveOperationContext?,
         private val liveConnections: List<Connection> = emptyList(),
     ) : OperationContextResolver {
+        private val lock = Any()
         val invalidatedScopes = mutableListOf<CloudScope>()
-        override fun current() = live
+        override fun current(): LiveOperationContext? = synchronized(lock) { live }
         override fun liveConnections() = liveConnections
         override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
-            if (scope in invalidatedScopes) return false
-            val context = live ?: return credentialRevision != null
-            if (credentialRevision != null && context.credentialRevision != credentialRevision) return false
+            val context: LiveOperationContext?
+            synchronized(lock) {
+                if (scope in invalidatedScopes) return false
+                context = live
+            }
+            val current = context ?: return credentialRevision != null
+            if (credentialRevision != null && current.credentialRevision != credentialRevision) return false
             return true
         }
     }
@@ -61,18 +70,28 @@ class OperationCoordinatorTest {
     private val extraScopes = mutableListOf<CoroutineScope>()
 
     /** Every fixture scope is registered here and released, even when a test fails. */
+    private val ownedJobs = mutableListOf<Job>()
+
     private fun newScope(cancelled: Boolean = false): CoroutineScope {
         val job = SupervisorJob()
         if (cancelled) job.cancel()
+        ownedJobs += job
         return CoroutineScope(job + Dispatchers.Unconfined).also { extraScopes += it }
     }
 
+    /** Cancel and join every owned scope with a bound, so a failed test cannot leak work. */
     @AfterTest
     fun stopApplicationScope() {
         appScope?.cancel()
         appScope = null
         extraScopes.forEach { it.cancel() }
         extraScopes.clear()
+        runBlocking {
+            withTimeoutOrNull(5_000) {
+                ownedJobs.forEach { it.cancel(); it.join() }
+            }
+        }
+        ownedJobs.clear()
     }
 
     private fun live(revision: Long = 7, fp: String = fingerprint, scope: CloudScope = zone) =
@@ -87,9 +106,8 @@ class OperationCoordinatorTest {
         val queue = ids.toMutableList()
         val idsSource = OperationIds { if (queue.isEmpty()) throw IllegalStateException("id factory exhausted") else queue.removeFirst() }
         val plans = ChangePlans(resolver, { clockMs }, idsSource)
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scope = newScope()
         appScope = scope
-        extraScopes += scope
         val coordinator = OperationCoordinator(plans, store, resolver, { clockMs }, scope, Dispatchers.Unconfined)
         return Triple(plans, coordinator, store)
     }
@@ -722,37 +740,58 @@ class OperationCoordinatorTest {
     }
 
     @Test
-    fun sameZoneCreateWritesSerializeAcrossEnginesWhileDistinctScopesRunInParallel() = runTest {
+    fun theSameCreateTargetIsMutuallyExclusiveAcrossEnginesOfOneIssuer() = runTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
-        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2", "plan-3", "confirm-3", "plan-4", "confirm-4"))
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
         val app = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        ownedJobs += app.coroutineContext[kotlinx.coroutines.Job]!!
         extraScopes += app
         val first = engine(plans, resolver, store, app, Dispatchers.Default)
         val second = engine(plans, resolver, store, app, Dispatchers.Default)
         val one = confirmOne(plans, zone)
         val two = confirmOne(plans, zone)
-        val serial = Concurrency()
-        val sameResource =
-            listOf(
-                async(Dispatchers.Default) {
-                    first.execute(one) {
-                        serial.enter()
-                        serial.leave()
-                        ExecutionReceipt.Completed()
-                    }
-                },
-                async(Dispatchers.Default) {
-                    second.execute(two) {
-                        serial.enter()
-                        serial.leave()
-                        ExecutionReceipt.Completed()
-                    }
-                },
+        val holderEntered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val secondEntered = java.util.concurrent.CountDownLatch(1)
+        val order = java.util.concurrent.atomic.AtomicInteger(0)
+        val holderOrder = java.util.concurrent.atomic.AtomicInteger(0)
+        val secondOrder = java.util.concurrent.atomic.AtomicInteger(0)
+        var sends = java.util.concurrent.atomic.AtomicInteger(0)
+        val holder =
+            async(Dispatchers.Default) {
+                first.execute(one) {
+                    holderEntered.countDown()
+                    assertTrue(release.await(2, java.util.concurrent.TimeUnit.SECONDS), "the holder must be released")
+                    holderOrder.set(order.incrementAndGet())
+                    sends.incrementAndGet()
+                    ExecutionReceipt.Completed()
+                }
+            }
+        assertTrue(holderEntered.await(2, java.util.concurrent.TimeUnit.SECONDS), "the holder must be inside")
+        val contender =
+            async(Dispatchers.Default) {
+                second.execute(two) {
+                    secondEntered.countDown()
+                    secondOrder.set(order.incrementAndGet())
+                    sends.incrementAndGet()
+                    ExecutionReceipt.Completed()
+                }
+            }
+        try {
+            // While the holder is inside, the same create target must not admit the contender.
+            assertFalse(
+                secondEntered.await(500, java.util.concurrent.TimeUnit.MILLISECONDS),
+                "the same create target must be mutually exclusive",
             )
-        sameResource.awaitAll()
-        assertEquals(1, serial.maxInside.get(), "the same confirmed resource must serialise")
-        assertFalse(serial.overlapped.get(), "two bodies must never be inside at once")
+        } finally {
+            release.countDown()
+        }
+        assertTrue(secondEntered.await(2, java.util.concurrent.TimeUnit.SECONDS), "the contender must proceed after release")
+        holder.await()
+        contender.await()
+        assertEquals(2, sends.get(), "both writes must have run exactly once")
+        assertTrue(holderOrder.get() < secondOrder.get(), "the holder must have finished before the contender entered")
     }
 
     @Test
@@ -811,7 +850,7 @@ class OperationCoordinatorTest {
             async(Dispatchers.Default) {
                 coordinator.execute(blocker) {
                     entered.countDown()
-                    release.await()
+                    assertTrue(release.await(2, java.util.concurrent.TimeUnit.SECONDS), "the resource must be released")
                     ExecutionReceipt.Completed()
                 }
             }
@@ -844,7 +883,7 @@ class OperationCoordinatorTest {
             async(Dispatchers.Default) {
                 coordinator.execute(blocker) {
                     entered.countDown()
-                    release.await()
+                    assertTrue(release.await(2, java.util.concurrent.TimeUnit.SECONDS), "the resource must be released")
                     ExecutionReceipt.Completed()
                 }
             }
@@ -903,14 +942,201 @@ class OperationCoordinatorTest {
         coordinator = engine(plans, resolver, store, newScope())
         val confirmation = confirmOne(plans)
         var writes = 0
-        val returned = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
+        // Called directly on purpose: the engine must return the conservative original task.
+        val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
         assertTrue(deleted, "the metadata callback must really have run")
         assertEquals(1, writes, "the send happened before the settlement callback")
         assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated by the settlement write")
         assertTrue(inner.putCount <= 2, "only the QUEUED and RUNNING writes may precede the deletion")
+        assertEquals(confirmation.plan.id, returned.id, "the original plan identity must be preserved")
         assertTrue(
-            returned.getOrNull()?.state != TaskState.SUCCEEDED,
-            "a settlement rejected by its own callback must never report success",
+            returned.state == TaskState.RUNNING || returned.state == TaskState.UNKNOWN,
+            "a settlement rejected by its own callback must stay conservative",
         )
+    }
+
+    /** A dispatcher that only runs queued work when the test drains it, counting runs. */
+    private class RecordingQueue : CoroutineDispatcher() {
+        val runs = java.util.concurrent.atomic.AtomicInteger(0)
+        private val queued = ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            queued.addLast(block)
+        }
+        fun runAll() {
+            while (queued.isNotEmpty()) {
+                queued.removeFirst().run()
+                runs.incrementAndGet()
+            }
+        }
+    }
+
+    @Test
+    fun oneIssuerServesDifferentResourceRefsInParallelOnRealThreads() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-a", "confirm-a", "plan-b", "confirm-b"))
+        val app = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        extraScopes += app
+        ownedJobs += app.coroutineContext[kotlinx.coroutines.Job]!!
+        val engineA = engine(plans, resolver, store, app, Dispatchers.Default)
+        val engineB = engine(plans, resolver, store, app, Dispatchers.Default)
+        val refA = ResourceRef(zone, "dns_record", "rec-1")
+        val refB = ResourceRef(zone, "dns_record", "rec-2")
+        val planA = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, refA, null, desired, fingerprint, 7, 1_000)
+        val planB = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, refB, null, desired, fingerprint, 7, 1_000)
+        val confirmA = plans.confirm(planA.id, zone, 7, fingerprint, 1_000)
+        val confirmB = plans.confirm(planB.id, zone, 7, fingerprint, 1_000)
+        assertNotEquals(confirmA.plan.id, confirmB.plan.id)
+        val bothInside = java.util.concurrent.CountDownLatch(2)
+        val peak = java.util.concurrent.atomic.AtomicInteger(0)
+        val jobs =
+            listOf(
+                async(Dispatchers.Default) {
+                    engineA.execute(confirmA) {
+                        peak.incrementAndGet()
+                        bothInside.countDown()
+                        bothInside.await(2, java.util.concurrent.TimeUnit.SECONDS)
+                        peak.decrementAndGet()
+                        ExecutionReceipt.Completed()
+                    }
+                },
+                async(Dispatchers.Default) {
+                    engineB.execute(confirmB) {
+                        peak.incrementAndGet()
+                        bothInside.countDown()
+                        bothInside.await(2, java.util.concurrent.TimeUnit.SECONDS)
+                        peak.decrementAndGet()
+                        ExecutionReceipt.Completed()
+                    }
+                },
+            )
+        jobs.awaitAll()
+        assertEquals(0, bothInside.count, "two distinct resource refs must be able to write at the same time")
+    }
+
+    @Test
+    fun theLastLivenessCallbackBeforeTheSendRevokesTheGeneration() = runTest {
+        val inner = TestStore()
+        var coordinator: OperationCoordinator? = null
+        var revoked = java.util.concurrent.atomic.AtomicBoolean(false)
+        val resolver =
+            object : OperationContextResolver {
+                override fun current(): LiveOperationContext = live()
+                override fun liveConnections() = listOf(liveConnection)
+                override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
+                    // Only arm once both metadata writes happened: this is the last liveness
+                    // callback before the typed send. It still reports the scope live.
+                    if (inner.putCount >= 2 && revoked.compareAndSet(false, true)) {
+                        coordinator?.invalidateConnection("connection-1")
+                    }
+                    return true
+                }
+            }
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        coordinator = engine(plans, resolver, inner, newScope())
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val returned = runCatching { coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() } }
+        assertEquals(2, inner.putCount, "only the QUEUED and RUNNING metadata writes may happen")
+        assertEquals(0, writes, "the typed send must not run after the final callback revoked")
+        assertTrue(returned.getOrNull()?.state != TaskState.SUCCEEDED)
+    }
+
+    @Test
+    fun aLegitimateAdapterCallbackStillSendsOnceAndSucceeds() = runTest {
+        val inner = TestStore()
+        var coordinator: OperationCoordinator? = null
+        val resolver =
+            object : OperationContextResolver {
+                override fun current(): LiveOperationContext = live()
+                override fun liveConnections() = listOf(liveConnection)
+                override fun isLive(scope: CloudScope, credentialRevision: Long?) = true
+            }
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        coordinator = engine(plans, resolver, inner, newScope())
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        assertEquals(1, writes, "a legitimate adapter must send exactly once")
+        assertEquals(confirmation.plan.id, returned.id)
+        assertEquals(TaskState.SUCCEEDED, returned.state)
+    }
+
+    @Test
+    fun theSecondOwnerContinuesIntoTheResourceLockBeforeAuthorityChanges() = runTest {
+        var now = 1_000L
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = ChangePlans(resolver, { now }, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
+        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        extraScopes += holderScope
+        ownedJobs += holderScope.coroutineContext[kotlinx.coroutines.Job]!!
+        val queue = RecordingQueue()
+        val holderEngine = OperationCoordinator(plans, store, resolver, { now }, holderScope, Dispatchers.Unconfined)
+        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        extraScopes += waitingScope
+        ownedJobs += waitingScope.coroutineContext[kotlinx.coroutines.Job]!!
+        val waitingEngine = OperationCoordinator(plans, store, resolver, { now }, waitingScope, Dispatchers.Unconfined)
+        val blocker = confirmOne(plans, zone)
+        val waiting = confirmOne(plans, zone)
+        val holderEntered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val holder =
+            async(Dispatchers.Default) {
+                holderEngine.execute(blocker) {
+                    holderEntered.countDown()
+                    assertTrue(release.await(2, java.util.concurrent.TimeUnit.SECONDS), "the holder must be released")
+                    ExecutionReceipt.Completed()
+                }
+            }
+        assertTrue(holderEntered.await(2, java.util.concurrent.TimeUnit.SECONDS), "the holder must be inside")
+        var writes = 0
+        val contender = async { runCatching { waitingEngine.execute(waiting) { writes++; ExecutionReceipt.Completed() } } }
+        runCurrent()
+        queue.runAll()
+        assertTrue(queue.runs.get() > 0, "the contender's owner continuation must really have run")
+        assertFalse(contender.isCompleted, "the contender must be parked at the resource lock")
+        assertEquals(0, writes, "the contender must not have sent")
+        try {
+            // Only now, with the contender provably parked, does authority change.
+            now = 1_000L + 400_000L
+        } finally {
+            release.countDown()
+        }
+        holder.await()
+        queue.runAll()
+        val result = contender.await()
+        assertTrue(result.isFailure, "the parked contender must be refused after the authority change")
+        assertEquals(0, writes, "no send may happen after the authority change")
+    }
+
+    @Test
+    fun recoveryCannotRecreateARowDeletedByItsFinalLivenessCallback() = runTest {
+        val base = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var coordinator: OperationCoordinator? = null
+        var arm = false
+        val resolver =
+            object : OperationContextResolver {
+                override fun current(): LiveOperationContext? = base.current()
+                override fun liveConnections() = base.liveConnections()
+                override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
+                    if (arm && inner.putCount >= 1) {
+                        inner.tasks.clear()
+                        coordinator?.invalidateConnection("connection-1")
+                        return false
+                    }
+                    return true
+                }
+            }
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        coordinator = engine(plans, resolver, inner, newScope())
+        val confirmation = confirmOne(plans)
+        coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
+        val before = inner.putCount
+        arm = true
+        coordinator.recoverPending()
+        assertEquals(before, inner.putCount, "recovery must not write after its own liveness callback revoked")
+        assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated")
     }
 }
