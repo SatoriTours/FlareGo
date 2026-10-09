@@ -236,17 +236,21 @@ class AppControllerTest {
         val sends = java.util.concurrent.atomic.AtomicInteger(0)
         var failure: (() -> Throwable)? = null
         var lastCommand: DnsWriteCommand? = null
+        /** When set, the write runs against a replaced credential for the same connection. */
+        var alternate: CloudSession? = null
 
         override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
             lastCommand = command
-            beforeSend()
             entered.complete(Unit)
             gate?.await()
             failure?.let { throw it() }
+            // The guard is evaluated immediately before the typed send.
+            beforeSend()
             sends.incrementAndGet()
+            val target = alternate ?: session
             val recordId = command.recordId
-            if (recordId == null) session.save(command.scope.zoneId, null, command.draft)
-            else session.delete(command.scope.zoneId, recordId)
+            if (recordId == null) target.save(command.scope.zoneId, null, command.draft)
+            else target.delete(command.scope.zoneId, recordId)
             return ExecutionReceipt.Completed()
         }
     }
@@ -324,10 +328,10 @@ class AppControllerTest {
         val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
-        val job = launch { runCatching { controller.saveDns(domain(), null, draft()) } }
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
         runCurrent()
         assertTrue(receipts.entered.isCompleted, "the write must really be suspended inside the receipt path")
-        assertTrue(job.isActive, "the save must still be in flight")
+        assertFalse(deferred.isCompleted, "the save must still be in flight")
         controller.selectConnection(real2)
         runCurrent()
         controller.selectConnection(real1)
@@ -336,8 +340,11 @@ class AppControllerTest {
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
-        job.join()
+        val operation = deferred.await()
         assertEquals(0, receipts.sends.get(), "no session write may happen after a pre-send failure")
+        // A failure inside the receipt is a post-send uncertainty: the engine returns the
+        // original task conservatively, never a fabricated FAILED.
+        assertEquals(OperationStatus.UNKNOWN, operation.status, "the conservative canonical result must be returned")
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late failure must not refresh the frozen UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }
@@ -353,10 +360,10 @@ class AppControllerTest {
         val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), optIn(backgroundScope, receipts))
         controller.refresh()
         runCurrent()
-        val job = launch { runCatching { controller.deleteDns(domain(), record) } }
+        val deferred = async { controller.deleteDns(domain(), record) }
         runCurrent()
         assertTrue(receipts.entered.isCompleted, "the delete must really be suspended inside the receipt path")
-        assertTrue(job.isActive, "the delete must still be in flight")
+        assertFalse(deferred.isCompleted, "the delete must still be in flight")
         controller.reloadConnections(listOf(real2))
         runCurrent()
         controller.reloadConnections(listOf(real1, real2))
@@ -365,8 +372,11 @@ class AppControllerTest {
         store.putOperation(marker())
         gate.complete(Unit)
         runCurrent()
-        job.join()
+        val operation = deferred.await()
         assertEquals(0, receipts.sends.get(), "no session write may happen after a pre-send failure")
+        // A failure inside the receipt is a post-send uncertainty: the engine returns the
+        // original task conservatively, never a fabricated FAILED.
+        assertEquals(OperationStatus.UNKNOWN, operation.status, "the conservative canonical result must be returned")
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a late failure must not refresh the frozen UI")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }
@@ -617,6 +627,10 @@ class AppControllerTest {
                 }
             }
         val receipts = ReceiptPath(DemoSession(real1), gate)
+        val replaced = object : CloudSession by DemoSession(real1) {
+            override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) = Unit
+        }
+        receipts.alternate = replaced
         val fixture = optInFixture(backgroundScope, receipts)
         val controller = AppController(backgroundScope, factory, store, listOf(real1, real2), fixture.lifecycle)
         controller.refresh()
