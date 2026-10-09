@@ -685,12 +685,12 @@ class OperationCoordinatorTest {
             assertEquals(OperationStatus.UNKNOWN, canonical.status, "a conservative task must map to UNKNOWN")
             val repeat = coordinator.execute(confirmation) { writes++; receipt }
             assertEquals(1, writes, "a repeated confirmation must not send twice")
-            assertEquals(returned.id, repeat.id)
-            assertEquals(returned.state, repeat.state)
+            assertEquals(returned, repeat, "a repeat must return the identical result")
             val repeatSummary = OperationTaskPersistence.summaryFor(repeat)
             assertEquals("Cloudflare 操作", repeatSummary.title)
             assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
             assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
+            assertEquals(returned.id, store.tasks[returned.id]?.id, "the stored row must keep the original identity")
         }
     }
 
@@ -734,13 +734,12 @@ class OperationCoordinatorTest {
             assertEquals(OperationStatus.UNKNOWN, canonical.status)
             val repeat = coordinator.execute(confirmation) { writes++; receipt }
             assertEquals(1, writes, "a repeated confirmation must not send twice")
-            assertEquals(returned.id, repeat.id)
-            assertEquals(returned.state, repeat.state)
+            assertEquals(returned, repeat, "a repeat must return the identical result")
             val repeatSummary = OperationTaskPersistence.summaryFor(repeat)
             assertEquals("Cloudflare 操作", repeatSummary.title)
             assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
             assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
-            assertEquals(returned.id, store.tasks[returned.id]?.id)
+            assertEquals(returned.id, store.tasks[returned.id]?.id, "the stored row must keep the original identity")
         }
     }
 
@@ -1277,9 +1276,12 @@ class OperationCoordinatorTest {
         val coordinator = engine(plans, resolver, store, newScope())
         val confirmation = confirmOne(plans)
         val task = coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
+        val before = store.putCount
         val matched = coordinator.reconcile(task.id) { Reconciliation.Matched(desired) }
         assertEquals(task.id, matched.id, "an unchanged authority must still reconcile the original task")
-        assertTrue(matched.state == TaskState.SUCCEEDED || matched.state == TaskState.UNKNOWN || matched.state == TaskState.RECONCILING)
+        assertEquals(TaskState.SUCCEEDED, matched.state, "a strict hash match settles the task")
+        assertEquals(task.scope, matched.scope, "the reconciled task must keep its original scope")
+        assertEquals(before + 1, store.putCount, "the settlement must persist exactly one row")
     }
 
     @Test
@@ -1320,12 +1322,13 @@ class OperationCoordinatorTest {
         assertFalse(contender.isCompleted, "the contender must be parked at the same full reference")
         assertEquals(0, writes, "the contender must not have sent while the reference is held")
         release.countDown()
-        holder.await()
+        val first = holder.await()
         queue.runAll()
         val second = contender.await()
         assertEquals(1, writes, "the contender must send exactly once after release")
-        val first = store.tasks.values.firstOrNull { it.id.contains("plan-a") }
-        assertNotNull(first)
+        assertEquals(confirmA.plan.id, first.id, "the holder must own its original task")
+        assertEquals(TaskState.SUCCEEDED, first.state)
+        assertEquals(confirmB.plan.id, second.id, "the contender must own its original task")
         assertEquals(TaskState.SUCCEEDED, second.state)
     }
 }
