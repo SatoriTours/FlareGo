@@ -216,12 +216,19 @@ class AppControllerTest {
     // ------------------------------------------- tracked publication contracts (real receipt path)
 
     private class CoordinationStore : OperationStore {
-        val tasks = linkedMapOf<String, OperationTask>()
-        override fun get(id: String) = tasks[id]
-        override fun list(connectionId: String) = tasks.values.filter { it.connectionId == connectionId }
-        override fun put(task: OperationTask) { tasks[task.id] = task }
-        override fun removeConnection(connectionId: String) { tasks.entries.removeAll { it.value.connectionId == connectionId } }
-        override fun putWithSummary(task: OperationTask, summary: Operation) { tasks[task.id] = task }
+        private val lock = Any()
+        private val rows = linkedMapOf<String, OperationTask>()
+
+        /** Immutable snapshot: the internal container is never exposed. */
+        val tasks: Map<String, OperationTask> get() = synchronized(lock) { rows.toMap() }
+
+        fun clearAll() = synchronized(lock) { rows.clear() }
+
+        override fun get(id: String): OperationTask? = synchronized(lock) { rows[id] }
+        override fun list(connectionId: String): List<OperationTask> = synchronized(lock) { rows.values.filter { it.connectionId == connectionId } }
+        override fun put(task: OperationTask) { synchronized(lock) { rows[task.id] = task } }
+        override fun removeConnection(connectionId: String) { synchronized(lock) { rows.entries.removeAll { it.value.connectionId == connectionId } } }
+        override fun putWithSummary(task: OperationTask, summary: Operation) { synchronized(lock) { rows[task.id] = task } }
     }
 
     /**
@@ -611,7 +618,7 @@ class AppControllerTest {
         runCurrent()
         // The collaboration delete runs through the same metadata latch as the writes.
         fixture.coordinator.withInvalidatedConnection(real1.id) {
-            fixture.tasks.tasks.clear()
+            fixture.tasks.clearAll()
             store.removeConnection(real1.id)
         }
         val operation = controller.saveDns(domain(), null, DnsDraft("SRV", "@", "192.0.2.1"))

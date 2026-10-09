@@ -20,25 +20,36 @@ class OperationCoordinatorTest {
     private val desired = "b".repeat(64)
     private val createKey = DnsOperationLifecycle.ACTION_CREATE
 
-    /** Shared across real worker threads: every mutation is guarded by one monitor. */
+    /** Shared across real worker threads: private state behind one monitor. */
     private class TestStore : OperationStore {
         private val lock = Any()
-        val tasks = linkedMapOf<String, OperationTask>()
-        val summaries = mutableListOf<Operation>()
-        var putCount = 0
-        var failPut = false
+        private val rows = linkedMapOf<String, OperationTask>()
+        private val recorded = mutableListOf<Operation>()
+        private var puts = 0
+        private var failing = false
 
-        override fun get(id: String): OperationTask? = synchronized(lock) { tasks[id] }
-        override fun list(connectionId: String): List<OperationTask> = synchronized(lock) { tasks.values.filter { it.connectionId == connectionId } }
-        override fun put(task: OperationTask) { synchronized(lock) { tasks[task.id] = task } }
-        override fun removeConnection(connectionId: String) { synchronized(lock) { tasks.entries.removeAll { it.value.connectionId == connectionId } } }
+        /** Immutable snapshots only: the internal containers are never exposed. */
+        val tasks: Map<String, OperationTask> get() = synchronized(lock) { rows.toMap() }
+        val summaries: List<Operation> get() = synchronized(lock) { recorded.toList() }
+        val putCount: Int get() = synchronized(lock) { puts }
+
+        var failPut: Boolean
+            get() = synchronized(lock) { failing }
+            set(value) { synchronized(lock) { failing = value } }
+
+        fun clearAll() = synchronized(lock) { rows.clear() }
+
+        override fun get(id: String): OperationTask? = synchronized(lock) { rows[id] }
+        override fun list(connectionId: String): List<OperationTask> = synchronized(lock) { rows.values.filter { it.connectionId == connectionId } }
+        override fun put(task: OperationTask) { synchronized(lock) { rows[task.id] = task } }
+        override fun removeConnection(connectionId: String) { synchronized(lock) { rows.entries.removeAll { it.value.connectionId == connectionId } } }
 
         override fun putWithSummary(task: OperationTask, summary: Operation) {
             synchronized(lock) {
-                putCount++
-                if (failPut) throw IllegalStateException("synthetic store failure")
-                tasks[task.id] = task
-                summaries += summary
+                puts++
+                if (failing) throw IllegalStateException("synthetic store failure")
+                rows[task.id] = task
+                recorded += summary
             }
         }
     }
@@ -72,11 +83,14 @@ class OperationCoordinatorTest {
     /** Every fixture scope is registered here and released, even when a test fails. */
     private val ownedJobs = mutableListOf<Job>()
 
-    private fun newScope(cancelled: Boolean = false): CoroutineScope {
+    private fun newScope(
+        dispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
+        cancelled: Boolean = false,
+    ): CoroutineScope {
         val job = SupervisorJob()
         if (cancelled) job.cancel()
         ownedJobs += job
-        return CoroutineScope(job + Dispatchers.Unconfined).also { extraScopes += it }
+        return CoroutineScope(job + dispatcher).also { extraScopes += it }
     }
 
     /** Cancel and join every owned scope with a bound, so a failed test cannot leak work. */
@@ -86,11 +100,10 @@ class OperationCoordinatorTest {
         appScope = null
         extraScopes.forEach { it.cancel() }
         extraScopes.clear()
-        runBlocking {
-            withTimeoutOrNull(5_000) {
-                ownedJobs.forEach { it.cancel(); it.join() }
-            }
-        }
+        val owned = ownedJobs.toList()
+        owned.forEach { it.cancel() }
+        val finished = runBlocking { withTimeoutOrNull(10_000) { owned.forEach { it.join() }; true } }
+        assertTrue(finished == true, "every owned job must complete within the bound")
         ownedJobs.clear()
     }
 
@@ -363,7 +376,7 @@ class OperationCoordinatorTest {
         val store = TestStore()
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scope = newScope()
         appScope = scope
         val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val confirmation = confirmOne(plans)
@@ -450,7 +463,7 @@ class OperationCoordinatorTest {
             // This case confirms twice, so its local factory needs four real ids.
             val queue = mutableListOf("plan-1", "confirm-1", "plan-2", "confirm-2")
             val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val scope = newScope()
             appScope = scope
             val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
             val confirmation = confirmOne(plans)
@@ -471,7 +484,7 @@ class OperationCoordinatorTest {
         val taskStore = TestStore()
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scope = newScope()
         appScope = scope
         val coordinator = OperationCoordinator(plans, taskStore, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val lifecycle =
@@ -499,7 +512,7 @@ class OperationCoordinatorTest {
         val taskStore = TestStore()
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scope = newScope()
         appScope = scope
         val coordinator = OperationCoordinator(plans, taskStore, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val lifecycle =
@@ -690,7 +703,7 @@ class OperationCoordinatorTest {
             assertEquals("Cloudflare 操作", repeatSummary.title)
             assertEquals("结果待核对，请刷新后检查", repeatSummary.detail)
             assertEquals(OperationStatus.UNKNOWN, repeatSummary.status)
-            assertEquals(returned.id, store.tasks[returned.id]?.id, "the stored row must keep the original identity")
+            assertEquals(stored, store.tasks[returned.id], "the stored row must be unchanged after the repeat")
         }
     }
 
@@ -787,11 +800,11 @@ class OperationCoordinatorTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
-        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val holderScope = newScope(Dispatchers.Default)
         extraScopes += holderScope
         ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
-        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        val waitingScope = newScope(queue)
         extraScopes += waitingScope
         ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
@@ -834,7 +847,7 @@ class OperationCoordinatorTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-a", "confirm-a", "plan-b", "confirm-b"))
-        val app = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val app = newScope(Dispatchers.Default)
         extraScopes += app
         ownedJobs.add(app.coroutineContext[kotlinx.coroutines.Job]!!)
         val engineA = engine(plans, resolver, store, app, Dispatchers.Default)
@@ -948,12 +961,12 @@ class OperationCoordinatorTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
         val plans = ChangePlans(resolver, { now }, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
-        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val holderScope = newScope(Dispatchers.Default)
         extraScopes += holderScope
         ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
         val holderEngine = OperationCoordinator(plans, store, resolver, { now }, holderScope, Dispatchers.Unconfined)
-        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        val waitingScope = newScope(queue)
         extraScopes += waitingScope
         ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val waitingEngine = OperationCoordinator(plans, store, resolver, { now }, waitingScope, Dispatchers.Unconfined)
@@ -1084,11 +1097,11 @@ class OperationCoordinatorTest {
         val resolver = Resolver(live(), listOf(liveConnection))
         val store = TestStore()
         val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1", "plan-2", "confirm-2"))
-        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val holderScope = newScope(Dispatchers.Default)
         extraScopes += holderScope
         ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
-        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        val waitingScope = newScope(queue)
         extraScopes += waitingScope
         ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
@@ -1200,7 +1213,7 @@ class OperationCoordinatorTest {
         val resolverA = Resolver(live(scope = zoneA), listOf(liveConnection))
         val resolverB = Resolver(live(scope = zoneB), listOf(liveConnection))
         val store = TestStore()
-        val app = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val app = newScope(Dispatchers.Default)
         extraScopes += app
         ownedJobs.add(app.coroutineContext[kotlinx.coroutines.Job]!!)
         // One domain, one plans: only the engines have their own trusted resolvers.
@@ -1260,7 +1273,7 @@ class OperationCoordinatorTest {
         assertEquals(1, reads.get(), "this reconcile read must have run exactly once")
         assertEquals(before, inner.putCount, "no write may follow a delete done inside the read")
         assertTrue(inner.tasks.isEmpty(), "the deleted task must not be resurrected")
-        assertTrue(outcome.isFailure || outcome.getOrNull()?.state != TaskState.SUCCEEDED)
+        assertTrue(outcome.isFailure, "a delete inside the trusted read must refuse the reconciliation")
     }
 
     @Test
@@ -1289,11 +1302,11 @@ class OperationCoordinatorTest {
         val confirmA = plans.confirm(planA.id, zone, 7, fingerprint, 1_000)
         val planB = plans.prepare(zone, DnsOperationLifecycle.ACTION_PATCH, ref, null, desired, fingerprint, 7, 1_000)
         val confirmB = plans.confirm(planB.id, zone, 7, fingerprint, 1_000)
-        val holderScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val holderScope = newScope(Dispatchers.Default)
         extraScopes += holderScope
         ownedJobs.add(holderScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val queue = RecordingQueue()
-        val waitingScope = CoroutineScope(SupervisorJob() + queue)
+        val waitingScope = newScope(queue)
         extraScopes += waitingScope
         ownedJobs.add(waitingScope.coroutineContext[kotlinx.coroutines.Job]!!)
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
@@ -1325,5 +1338,21 @@ class OperationCoordinatorTest {
         assertEquals(TaskState.SUCCEEDED, first.state)
         assertEquals(confirmB.plan.id, second.id, "the contender must own its original task")
         assertEquals(TaskState.SUCCEEDED, second.state)
+    }
+
+    @Test
+    fun anUnchangedMetadataRowCheckStillSettlesTheOriginalTask() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, store, newScope())
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        assertEquals(1, writes)
+        assertEquals(confirmation.plan.id, returned.id)
+        assertEquals(TaskState.SUCCEEDED, returned.state)
+        assertEquals(TaskState.SUCCEEDED, store.tasks[returned.id]?.state)
+        assertEquals(zone, returned.scope)
     }
 }
