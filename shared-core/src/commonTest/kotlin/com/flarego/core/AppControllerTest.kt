@@ -549,4 +549,95 @@ class AppControllerTest {
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
         assertTrue(coordination.tasks.isEmpty(), "no task row may be created by a failed pre-send read")
     }
+
+    /** The opt-in wiring, exposed so a test can observe the real coordination state. */
+    private class OptInFixture(
+        val lifecycle: DnsOperationLifecycle,
+        val coordinator: OperationCoordinator,
+        val plans: ChangePlans,
+        val tasks: CoordinationStore,
+        val receipts: ReceiptPath,
+    )
+
+    private fun optInFixture(
+        scope: kotlinx.coroutines.CoroutineScope,
+        receipts: ReceiptPath = ReceiptPath(DemoSession(real1)),
+        coordination: CoordinationStore = CoordinationStore(),
+        dispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+    ): OptInFixture {
+        val zone = ZoneScope(AccountScope(real1.id, real1.accountId), "z")
+        val live = LiveOperationContext(real1, zone, 7, "a".repeat(64))
+        val resolver =
+            object : OperationContextResolver {
+                override fun current() = live
+                override fun liveConnections() = listOf(real1, real2)
+                override fun isLive(scope: CloudScope, credentialRevision: Long?) = true
+            }
+        val plans = ChangePlans(resolver, { 1_000 }, OperationIds { java.util.UUID.randomUUID().toString() })
+        val coordinator = OperationCoordinator(plans, coordination, resolver, { 1_000 }, scope, dispatcher)
+        val lifecycle = DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }, receipts)
+        return OptInFixture(lifecycle, coordinator, plans, coordination, receipts)
+    }
+
+    @Test
+    fun cooperativeDeletionThenInvalidDraftIsFailedWithoutResurrection() = runTest {
+        val store = MemoryStore()
+        val fixture = optInFixture(backgroundScope)
+        val controller =
+            AppController(backgroundScope, SessionFactory { DemoSession(real1) }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        // The collaboration delete runs through the same metadata latch as the writes.
+        fixture.coordinator.withInvalidatedConnection(real1.id) {
+            fixture.tasks.tasks.clear()
+            store.removeConnection(real1.id)
+        }
+        val operation = controller.saveDns(domain(), null, DnsDraft("SRV", "@", "192.0.2.1"))
+        runCurrent()
+        assertEquals(OperationStatus.FAILED, operation.status, "an invalid draft stays a deterministic FAILED")
+        assertEquals(0, fixture.receipts.sends.get(), "no session write may happen")
+        assertTrue(fixture.tasks.tasks.isEmpty(), "the deleted task must not be resurrected")
+        assertEquals(0, store.operations().size, "no caller-side summary may be persisted")
+    }
+
+    @Test
+    fun lateSaveSuccessAfterACredentialReplacementKeepsTheFrozenUi() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val store = MemoryStore()
+        var first = true
+        val factory =
+            SessionFactory {
+                if (first) {
+                    first = false
+                    DemoSession(real1)
+                } else {
+                    object : CloudSession by DemoSession(real1) {
+                        override suspend fun inventory() = Inventory(emptyList(), emptyList())
+                    }
+                }
+            }
+        val receipts = ReceiptPath(DemoSession(real1), gate)
+        val fixture = optInFixture(backgroundScope, receipts)
+        val controller = AppController(backgroundScope, factory, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(receipts.entered.isCompleted, "the write must be inside the receipt path")
+        assertFalse(deferred.isCompleted)
+        // The same connection id gets a brand new credential/session while the write is in flight.
+        controller.invalidateSession(real1.id)
+        runCurrent()
+        controller.reloadConnections(listOf(real1, real2))
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.SUCCESS, operation.status)
+        assertEquals(1, receipts.sends.get())
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "a replaced credential must not publish the old result")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+    }
 }
