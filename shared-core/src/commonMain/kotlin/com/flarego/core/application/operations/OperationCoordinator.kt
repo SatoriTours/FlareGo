@@ -78,18 +78,27 @@ class OperationCoordinator(
     ): OperationTask {
         val admitted = plans.admit(plan) ?: throw invalidInputFailure()
         if (admitted.owner) {
-            appScope.launch {
-                // The shared outcome always completes, even when this engine is cancelled
-                // while the write is in flight, so parked waiters can never hang.
-                val result =
-                    try {
-                        attempt(admitted.plan, guard, write)
-                    } catch (cancelled: CancellationException) {
-                        Result.failure(cancelled)
-                    } catch (failure: Throwable) {
-                        Result.failure(failure)
-                    }
-                admitted.claim.outcome.complete(result)
+            val job =
+                appScope.launch {
+                    // The shared outcome always completes, even when this engine is cancelled
+                    // while the write is in flight, so parked waiters can never hang.
+                    val result =
+                        try {
+                            attempt(admitted.plan, guard, write)
+                        } catch (cancelled: CancellationException) {
+                            Result.failure(cancelled)
+                        } catch (failure: Throwable) {
+                            Result.failure(failure)
+                        }
+                    admitted.claim.outcome.complete(result)
+                }
+            // The body may never run at all (an already-cancelled scope, or a cancel while
+            // the job is still queued on its dispatcher). The job's own completion then has
+            // to finish the shared outcome exactly once; `complete` is a no-op when the body
+            // already did, so success and failure never race.
+            job.invokeOnCompletion { cause ->
+                val failure = cause ?: IllegalStateException("the confirmed execution did not run")
+                admitted.claim.outcome.complete(Result.failure(failure))
             }
         }
         return admitted.claim.outcome.await().getOrThrow()
@@ -117,10 +126,11 @@ class OperationCoordinator(
             val generation = generationOf(connectionIdOf(confirmed.scope))
             requireAuthorized(confirmed, generation)
             if (storeOnIo { store.get(confirmed.id) } != null) throw invalidInputFailure()
+            val connectionId = connectionIdOf(confirmed.scope)
             val queued = newTask(confirmed, TaskState.QUEUED)
-            persist(confirmed, queued)
+            writeMetadata(connectionId, queued, generation, requireExisting = false)
             val running = advance(queued, TaskState.RUNNING)
-            persist(confirmed, running)
+            writeMetadata(connectionId, running, generation, requireExisting = true)
             // Re-check immediately before the write, not only at the entry: an
             // invalidation that happened while this call was queued must be seen here.
             requireAuthorized(confirmed, generation)
@@ -151,7 +161,7 @@ class OperationCoordinator(
                     return@withLock running
                 }
             return@withLock try {
-                persist(confirmed, settled)
+                writeMetadata(connectionId, settled, generation, requireExisting = true)
                 settled
             } catch (_: Throwable) {
                 running
@@ -169,9 +179,6 @@ class OperationCoordinator(
         val generation = generationOf(task.connectionId)
         val outcome = read(task)
         requireLiveMetadata(task)
-        // The read may have suspended: the original generation and the row must still hold.
-        if (isInvalidated(task.connectionId) || generationOf(task.connectionId) != generation) throw invalidInputFailure()
-        if (storeOnIo { store.get(taskId) } == null) throw invalidInputFailure()
         val updated =
             when (outcome) {
                 is Reconciliation.Matched -> {
@@ -189,9 +196,9 @@ class OperationCoordinator(
             }
         // The gate is taken once here: `persist` acquires the same non-reentrant
         // Mutex, so nesting it would self-deadlock. Deletion uses this same latch.
-        withMetadataGate(task.connectionId) {
-            storeOnIo { store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated)) }
-        }
+        // The read and the second fetch may both suspend: the original generation,
+        // liveness and the original row are re-checked inside the latch and the IO block.
+        writeMetadata(task.connectionId, updated, generation, requireExisting = true)
         return updated
     }
 
@@ -223,7 +230,15 @@ class OperationCoordinator(
                             // and FAILED are unchanged.
                             else -> task
                         }
-                    if (updated !== task) store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
+                    if (updated !== task) {
+                        // isLive and advance(clock) callbacks may have invalidated since the
+                        // iteration check: re-verify the original generation, liveness and the
+                        // row immediately before the put, and never recreate a deleted row.
+                        if (isInvalidated(connection.id) || generationOf(connection.id) != generation) break
+                        if (!context.isLive(task.scope, null)) break
+                        if (store.get(task.id) == null) break
+                        store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
+                    }
                     recovered += updated
                 }
             } finally {
@@ -292,11 +307,25 @@ class OperationCoordinator(
         if (!context.isLive(task.scope, null)) throw invalidInputFailure()
     }
 
-    private suspend fun persist(plan: ChangePlan, task: OperationTask) = persist(task.connectionId, task)
-
-    private suspend fun persist(connectionId: String, task: OperationTask) {
+    /**
+     * The authoritative metadata write: the original generation, liveness and (for every
+     * phase after the first insert) the existence of the original row are re-checked
+     * inside the same metadata latch and inside the real IO block, immediately before the
+     * put — after any dispatcher wait. A stale generation is never re-sampled as consent.
+     */
+    private suspend fun writeMetadata(
+        connectionId: String,
+        task: OperationTask,
+        generation: Long,
+        requireExisting: Boolean,
+    ) {
         withMetadataGate(connectionId) {
-            storeOnIo { store.putWithSummary(task, OperationTaskPersistence.summaryFor(task)) }
+            storeOnIo {
+                if (isInvalidated(connectionId) || generationOf(connectionId) != generation) throw invalidInputFailure()
+                if (!context.isLive(task.scope, null)) throw invalidInputFailure()
+                if (requireExisting && store.get(task.id) == null) throw invalidInputFailure()
+                store.putWithSummary(task, OperationTaskPersistence.summaryFor(task))
+            }
         }
     }
 

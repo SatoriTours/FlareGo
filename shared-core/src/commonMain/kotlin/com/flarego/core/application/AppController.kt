@@ -162,6 +162,10 @@ class AppController(
         val operations = dnsOperations
         if (operations != null && operationsActive()) {
             val connection = state.value.selected
+            // Freeze the original selection and session revision: a late result may only be
+            // published into the UI when both are still current.
+            val selectionId = connection.id
+            val sessionVersion = sessionVersions[connection.id] ?: 0
             // A user input error becomes a recorded failure, exactly as the legacy path.
             val validated = try { validateDns(domain, draft) } catch (failure: Exception) { return recordedFailure(connection, title, failure) }
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
@@ -172,43 +176,53 @@ class AppController(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    return recordedFailure(connection, title, failure)
+                    return recordedFailure(connection, title, failure, stillPublishing(connection.id, selectionId, sessionVersion))
                 }
-            return task.toOperation(connection)
+            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion))
         }
         return scope.async { mutate(domain, title) { api -> api.save(domain.id, recordId, validateDns(domain, draft)) } }.await()
     }
 
     private fun operationsActive(): Boolean = !state.value.selected.demo
 
-    private fun recordedFailure(connection: Connection, title: String, failure: Exception): Operation {
+    private fun recordedFailure(
+        connection: Connection,
+        title: String,
+        failure: Exception,
+        publish: Boolean = true,
+    ): Operation {
         // An opt-in failure is only FAILED when nothing was sent and the failure is
         // certain; anything else stays UNKNOWN so a possible send is never denied.
         val status =
             if (failure is CloudException && failure.uncertain) OperationStatus.UNKNOWN
             else OperationStatus.FAILED
         val operation = Operation(Random.nextLong().toString(16), connection.id, title, status, safeMessage(failure))
-        store.putOperation(operation)
-        mutable.update { it.copy(operations = store.operations()) }
+        if (publish) {
+            store.putOperation(operation)
+            mutable.update { it.copy(operations = store.operations()) }
+        }
         return operation
     }
 
-    private fun OperationTask.toOperation(connection: Connection): Operation {
+    private fun OperationTask.toOperation(connection: Connection, publish: Boolean): Operation {
         val summary = OperationTaskPersistence.summaryFor(this)
         // The coordinator already persisted this canonical summary under its own metadata
-        // latch, so the UI must not write a second lifecycle row (that would bypass the
-        // deletion latch and could revive a removed operation). Publish only when the
-        // original selection is still current.
-        // Refresh only: no second lifecycle row is written here, so a deleted task cannot
-        // be recreated by a late result.
-        mutable.update { it.copy(operations = store.operations()) }
+        // latch; the UI never writes a second lifecycle row. A late result may only refresh
+        // the list when the original selection, session and UI revisions still match.
+        if (publish) mutable.update { it.copy(operations = store.operations()) }
         return Operation(summary.id, connection.id, summary.title, summary.status, summary.detail)
     }
+
+    /** True when the frozen original selection/session revision is still the current one. */
+    private fun stillPublishing(connectionId: String, selectionId: String, sessionVersion: Int): Boolean =
+        state.value.selected.id == selectionId && (sessionVersions[connectionId] ?: 0) == sessionVersion
 
     suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation {
         val operations = dnsOperations
         if (operations != null && operationsActive()) {
             val connection = state.value.selected
+            val selectionId = connection.id
+            val sessionVersion = sessionVersions[connection.id] ?: 0
             val zone = ZoneScope(AccountScope(connection.id, connection.accountId), domain.id)
             val task =
                 try {
@@ -216,9 +230,9 @@ class AppController(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure)
+                    return recordedFailure(connection, "删除 ${record.type} · ${record.name}", failure, stillPublishing(connection.id, selectionId, sessionVersion))
                 }
-            return task.toOperation(connection)
+            return task.toOperation(connection, stillPublishing(connection.id, selectionId, sessionVersion))
         }
         return scope
             .async {
