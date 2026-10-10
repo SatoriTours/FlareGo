@@ -980,4 +980,148 @@ class AppControllerTest {
         assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
         assertEquals(OperationTaskPersistence.summaryFor(stored), operation)
     }
+
+    @Test
+    fun optInSelectionRoundTripWithACompletedReceiptKeepsTheFrozenUi() = runTest {
+        val store = MemoryStore()
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val session = CountingSession(DemoSession(real1))
+        val receipts = CompletedReceipt(session)
+        val fixture = authorityFixture(backgroundScope, authority, receipts)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        session.gate = gate
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed save must have happened")
+        assertEquals(1, session.saveCount)
+        assertFalse(deferred.isCompleted, "the write must still be in flight")
+        controller.selectConnection(real2)
+        runCurrent()
+        controller.selectConnection(real1)
+        runCurrent()
+        val frozen = controller.state.value.operations
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(OperationStatus.SUCCESS, operation.status, "a completed receipt must report SUCCESS")
+        assertEquals(1, receipts.sends.get())
+        assertEquals(frozen, controller.state.value.operations, "the frozen UI must not be republished")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+        val stored = fixture.tasks.tasks.values.single()
+        assertEquals(TaskState.SUCCEEDED, stored.state)
+        assertEquals(OperationTaskPersistence.summaryFor(stored), operation)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
+    }
+
+    @Test
+    fun legacyFactoryAcquisitionUnchangedControlReturnsUnknown() = runTest {
+        val store = MemoryStore()
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val session = CountingSession(DemoSession(real1))
+        val acquisitions = java.util.concurrent.atomic.AtomicInteger(0)
+        val acquired = java.util.concurrent.CountDownLatch(1)
+        val release = CompletableDeferred<Unit>()
+        // The legacy adapter acquires its session through the supplier and then guards and writes.
+        val legacy = LegacyDnsReceiptSource {
+            acquisitions.incrementAndGet()
+            acquired.countDown()
+            release.await()
+            session
+        }
+        val fixture = authorityFixture(backgroundScope, authority, legacy)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(acquired.await(5, java.util.concurrent.TimeUnit.SECONDS), "the supplier acquisition must be entered")
+        assertFalse(deferred.isCompleted, "the write must still be in flight")
+        assertEquals(0, session.saveCount, "no typed write may happen before the acquisition completes")
+        release.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(1, acquisitions.get())
+        assertEquals(1, session.saveCount, "the acquired session must receive the typed write")
+        assertEquals(OperationStatus.UNKNOWN, operation.status, "the legacy Unit adapter reports UNKNOWN")
+        val stored = fixture.tasks.tasks.values.single()
+        assertEquals(TaskState.UNKNOWN, stored.state, "the settled legacy row is the literal UNKNOWN state")
+        assertEquals(OperationTaskPersistence.summaryFor(stored), operation)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
+    }
+
+    @Test
+    fun postSendSaveMembershipRoundTripKeepsTheFrozenUi() = runTest {
+        val store = MemoryStore()
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val session = CountingSession(DemoSession(real1))
+        val receipts = CompletedReceipt(session)
+        val fixture = authorityFixture(backgroundScope, authority, receipts)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        session.gate = gate
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed save must have happened")
+        assertEquals(1, session.saveCount)
+        assertFalse(deferred.isCompleted)
+        // Membership changes while the write is parked, then returns to the original set.
+        controller.reloadConnections(listOf(real2))
+        runCurrent()
+        controller.reloadConnections(listOf(real1, real2))
+        runCurrent()
+        val frozen = controller.state.value.operations
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(1, session.saveCount)
+        assertEquals(frozen, controller.state.value.operations, "a membership change must not be republished into")
+        assertEquals(listOf("marker"), store.operations().map { it.id })
+        val stored = fixture.tasks.tasks.values.single()
+        assertEquals(TaskState.SUCCEEDED, stored.state)
+        assertEquals(OperationTaskPersistence.summaryFor(stored), operation)
+    }
+
+    @Test
+    fun postSendDeleteMembershipRoundTripKeepsTheFrozenUi() = runTest {
+        val store = MemoryStore()
+        val record = DnsRecord("rec-1", "A", "@", "192.0.2.1", 300, false)
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val session = CountingSession(DemoSession(real1))
+        val receipts = CompletedReceipt(session)
+        val fixture = authorityFixture(backgroundScope, authority, receipts)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        session.gate = gate
+        val deferred = async { controller.deleteDns(domain(), record) }
+        runCurrent()
+        assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed delete must have happened")
+        assertEquals(1, session.deleteCount)
+        assertFalse(deferred.isCompleted)
+        controller.reloadConnections(listOf(real2))
+        runCurrent()
+        controller.reloadConnections(listOf(real1, real2))
+        runCurrent()
+        val frozen = controller.state.value.operations
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(0, session.saveCount)
+        assertEquals(1, session.deleteCount)
+        assertEquals(frozen, controller.state.value.operations)
+        assertEquals(listOf("marker"), store.operations().map { it.id })
+        val stored = fixture.tasks.tasks.values.single()
+        assertEquals(TaskState.SUCCEEDED, stored.state)
+        assertEquals(OperationTaskPersistence.summaryFor(stored), operation)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
+    }
 }
