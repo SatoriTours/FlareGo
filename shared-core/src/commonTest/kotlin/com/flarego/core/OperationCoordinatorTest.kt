@@ -1458,8 +1458,9 @@ class OperationCoordinatorTest {
         inner.put(task("recover", TaskState.RUNNING))
         val before = inner.putCount
         armed = true
-        coordinator.recoverPending()
+        val recovered = coordinator.recoverPending()
         assertTrue(reads.get() >= 1, "the final row read must really have run")
+        assertTrue(recovered.isEmpty(), "no task may be reported as recovered after the revocation")
         assertEquals(before, inner.putCount, "no write may follow the deleted final row read")
         assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated")
     }
@@ -1509,16 +1510,88 @@ class OperationCoordinatorTest {
                 override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
                 override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
             }
-        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
-        val coordinator = engine(plans, resolver, store, newScope())
+        val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        val counting =
+            object : OperationContextResolver {
+                override fun current(): LiveOperationContext? = resolver.current()
+                override fun liveConnections() = resolver.liveConnections()
+                override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
+                    liveCalls.incrementAndGet()
+                    return resolver.isLive(scope, credentialRevision)
+                }
+            }
+        val plans = scopedIssuer(counting, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, counting, store, newScope())
         val confirmation = confirmOne(plans)
         var writes = 0
         val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
         assertTrue(armed, "the collision read must have happened before the send")
+        assertTrue(liveCalls.get() >= 2, "the armed post-collision liveness callback must really have been reached")
         assertEquals(1, writes, "a legitimate armed execution must send exactly once")
         assertEquals(confirmation.plan.id, returned.id)
         assertEquals(TaskState.SUCCEEDED, returned.state)
         assertEquals(returned, inner.tasks[returned.id], "the settled row must be the returned task")
         assertEquals(zone, returned.scope)
+    }
+
+    @Test
+    fun inflightOwnerCancellationSharesTheCancellationWithEveryWaiter() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val app = newScope(Dispatchers.Default)
+        val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
+        val confirmation = confirmOne(plans)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val gate = CompletableDeferred<Unit>()
+        val sends = java.util.concurrent.atomic.AtomicInteger(0)
+        val outcomes = java.util.Collections.synchronizedList(mutableListOf<Result<OperationTask>>())
+        val waiters =
+            (1..3).map {
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    outcomes += runCatching {
+                        coordinator.execute(confirmation) {
+                            entered.countDown()
+                            sends.incrementAndGet()
+                            // Cooperative suspension: cancellation resumes this as a throw.
+                            gate.await()
+                            ExecutionReceipt.Completed()
+                        }
+                    }
+                }
+            }
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the app-owned body must be entered")
+            assertEquals(1, sends.get(), "exactly one send may have happened")
+            assertTrue(waiters.all { !it.isCompleted }, "every waiter must still share the in-flight execution")
+        } finally {
+            app.cancel()
+            gate.complete(Unit)
+        }
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (waiters.any { !it.isCompleted } && System.nanoTime() < deadline) {
+            Thread.sleep(1)
+            runCurrent()
+        }
+        assertTrue(waiters.all { it.isCompleted }, "every waiter must exit within the bound")
+        assertEquals(3, outcomes.size, "every waiter must receive the shared outcome")
+        assertTrue(outcomes.all { it.isFailure }, "a cancelled owner must complete the shared outcome as a failure")
+        assertTrue(
+            outcomes.all { it.exceptionOrNull() is CancellationException },
+            "the shared failure must be the cancellation itself",
+        )
+        assertEquals(1, sends.get(), "a cancelled in-flight owner must not resend")
+        val row = store.tasks[confirmation.plan.id]
+        assertNotNull(row, "the captured pre-send row must remain as evidence")
+        assertEquals(confirmation.plan.id, row.id)
+        assertEquals(zone, row.scope)
+        assertTrue(row.state == TaskState.RUNNING || row.state == TaskState.UNKNOWN)
+        val canonical = OperationTaskPersistence.summaryFor(row)
+        assertEquals("Cloudflare 操作", canonical.title)
+        assertEquals("结果待核对，请刷新后检查", canonical.detail)
+        assertEquals(OperationStatus.UNKNOWN, canonical.status)
+        val repeat = runCatching { coordinator.execute(confirmation) { sends.incrementAndGet(); ExecutionReceipt.Completed() } }
+        assertTrue(repeat.isFailure, "a repeat must share the same failure")
+        assertEquals(1, sends.get(), "the repeat must not resend")
     }
 }
