@@ -709,4 +709,171 @@ class AppControllerTest {
         assertEquals(frozen, controller.state.value.operations.map { it.id }, "a replaced credential must not publish the old result")
         assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
     }
+
+    // ------------------------------------------ fix 22: independent authority + real acquisition
+
+    /** Trusted authority for these tests: never derived from the UI selection or page. */
+    private class CredentialState(
+        private val connection: Connection,
+        private val zoneId: String,
+        private var revision: Long,
+        private var inputFingerprint: String,
+        private var live: Boolean = true,
+    ) {
+        private val lock = Any()
+
+        fun snapshot(): LiveOperationContext? =
+            synchronized(lock) {
+                if (!live) null
+                else LiveOperationContext(connection, ZoneScope(AccountScope(connection.id, connection.accountId), zoneId), revision, inputFingerprint)
+            }
+
+        fun bumpRevision() { synchronized(lock) { revision += 1 } }
+
+        fun changeFingerprint() { synchronized(lock) { inputFingerprint = "b".repeat(64) } }
+
+        fun revoke() { synchronized(lock) { live = false } }
+
+        fun connections(): List<Connection> = listOf(connection)
+
+        val isLive: Boolean get() = synchronized(lock) { live }
+    }
+
+    private class AuthorityResolver(private val authority: CredentialState) : OperationContextResolver {
+        override fun current(): LiveOperationContext? = authority.snapshot()
+        override fun liveConnections(): List<Connection> = authority.connections()
+        override fun isLive(scope: CloudScope, credentialRevision: Long?): Boolean {
+            val snapshot = authority.snapshot() ?: return false
+            if (credentialRevision != null && snapshot.credentialRevision != credentialRevision) return false
+            return true
+        }
+    }
+
+    private class AuthorityFixture(
+        val lifecycle: DnsOperationLifecycle,
+        val coordinator: OperationCoordinator,
+        val plans: ChangePlans,
+        val tasks: CoordinationStore,
+        val authority: CredentialState,
+    )
+
+    private fun authorityFixture(
+        scope: kotlinx.coroutines.CoroutineScope,
+        authority: CredentialState,
+        receipts: DnsReceiptSource,
+    ): AuthorityFixture {
+        val resolver = AuthorityResolver(authority)
+        val tasks = CoordinationStore()
+        val plans = ChangePlans(resolver, { 1_000 }, OperationIds { java.util.UUID.randomUUID().toString() })
+        val coordinator = OperationCoordinator(plans, tasks, resolver, { 1_000 }, scope, kotlinx.coroutines.Dispatchers.Unconfined)
+        val lifecycle = DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }, receipts)
+        return AuthorityFixture(lifecycle, coordinator, plans, tasks, authority)
+    }
+
+    /** Test-only completed receipt: it records the command and can be gated. */
+    private class CompletedReceipt(private val session: CloudSession) : DnsReceiptSource {
+        val entered = CompletableDeferred<Unit>()
+        val sends = java.util.concurrent.atomic.AtomicInteger(0)
+        var gate: CompletableDeferred<Unit>? = null
+        var lastCommand: DnsWriteCommand? = null
+
+        override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
+            lastCommand = command
+            entered.complete(Unit)
+            gate?.await()
+            beforeSend()
+            sends.incrementAndGet()
+            val recordId = command.recordId
+            if (recordId == null) session.save(command.scope.zoneId, null, command.draft)
+            else session.delete(command.scope.zoneId, recordId)
+            return ExecutionReceipt.Completed()
+        }
+    }
+
+    /** A test session that only counts the typed writes it received. */
+    private class CountingSession(private val base: CloudSession) : CloudSession by base {
+        val saves = java.util.concurrent.atomic.AtomicInteger(0)
+        val deletes = java.util.concurrent.atomic.AtomicInteger(0)
+
+        override suspend fun save(zoneId: String, recordId: String?, draft: DnsDraft) {
+            saves.incrementAndGet()
+        }
+
+        override suspend fun delete(zoneId: String, recordId: String) {
+            deletes.incrementAndGet()
+        }
+    }
+
+    @Test
+    fun optInSelectionRoundTripWithACompletedReceiptKeepsTheFrozenUi() = runTest {
+        val store = MemoryStore()
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val session = CountingSession(DemoSession(real1))
+        val receipts = CompletedReceipt(session)
+        val fixture = authorityFixture(backgroundScope, authority, receipts)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        receipts.gate = gate
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(receipts.entered.isCompleted, "the receipt path must be entered")
+        assertFalse(deferred.isCompleted, "the write must still be in flight")
+        controller.selectConnection(real2)
+        runCurrent()
+        controller.selectConnection(real1)
+        runCurrent()
+        val frozen = controller.state.value.operations.map { it.id }
+        store.putOperation(marker())
+        gate.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(1, receipts.sends.get(), "the legitimate write must be sent once")
+        assertEquals(1, session.saves.get(), "the session must have received the write")
+        assertEquals(frozen, controller.state.value.operations.map { it.id }, "the frozen UI must not be republished")
+        assertEquals(listOf("marker"), store.operations().map { it.id }, "no caller-side summary may be persisted")
+        val row = fixture.tasks.tasks.values.single()
+        assertEquals(operation.id, row.id, "the published result must be the original task")
+        assertEquals(TaskState.SUCCEEDED, row.state)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), row.scope)
+        val command = receipts.lastCommand
+        assertNotNull(command, "the receipt must have seen the command")
+        assertEquals(row.scope, command.scope, "the write must stay bound to the original scope")
+    }
+
+    @Test
+    fun legacyFactoryAcquisitionUnchangedControlReturnsUnknown() = runTest {
+        val store = MemoryStore()
+        val authority = CredentialState(real1, "z", 7, "a".repeat(64))
+        val acquisitions = java.util.concurrent.atomic.AtomicInteger(0)
+        val acquired = java.util.concurrent.CountDownLatch(1)
+        val release = CompletableDeferred<Unit>()
+        val session = CountingSession(DemoSession(real1))
+        // The real Legacy adapter acquires the session, then guards, then writes and reports Unknown.
+        val legacy = LegacyDnsReceiptSource {
+            acquisitions.incrementAndGet()
+            acquired.countDown()
+            release.await()
+            session
+        }
+        val fixture = authorityFixture(backgroundScope, authority, legacy)
+        val controller = AppController(backgroundScope, SessionFactory { session }, store, listOf(real1, real2), fixture.lifecycle)
+        controller.refresh()
+        runCurrent()
+        val deferred = async { controller.saveDns(domain(), null, draft()) }
+        runCurrent()
+        assertTrue(acquired.await(5, java.util.concurrent.TimeUnit.SECONDS), "the factory acquisition must really be entered")
+        assertFalse(deferred.isCompleted, "the write must still be in flight")
+        assertEquals(0, session.saves.get(), "no typed send may happen before the acquisition completes")
+        release.complete(Unit)
+        runCurrent()
+        val operation = deferred.await()
+        assertEquals(1, acquisitions.get(), "the fresh session must have been acquired once")
+        assertEquals(1, session.saves.get(), "the acquired session must receive the write")
+        assertEquals(OperationStatus.UNKNOWN, operation.status, "the legacy Unit adapter reports a conservative UNKNOWN")
+        val row = fixture.tasks.tasks.values.single()
+        assertEquals(operation.id, row.id)
+        assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), row.scope)
+    }
 }
