@@ -702,8 +702,8 @@ class OperationCoordinatorTest {
             )
             val stored = store.tasks[returned.id]
             assertNotNull(stored, "the original row must stay addressable")
-            assertEquals(returned.id, stored.id)
-            assertEquals(returned.state, stored.state)
+            // The whole stored task must be the returned one, not merely the same id/state.
+            assertEquals(returned, stored, "the stored row must be the returned task")
             val canonical = OperationTaskPersistence.summaryFor(returned)
             // Fixed literal oracle, independent of the function under test.
             assertEquals(returned.id, canonical.id)
@@ -751,8 +751,8 @@ class OperationCoordinatorTest {
             )
             val stored = store.tasks[returned.id]
             assertNotNull(stored, "the pre-send row must remain the evidence")
-            assertEquals(returned.id, stored.id)
-            assertEquals(returned.state, stored.state)
+            // The whole stored task must be the returned one, not merely the same id/state.
+            assertEquals(returned, stored, "the stored row must be the returned task")
             val canonical = OperationTaskPersistence.summaryFor(returned)
             // Fixed literal oracle, independent of the function under test.
             assertEquals(returned.id, canonical.id)
@@ -871,6 +871,8 @@ class OperationCoordinatorTest {
         assertNotEquals(confirmA.plan.id, confirmB.plan.id)
         val bothInside = java.util.concurrent.CountDownLatch(2)
         val holdBoth = java.util.concurrent.CountDownLatch(1)
+        val sendsA = java.util.concurrent.atomic.AtomicInteger(0)
+        val sendsB = java.util.concurrent.atomic.AtomicInteger(0)
         val jobs =
             listOf(
                 async(Dispatchers.Default) {
@@ -878,6 +880,7 @@ class OperationCoordinatorTest {
                         bothInside.countDown()
                         assertTrue(bothInside.await(5, java.util.concurrent.TimeUnit.SECONDS), "both writes must be inside together")
                         assertTrue(holdBoth.await(5, java.util.concurrent.TimeUnit.SECONDS), "the release must arrive")
+                        sendsA.incrementAndGet()
                         ExecutionReceipt.Completed()
                     }
                 },
@@ -886,6 +889,7 @@ class OperationCoordinatorTest {
                         bothInside.countDown()
                         assertTrue(bothInside.await(5, java.util.concurrent.TimeUnit.SECONDS), "both writes must be inside together")
                         assertTrue(holdBoth.await(5, java.util.concurrent.TimeUnit.SECONDS), "the release must arrive")
+                        sendsB.incrementAndGet()
                         ExecutionReceipt.Completed()
                     }
                 },
@@ -900,6 +904,9 @@ class OperationCoordinatorTest {
         val returns = jobs.awaitAll()
         assertEquals(setOf(confirmA.plan.id, confirmB.plan.id), returns.map { it.id }.toSet())
         returns.forEach { assertEquals(TaskState.SUCCEEDED, it.state, "each distinct-ref write must succeed") }
+        assertEquals(1, sendsA.get(), "the first write must send exactly once")
+        assertEquals(1, sendsB.get(), "the second write must send exactly once")
+        returns.forEach { assertEquals(it, store.tasks[it.id], "each returned task must be stored whole") }
     }
 
     @Test
@@ -1221,6 +1228,8 @@ class OperationCoordinatorTest {
         val engineB = OperationCoordinator(plans, store, resolverB, { 1_000 }, app, Dispatchers.Unconfined)
         val bothInside = java.util.concurrent.CountDownLatch(2)
         val hold = java.util.concurrent.CountDownLatch(1)
+        val sendsScopeA = java.util.concurrent.atomic.AtomicInteger(0)
+        val sendsScopeB = java.util.concurrent.atomic.AtomicInteger(0)
         val jobs =
             listOf(
                 async(Dispatchers.Default) {
@@ -1228,6 +1237,7 @@ class OperationCoordinatorTest {
                         bothInside.countDown()
                         assertTrue(bothInside.await(5, java.util.concurrent.TimeUnit.SECONDS), "both scopes must be inside")
                         assertTrue(hold.await(5, java.util.concurrent.TimeUnit.SECONDS), "the release must arrive")
+                        sendsScopeA.incrementAndGet()
                         ExecutionReceipt.Completed()
                     }
                 },
@@ -1236,6 +1246,7 @@ class OperationCoordinatorTest {
                         bothInside.countDown()
                         assertTrue(bothInside.await(5, java.util.concurrent.TimeUnit.SECONDS), "both scopes must be inside")
                         assertTrue(hold.await(5, java.util.concurrent.TimeUnit.SECONDS), "the release must arrive")
+                        sendsScopeB.incrementAndGet()
                         ExecutionReceipt.Completed()
                     }
                 },
@@ -1249,6 +1260,9 @@ class OperationCoordinatorTest {
         val results = jobs.awaitAll()
         assertEquals(setOf(confirmationA.plan.id, confirmationB.plan.id), results.map { it.id }.toSet())
         results.forEach { assertEquals(TaskState.SUCCEEDED, it.state, "each scope's write must succeed") }
+        assertEquals(1, sendsScopeA.get(), "the first scope's write must send exactly once")
+        assertEquals(1, sendsScopeB.get(), "the second scope's write must send exactly once")
+        results.forEach { assertEquals(it, store.tasks[it.id], "each returned task must be stored whole") }
     }
 
     @Test
@@ -1273,7 +1287,7 @@ class OperationCoordinatorTest {
         assertEquals(1, reads.get(), "this reconcile read must have run exactly once")
         assertEquals(before, inner.putCount, "no write may follow a delete done inside the read")
         assertTrue(inner.tasks.isEmpty(), "the deleted task must not be resurrected")
-        assertTrue(outcome.isFailure, "a delete inside the trusted read must refuse the reconciliation")
+        assertTrue(outcome.exceptionOrNull() is CloudFailure, "a delete inside the trusted read must fail with a typed CloudFailure")
     }
 
     @Test
