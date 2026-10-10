@@ -1172,6 +1172,7 @@ class AppControllerTest {
         val actualInitial: CloudSession,
         val fresh: CountingSession,
         val operation: Operation,
+        val preSend: OperationTask,
     )
 
     private suspend fun runLegacyFactoryAwaitCell(
@@ -1197,6 +1198,7 @@ class AppControllerTest {
         val caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
         scheduler.runCurrent()
         var firstFailure: Throwable? = null
+        var preSend: OperationTask? = null
         try {
             assertTrue(factory.freshEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the fresh create must be entered")
             assertEquals(2, factory.createCount, "the fresh acquisition must be the second create")
@@ -1206,6 +1208,8 @@ class AppControllerTest {
             assertEquals(0, freshNow.saveCount, "no typed write may happen while create is still parked")
             assertEquals(0, freshNow.deleteCount, "no typed delete may happen while create is still parked")
             assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
+            // The metadata row that exists before any settlement decision.
+            preSend = fixture.tasks.tasks.values.single()
             when (mutation) {
                 AuthorityMutation.REVISION -> authority.bumpRevision()
                 AuthorityMutation.FINGERPRINT -> authority.changeFingerprint()
@@ -1230,7 +1234,8 @@ class AppControllerTest {
         val operation = caller.await()
         firstFailure?.let { throw it }
         val fresh = factory.lastIdentity as CountingSession
-        return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation)
+        val captured = preSend ?: fixture.tasks.tasks.values.single()
+        return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation, captured)
     }
 
     @Test
@@ -1242,6 +1247,7 @@ class AppControllerTest {
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status, "the legacy Unit adapter reports UNKNOWN")
         val stored = cell.fixture.tasks.tasks.values.single()
         assertEquals(TaskState.UNKNOWN, stored.state, "the settled legacy row is the literal UNKNOWN state")
+        assertEquals(cell.preSend.copy(state = TaskState.UNKNOWN), stored, "only the state may change on settlement")
         assertEquals(OperationTaskPersistence.summaryFor(stored), cell.operation)
         assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
         assertEquals(listOf("marker"), cell.store.operations().map { it.id }, "no caller-side summary may be persisted")
@@ -1255,7 +1261,7 @@ class AppControllerTest {
         assertEquals(0, cell.fresh.deleteCount)
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status, "the refusal stays conservative")
         val stored = cell.fixture.tasks.tasks.values.single()
-        assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
+        assertEquals(cell.preSend, stored, "a refused send must leave the pre-send row unchanged")
         assertEquals(OperationTaskPersistence.summaryFor(stored), cell.operation)
         assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
     }
