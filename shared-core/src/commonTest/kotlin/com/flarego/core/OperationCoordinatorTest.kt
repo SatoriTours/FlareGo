@@ -1594,4 +1594,55 @@ class OperationCoordinatorTest {
         assertTrue(repeat.isFailure, "a repeat must share the same failure")
         assertEquals(1, sends.get(), "the repeat must not resend")
     }
+
+    @Test
+    fun cancelledUiWaiterDoesNotCancelTheSharedExecutionWithTwoUiWaiters() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val app = newScope(Dispatchers.Default)
+        val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
+        val confirmation = confirmOne(plans)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val hold = java.util.concurrent.CountDownLatch(1)
+        val ownerSends = java.util.concurrent.atomic.AtomicInteger(0)
+        val standbySends = java.util.concurrent.atomic.AtomicInteger(0)
+        // The owner caller starts undispatched, so it wins admission and enters the gated body.
+        val owner =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                coordinator.execute(confirmation) {
+                    ownerSends.incrementAndGet()
+                    entered.countDown()
+                    assertTrue(hold.await(5, java.util.concurrent.TimeUnit.SECONDS), "the owner must be released")
+                    ExecutionReceipt.Completed()
+                }
+            }
+        var ui1: Deferred<Result<OperationTask>>? = null
+        var ui2: Deferred<Result<OperationTask>>? = null
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the app-owned body must be entered first")
+            assertEquals(1, ownerSends.get(), "the owner must have sent exactly once before the waiters join")
+            // Both UI callers join the execution that is already in flight.
+            ui1 = async(start = CoroutineStart.UNDISPATCHED) { runCatching { coordinator.execute(confirmation) { standbySends.incrementAndGet(); ExecutionReceipt.Completed() } } }
+            ui2 = async(start = CoroutineStart.UNDISPATCHED) { runCatching { coordinator.execute(confirmation) { standbySends.incrementAndGet(); ExecutionReceipt.Completed() } } }
+            assertFalse(owner.isCompleted, "the app-owned execution must still be in flight")
+            assertFalse(ui2.isCompleted, "the surviving UI waiter must still share the await")
+            ui1.cancel()
+            assertTrue(ui1.isCancelled, "the cancelled UI waiter must stay cancelled")
+        } finally {
+            hold.countDown()
+        }
+        val task = owner.await()
+        val survivor = ui2!!.await()
+        assertTrue(survivor.isSuccess, "the surviving UI waiter must receive the shared result")
+        assertEquals(task, survivor.getOrNull(), "the survivor must receive the identical task")
+        val later = coordinator.execute(confirmation) { standbySends.incrementAndGet(); ExecutionReceipt.Completed() }
+        assertEquals(task, later, "a later caller must share the same task")
+        assertEquals(1, ownerSends.get(), "the app-owned execution must send exactly once")
+        assertEquals(0, standbySends.get(), "a standby write must never run")
+        assertEquals(task, store.tasks[task.id], "the stored row must equal the shared task")
+        assertEquals(confirmation.plan.id, task.id)
+        assertEquals(zone, task.scope)
+        assertEquals(TaskState.SUCCEEDED, task.state)
+    }
 }
