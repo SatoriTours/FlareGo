@@ -1365,4 +1365,160 @@ class OperationCoordinatorTest {
         assertEquals(TaskState.SUCCEEDED, store.tasks[returned.id]?.state)
         assertEquals(zone, returned.scope)
     }
+
+    // ---------------------------------------------- fix 19: cancellation and staged authority
+
+    @Test
+    fun queuedOwnerCancellationReleasesAllWaitersWithoutSending() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val queue = RecordingQueue()
+        val app = newScope(queue)
+        val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
+        val confirmation = confirmOne(plans)
+        val sends = java.util.concurrent.atomic.AtomicInteger(0)
+        val waiters = (1..3).map { async { runCatching { coordinator.execute(confirmation) { sends.incrementAndGet(); ExecutionReceipt.Completed() } } } }
+        runCurrent()
+        try {
+            assertFalse(waiters.any { it.isCompleted }, "no waiter may finish while the owner is queued")
+            assertEquals(0, queue.runs.get(), "the queued owner body must not have run")
+        } finally {
+            app.cancel()
+            queue.runAll()
+        }
+        val released = withTimeoutOrNull(3_000) { waiters.forEach { it.await() }; true }
+        assertTrue(released == true, "every waiter must exit within the bound")
+        assertEquals(0, sends.get(), "a queued, cancelled owner must never send")
+        assertEquals(0, store.putCount, "no metadata may be written by a queued, cancelled owner")
+    }
+
+    @Test
+    fun cancelledUiWaitersDoNotCancelTheSharedAppExecution() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val store = TestStore()
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val app = newScope(Dispatchers.Default)
+        val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
+        val confirmation = confirmOne(plans)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val hold = java.util.concurrent.CountDownLatch(1)
+        val sends = java.util.concurrent.atomic.AtomicInteger(0)
+        val owner =
+            async(Dispatchers.Default) {
+                coordinator.execute(confirmation) {
+                    entered.countDown()
+                    assertTrue(hold.await(5, java.util.concurrent.TimeUnit.SECONDS), "the owner must be released")
+                    sends.incrementAndGet()
+                    ExecutionReceipt.Completed()
+                }
+            }
+        val uiWaiter = async(Dispatchers.Default) { runCatching { coordinator.execute(confirmation) { sends.incrementAndGet(); ExecutionReceipt.Completed() } } }
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the app-owned body must be entered")
+            uiWaiter.cancel()
+        } finally {
+            hold.countDown()
+        }
+        val task = owner.await()
+        assertEquals(1, sends.get(), "the app-owned execution must send exactly once")
+        val later = coordinator.execute(confirmation) { sends.incrementAndGet(); ExecutionReceipt.Completed() }
+        assertEquals(task.id, later.id, "a later caller must share the original result")
+        assertEquals(1, sends.get(), "the shared result must not be resent")
+        assertEquals(TaskState.SUCCEEDED, task.state)
+    }
+
+    @Test
+    fun recoveryRefusesToWriteWhenItsFinalRowReadWasDeletedInTheCallback() = runTest {
+        val base = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var coordinatorRef: OperationCoordinator? = null
+        var armed = false
+        val reads = java.util.concurrent.atomic.AtomicInteger(0)
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    val captured = inner.get(id)
+                    if (armed) {
+                        reads.incrementAndGet()
+                        // The captured row is returned, but the collaborator deleted it and revoked.
+                        inner.removeConnection("connection-1")
+                        coordinatorRef?.invalidateConnection("connection-1")
+                    }
+                    return captured
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = scopedIssuer(base, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, base, store, newScope())
+        coordinatorRef = coordinator
+        inner.put(task("recover", TaskState.RUNNING))
+        val before = inner.putCount
+        armed = true
+        coordinator.recoverPending()
+        assertTrue(reads.get() >= 1, "the final row read must really have run")
+        assertEquals(before, inner.putCount, "no write may follow the deleted final row read")
+        assertTrue(inner.tasks.isEmpty(), "the deleted row must not be recreated")
+    }
+
+    @Test
+    fun recoveryWritesOneSettledRowWhenTheFinalRowReadIsNotRevoked() = runTest {
+        val base = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var armed = false
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    armed = true
+                    return inner.get(id)
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = scopedIssuer(base, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, base, store, newScope())
+        inner.put(task("recover", TaskState.RUNNING))
+        val before = inner.putCount
+        coordinator.recoverPending()
+        assertTrue(armed, "the same read stage must have been reached")
+        assertEquals(before + 1, inner.putCount, "an unchanged authority must persist exactly one settled row")
+        val settled = inner.tasks["recover"]
+        assertNotNull(settled)
+        assertEquals(zone, settled.scope)
+        assertEquals(OperationStatus.UNKNOWN, OperationTaskPersistence.summaryFor(settled).status)
+    }
+
+    @Test
+    fun theArmedQueuedStageStillSucceedsWhenNoCallbackRevokes() = runTest {
+        val resolver = Resolver(live(), listOf(liveConnection))
+        val inner = TestStore()
+        var armed = false
+        val store =
+            object : OperationStore {
+                override fun get(id: String): OperationTask? {
+                    armed = true
+                    return inner.get(id)
+                }
+                override fun list(connectionId: String) = inner.list(connectionId)
+                override fun put(task: OperationTask) = inner.put(task)
+                override fun removeConnection(connectionId: String) = inner.removeConnection(connectionId)
+                override fun putWithSummary(task: OperationTask, summary: Operation) = inner.putWithSummary(task, summary)
+            }
+        val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+        val coordinator = engine(plans, resolver, store, newScope())
+        val confirmation = confirmOne(plans)
+        var writes = 0
+        val returned = coordinator.execute(confirmation) { writes++; ExecutionReceipt.Completed() }
+        assertTrue(armed, "the collision read must have happened before the send")
+        assertEquals(1, writes, "a legitimate armed execution must send exactly once")
+        assertEquals(confirmation.plan.id, returned.id)
+        assertEquals(TaskState.SUCCEEDED, returned.state)
+        assertEquals(returned, inner.tasks[returned.id], "the settled row must be the returned task")
+        assertEquals(zone, returned.scope)
+    }
 }
