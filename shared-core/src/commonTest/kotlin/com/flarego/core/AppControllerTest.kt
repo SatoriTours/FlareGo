@@ -1126,16 +1126,18 @@ class AppControllerTest {
     }
 
     /** A real SessionFactory whose fresh create awaits its gate *inside* create. */
-    private class ManagedFactory(private val initial: CloudSession) : SessionFactory {
+    private class ManagedFactory : SessionFactory {
         private val lock = Any()
         private var creates = 0
         private val identities = mutableListOf<CloudSession>()
+        private val parameters = mutableListOf<Connection>()
         private var freshGate: CompletableDeferred<Unit>? = null
         val freshEntered = java.util.concurrent.CountDownLatch(1)
 
         val createCount: Int get() = synchronized(lock) { creates }
         val lastIdentity: CloudSession get() = synchronized(lock) { identities.last() }
-        val identitiesSnapshot: List<CloudSession> get() = synchronized(lock) { identities.toList() }
+        val firstIdentity: CloudSession get() = synchronized(lock) { identities.first() }
+        val lastParameter: Connection get() = synchronized(lock) { parameters.last() }
 
         fun gateTheFreshAcquisition(gate: CompletableDeferred<Unit>) { synchronized(lock) { freshGate = gate } }
 
@@ -1147,6 +1149,7 @@ class AppControllerTest {
                 creates++
                 count = creates
                 identities += session
+                parameters += connection
                 gate = freshGate
             }
             if (count >= 2 && gate != null) {
@@ -1166,7 +1169,7 @@ class AppControllerTest {
         val store: MemoryStore,
         val factory: ManagedFactory,
         val authority: CredentialState,
-        val initial: CloudSession,
+        val actualInitial: CloudSession,
         val fresh: CountingSession,
         val operation: Operation,
     )
@@ -1179,21 +1182,30 @@ class AppControllerTest {
     ): LegacyAwaitCell {
         val store = MemoryStore()
         val authority = CredentialState(real1, "z", 7, "a".repeat(64))
-        val initial = CountingSession(DemoSession(real1))
-        val factory = ManagedFactory(initial)
-        val gate = CompletableDeferred<Unit>()
-        factory.gateTheFreshAcquisition(gate)
+        val factory = ManagedFactory()
         val legacy = LegacyDnsReceiptSource { factory.create(real1) }
         val fixture = authorityFixture(scope, authority, legacy)
         val controller = AppController(scope, factory, store, listOf(real1, real2), fixture.lifecycle)
         controller.refresh()
         scheduler.runCurrent()
-        val deferred = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
+        // The session the controller really acquired during refresh.
+        val actualInitial = factory.firstIdentity
+        assertEquals(1, factory.createCount, "the refresh must acquire exactly one session")
+        assertEquals(real1, factory.lastParameter, "the factory must be asked for the trusted connection")
+        val gate = CompletableDeferred<Unit>()
+        factory.gateTheFreshAcquisition(gate)
+        val caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
         scheduler.runCurrent()
+        var firstFailure: Throwable? = null
         try {
             assertTrue(factory.freshEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the fresh create must be entered")
-            assertFalse(deferred.isCompleted, "the write must still be in flight")
-        } finally {
+            assertEquals(2, factory.createCount, "the fresh acquisition must be the second create")
+            assertFalse(caller.isCompleted, "the write must still be in flight")
+            val freshNow = factory.lastIdentity as CountingSession
+            assertNotSame(actualInitial, freshNow, "the fresh acquisition must be a different session identity")
+            assertEquals(0, freshNow.saveCount, "no typed write may happen while create is still parked")
+            assertEquals(0, freshNow.deleteCount, "no typed delete may happen while create is still parked")
+            assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
             when (mutation) {
                 AuthorityMutation.REVISION -> authority.bumpRevision()
                 AuthorityMutation.FINGERPRINT -> authority.changeFingerprint()
@@ -1208,18 +1220,23 @@ class AppControllerTest {
                 scheduler.runCurrent()
             }
             store.putOperation(marker())
+        } catch (failure: Throwable) {
+            firstFailure = failure
+        } finally {
+            // Resource teardown only: the gate is always released, even when a stage assertion failed.
             gate.complete(Unit)
         }
         scheduler.runCurrent()
-        val operation = deferred.await()
+        val operation = caller.await()
+        firstFailure?.let { throw it }
         val fresh = factory.lastIdentity as CountingSession
-        return LegacyAwaitCell(controller, fixture, store, factory, authority, initial, fresh, operation)
+        return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation)
     }
 
     @Test
     fun legacyFactoryAwaitUnchangedControlReportsUnknownWithTheWholeRow() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.NONE, uiRoundTrip = false, backgroundScope, testScheduler)
-        assertNotSame(cell.initial, cell.fresh, "the fresh acquisition must be a different session identity")
+        assertNotSame(cell.actualInitial, cell.fresh, "the fresh acquisition must be a different session identity")
         assertEquals(2, cell.factory.createCount, "one initial and one fresh acquisition")
         assertEquals(1, cell.fresh.saveCount, "the fresh session must receive the typed write")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status, "the legacy Unit adapter reports UNKNOWN")
@@ -1233,8 +1250,9 @@ class AppControllerTest {
     @Test
     fun legacyFactoryAwaitWithARevisionChangeSendsNothing() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.REVISION, uiRoundTrip = false, backgroundScope, testScheduler)
-        assertNotSame(cell.initial, cell.fresh)
+        assertNotSame(cell.actualInitial, cell.fresh)
         assertEquals(0, cell.fresh.saveCount, "a revoked revision must not reach the typed write")
+        assertEquals(0, cell.fresh.deleteCount)
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status, "the refusal stays conservative")
         val stored = cell.fixture.tasks.tasks.values.single()
         assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
