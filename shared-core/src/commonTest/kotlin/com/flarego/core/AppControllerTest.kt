@@ -349,6 +349,8 @@ class AppControllerTest {
         return DnsOperationLifecycle(resolver, plans, coordinator, { 1_000 }, { "a".repeat(64) }, { true }, receipts)
     }
 
+    private fun zoneFor(connection: Connection) = ZoneScope(AccountScope(connection.id, connection.accountId), "z")
+
     private fun domain() = Domain("z", "example.com", "active", real1.id)
 
     private fun draft() = DnsDraft("A", "@", "192.0.2.1")
@@ -1125,6 +1127,38 @@ class AppControllerTest {
         assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
     }
 
+    /** Owns every gate, job and drainable a scenario creates; teardown joins with a real bound. */
+    private class ManagedResources {
+        private val lock = Any()
+        private val gates = mutableListOf<CompletableDeferred<Unit>>()
+        private val jobs = mutableListOf<kotlinx.coroutines.Job>()
+        private val drains = mutableListOf<() -> Unit>()
+
+        fun gate(gate: CompletableDeferred<Unit>) { synchronized(lock) { gates += gate } }
+        fun job(job: kotlinx.coroutines.Job) { synchronized(lock) { jobs += job } }
+        fun drainWith(action: () -> Unit) { synchronized(lock) { drains += action } }
+
+        /** Release every gate and drain the queues so parked work can proceed. */
+        fun releaseGates() {
+            synchronized(lock) { gates.toList() }.forEach { it.complete(Unit) }
+            synchronized(lock) { drains.toList() }.forEach { action -> runCatching { action() } }
+        }
+
+        /** Release, then cancel and really join every owned job with a bounded wait. */
+        fun teardown() {
+            releaseGates()
+            val owned = synchronized(lock) { jobs.toList() }
+            owned.forEach { it.cancel() }
+            val finished = kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeoutOrNull(10_000) { owned.forEach { it.join() }; true } }
+            assertTrue(finished == true, "every owned job must complete within the real bound")
+            synchronized(lock) {
+                gates.clear()
+                jobs.clear()
+                drains.clear()
+            }
+        }
+    }
+
     /** A real SessionFactory whose fresh create awaits its gate *inside* create. */
     private class ManagedFactory : SessionFactory {
         private val lock = Any()
@@ -1193,13 +1227,17 @@ class AppControllerTest {
         val actualInitial = factory.firstIdentity
         assertEquals(1, factory.createCount, "the refresh must acquire exactly one session")
         assertEquals(real1, factory.lastParameter, "the factory must be asked for the trusted connection")
-        val gate = CompletableDeferred<Unit>()
-        factory.gateTheFreshAcquisition(gate)
-        val caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
-        scheduler.runCurrent()
+        val resources = ManagedResources()
+        var caller: kotlinx.coroutines.Deferred<Operation>? = null
         var firstFailure: Throwable? = null
         var preSend: OperationTask? = null
         try {
+            val gate = CompletableDeferred<Unit>()
+            resources.gate(gate)
+            factory.gateTheFreshAcquisition(gate)
+            caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
+            resources.job(caller)
+            scheduler.runCurrent()
             assertTrue(factory.freshEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the fresh create must be entered")
             assertEquals(2, factory.createCount, "the fresh acquisition must be the second create")
             assertFalse(caller.isCompleted, "the write must still be in flight")
@@ -1209,7 +1247,10 @@ class AppControllerTest {
             assertEquals(0, freshNow.deleteCount, "no typed delete may happen while create is still parked")
             assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
             // The metadata row that exists before any settlement decision.
-            preSend = fixture.tasks.tasks.values.single()
+            val captured = fixture.tasks.tasks.values.single()
+            assertEquals(TaskState.RUNNING, captured.state, "the captured row must be the pre-send RUNNING row")
+            assertEquals(zoneFor(real1), captured.scope, "the captured row must keep the original scope")
+            preSend = captured
             when (mutation) {
                 AuthorityMutation.REVISION -> authority.bumpRevision()
                 AuthorityMutation.FINGERPRINT -> authority.changeFingerprint()
@@ -1227,14 +1268,15 @@ class AppControllerTest {
         } catch (failure: Throwable) {
             firstFailure = failure
         } finally {
-            // Resource teardown only: the gate is always released, even when a stage assertion failed.
-            gate.complete(Unit)
+            // Release only: the caller must be able to finish before the registry joins it.
+            resources.releaseGates()
         }
         scheduler.runCurrent()
-        val operation = caller.await()
+        val operation = caller?.await() ?: throw IllegalStateException("the caller was never created")
+        resources.teardown()
         firstFailure?.let { throw it }
         val fresh = factory.lastIdentity as CountingSession
-        val captured = preSend ?: fixture.tasks.tasks.values.single()
+        val captured = requireNotNull(preSend) { "the pre-send row must have been captured" }
         return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation, captured)
     }
 
@@ -1272,7 +1314,7 @@ class AppControllerTest {
         assertEquals(0, cell.fresh.saveCount, "a changed input fingerprint must not reach the typed write")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
-        assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
+        assertEquals(cell.preSend, stored, "a refused send must leave the pre-send row unchanged")
         assertEquals(OperationTaskPersistence.summaryFor(stored), cell.operation)
     }
 
@@ -1282,7 +1324,7 @@ class AppControllerTest {
         assertEquals(0, cell.fresh.saveCount, "a revoked authority must not reach the typed write")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
-        assertTrue(stored.state == TaskState.RUNNING || stored.state == TaskState.UNKNOWN)
+        assertEquals(cell.preSend, stored, "a revoked authority must leave the pre-send row unchanged")
         assertEquals(OperationTaskPersistence.summaryFor(stored), cell.operation)
     }
 
@@ -1292,7 +1334,7 @@ class AppControllerTest {
         assertEquals(1, cell.fresh.saveCount, "a UI-only change must not revoke the authority")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
-        assertEquals(TaskState.UNKNOWN, stored.state)
+        assertEquals(cell.preSend.copy(state = TaskState.UNKNOWN), stored, "only the state may change on settlement")
         assertEquals(OperationTaskPersistence.summaryFor(stored), cell.operation)
         assertEquals(listOf("marker"), cell.store.operations().map { it.id })
     }
