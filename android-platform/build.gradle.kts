@@ -16,6 +16,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation(kotlin("test-junit"))
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     implementation(project(":shared-core"))
     implementation("app.cash.sqldelight:android-driver:2.3.2")
