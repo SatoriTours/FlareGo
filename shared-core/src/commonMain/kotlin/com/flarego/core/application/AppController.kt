@@ -18,7 +18,7 @@ class AppController(
 ) {
     private val mutable =
         MutableStateFlow(
-            AppState(connections, connections.first(), operations = store.operations())
+            AppState(connections, connections.firstOrNull(), operations = store.operations())
         )
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private val sessions = mutableMapOf<String, CloudSession>()
@@ -93,18 +93,31 @@ class AppController(
 
     fun reloadConnections(connections: List<Connection>) {
         bumpUiEpoch()
-        mutable.update { it.copy(connections = connections, operations = store.operations()) }
+        val selected = state.value.selected
+        val retained = connections.firstOrNull { it.id == selected?.id }
         sessions.keys.retainAll(connections.map { it.id }.toSet())
+        if (retained != null) {
+            mutable.update { it.copy(connections = connections, selected = retained, operations = store.operations()) }
+        } else {
+            // Invalidate every outstanding read before dropping the old account's data.
+            revision++
+            dnsRevision++
+            mutable.update {
+                AppState(connections, connections.firstOrNull(), operations = store.operations())
+            }
+            refresh()
+        }
     }
 
     fun openResource(resource: CloudResource) {
+        if (state.value.selected == null) return
         bumpUiEpoch()
         mutable.update { it.copy(page = Page.RESOURCE, resource = resource, error = null) }
     }
 
     fun openDomain(domain: Domain) {
         bumpUiEpoch()
-        if (domain.connectionId != state.value.selected.id) return
+        if (domain.connectionId != state.value.selected?.id) return
         mutable.update {
             it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null)
         }
@@ -116,7 +129,7 @@ class AppController(
     }
 
     fun refresh() {
-        val connection = state.value.selected
+        val connection = state.value.selected ?: return
         val request = ++revision
         mutable.update { it.copy(loading = true, error = null) }
         scope.launch {
@@ -146,14 +159,14 @@ class AppController(
     }
 
     fun loadDns(domain: Domain) {
-        val connection = state.value.selected
+        val connection = state.value.selected ?: return
         if (domain.connectionId != connection.id) return
         val request = ++dnsRevision
         mutable.update { it.copy(dnsLoading = true) }
         scope.launch {
             try {
                 val records = session(connection).records(domain.id)
-                if (request == dnsRevision && state.value.selected.id == connection.id)
+                if (request == dnsRevision && state.value.selected?.id == connection.id)
                     mutable.update { it.copy(dns = records, dnsLoading = false) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -168,7 +181,7 @@ class AppController(
         val title = "${if (recordId == null) "新增" else "修改"} ${draft.type} · ${draft.name}"
         val operations = dnsOperations
         if (operations != null && operationsActive()) {
-            val connection = state.value.selected
+            val connection = requireConnection()
             // Freeze the original selection and session revision: a late result may only be
             // published into the UI when both are still current.
             val selectionId = connection.id
@@ -223,7 +236,10 @@ class AppController(
         uiEpoch += 1
     }
 
-    private fun operationsActive(): Boolean = !state.value.selected.demo
+    private fun requireConnection(): Connection =
+        state.value.selected ?: throw CloudException("请先添加服务并绑定 API Token")
+
+    private fun operationsActive(): Boolean = state.value.selected?.demo == false
 
     private fun recordedFailure(
         connection: Connection,
@@ -257,14 +273,14 @@ class AppController(
     /** True when the frozen original selection/session revision is still the current one. */
     private fun stillPublishing(connectionId: String, selectionId: String, sessionVersion: Int, epoch: Int): Boolean =
         uiEpoch == epoch &&
-            state.value.selected.id == selectionId &&
+            state.value.selected?.id == selectionId &&
             (sessionVersions[connectionId] ?: 0) == sessionVersion &&
             connectionId in state.value.connections.map { it.id }
 
     suspend fun deleteDns(domain: Domain, record: DnsRecord): Operation {
         val operations = dnsOperations
         if (operations != null && operationsActive()) {
-            val connection = state.value.selected
+            val connection = requireConnection()
             val selectionId = connection.id
             val sessionVersion = sessionVersions[connection.id] ?: 0
             val epoch = uiEpoch
@@ -299,7 +315,7 @@ class AppController(
         title: String,
         action: suspend (CloudSession) -> Unit,
     ): Operation {
-        val connection = state.value.selected
+        val connection = requireConnection()
         fun failed(detail: String) =
             Operation(
                 Random.nextLong().toString(16),
@@ -349,7 +365,7 @@ class AppController(
                 }
             store.putOperation(operation)
             mutable.update { it.copy(operations = store.operations()) }
-            if (state.value.selected.id == connection.id && state.value.domain?.id == domain.id)
+            if (state.value.selected?.id == connection.id && state.value.domain?.id == domain.id)
                 loadDns(domain)
             return operation
         } finally {
@@ -358,11 +374,12 @@ class AppController(
     }
 
     fun recordDemoPurchase(name: String): Operation {
-        check(state.value.selected.demo)
+        val connection = requireConnection()
+        check(connection.demo)
         val operation =
             Operation(
                 Random.nextLong().toString(16),
-                state.value.selected.id,
+                connection.id,
                 "模拟注册 $name",
                 OperationStatus.SUCCESS,
                 "演示操作，无真实注册或扣款",

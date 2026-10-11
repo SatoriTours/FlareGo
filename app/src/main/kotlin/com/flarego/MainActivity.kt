@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
                 current::connect,
                 current::disconnect,
                 { page ->
-                    val account = state.selected.accountId.takeIf { !state.selected.demo }
+                    val account = state.selected?.takeUnless { it.demo }?.accountId
                     val path =
                         when (page) {
                             Page.BILLING -> if (account != null) "/$account/billing" else "/"

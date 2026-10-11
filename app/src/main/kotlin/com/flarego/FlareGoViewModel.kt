@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flarego.core.application.AppController
 import com.flarego.core.cloudflare.CloudflareSession
-import com.flarego.core.demo.*
 import com.flarego.core.model.*
 import com.flarego.core.ports.SessionFactory
 import com.flarego.core.updates.*
@@ -52,20 +51,17 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
         AppController(
             viewModelScope,
             SessionFactory { connection ->
-                if (connection.demo) DemoSession(connection)
-                else {
-                    val token =
-                        try {
-                            withContext(Dispatchers.IO) { vault.get(connection.id) }
-                        } catch (_: Exception) {
-                            null
-                        }
-                    if (token == null) throw CloudException("本机凭据无法解密，请断开后重新连接账号")
-                    CloudflareSession(connection, CloudflareTransport(token))
-                }
+                val token =
+                    try {
+                        withContext(Dispatchers.IO) { vault.get(connection.id) }
+                    } catch (_: Exception) {
+                        null
+                    }
+                if (token == null) throw CloudException("本机凭据无法解密，请断开后重新连接账号")
+                CloudflareSession(connection, CloudflareTransport(token))
             },
             store,
-            demoConnections + store.connections(),
+            store.connections(),
         )
 
     suspend fun connect(name: String, accountId: String, token: String) {
@@ -86,7 +82,7 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
         withContext(Dispatchers.IO) { vault.put(connection.id, cleanToken) }
         store.putConnection(connection)
         controller.invalidateSession(connection.id)
-        controller.reloadConnections(demoConnections + store.connections())
+        controller.reloadConnections(store.connections())
         controller.selectConnection(connection)
     }
 
@@ -99,9 +95,7 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
     fun disconnect(connection: Connection) {
         vault.remove(connection.id)
         store.removeConnection(connection.id)
-        if (controller.state.value.selected.id == connection.id)
-            controller.selectConnection(demoConnections.first())
         controller.invalidateSession(connection.id)
-        controller.reloadConnections(demoConnections + store.connections())
+        controller.reloadConnections(store.connections())
     }
 }

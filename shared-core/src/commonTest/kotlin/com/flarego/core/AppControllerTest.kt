@@ -15,6 +15,110 @@ class AppControllerTest {
     private val b = Connection("b", "Sandbox", "bb", true)
 
     @Test
+    fun emptyInstallationDoesNotCreateAnyCloudSession() = runTest {
+        val controller = AppController(
+            backgroundScope,
+            SessionFactory { error("No credentials have been bound") },
+            MemoryStore(),
+            emptyList(),
+        )
+        controller.refresh()
+        controller.navigate(Page.RESOURCES)
+        controller.loadDns(Domain("z", "example.com", "active", "removed"))
+        runCurrent()
+        assertNull(controller.state.value.selected)
+        assertTrue(controller.state.value.connections.isEmpty())
+        assertTrue(controller.state.value.inventory.resources.isEmpty())
+        assertNull(controller.state.value.billing)
+        assertFalse(controller.state.value.loading)
+        assertNull(controller.state.value.error)
+    }
+
+    @Test
+    fun firstBoundAccountCanLoadAndLastDisconnectClearsAllCloudData() = runTest {
+        val controller = AppController(
+            backgroundScope, SessionFactory { DemoSession(it) }, MemoryStore(), emptyList(),
+        )
+        controller.reloadConnections(listOf(a))
+        runCurrent()
+        assertEquals(a, controller.state.value.selected)
+        assertTrue(controller.state.value.inventory.domains.isNotEmpty())
+        controller.openDomain(controller.state.value.inventory.domains.first())
+        runCurrent()
+        assertTrue(controller.state.value.dns.isNotEmpty())
+
+        controller.reloadConnections(emptyList())
+        controller.refresh()
+        runCurrent()
+        val state = controller.state.value
+        assertNull(state.selected)
+        assertEquals(Page.OVERVIEW, state.page)
+        assertTrue(state.inventory.domains.isEmpty())
+        assertTrue(state.inventory.resources.isEmpty())
+        assertTrue(state.dns.isEmpty())
+        assertNull(state.domain)
+        assertNull(state.resource)
+        assertNull(state.billing)
+        assertFalse(state.loading)
+        assertFalse(state.dnsLoading)
+    }
+
+    @Test
+    fun lateReadsAfterLastDisconnectCannotRepopulateEmptyState() = runTest {
+        val inventory = CompletableDeferred<Inventory>()
+        val billing = CompletableDeferred<Billing>()
+        val dns = CompletableDeferred<List<DnsRecord>>()
+        val controller = AppController(
+            backgroundScope,
+            SessionFactory {
+                object : CloudSession by DemoSession(a) {
+                    override suspend fun inventory() = inventory.await()
+                    override suspend fun billing() = billing.await()
+                    override suspend fun records(zoneId: String) = dns.await()
+                }
+            },
+            MemoryStore(), listOf(a),
+        )
+        controller.refresh()
+        controller.openDomain(Domain("z", "old.example", "active", a.id))
+        runCurrent()
+        controller.reloadConnections(emptyList())
+        inventory.complete(Inventory(listOf(Domain("z", "old.example", "active", a.id)), emptyList()))
+        billing.complete(Billing(emptyList(), estimate = "48.62"))
+        dns.complete(listOf(DnsRecord("r", "A", "old.example", "192.0.2.1")))
+        runCurrent()
+        assertNull(controller.state.value.selected)
+        assertTrue(controller.state.value.inventory.domains.isEmpty())
+        assertNull(controller.state.value.billing)
+        assertTrue(controller.state.value.dns.isEmpty())
+    }
+
+    @Test
+    fun disconnectingSelectedAccountChoosesRemainingAccount() = runTest {
+        val controller = AppController(
+            backgroundScope, SessionFactory { DemoSession(it) }, MemoryStore(), listOf(a, b),
+        )
+        controller.refresh()
+        runCurrent()
+        controller.reloadConnections(listOf(b))
+        runCurrent()
+        assertEquals(b, controller.state.value.selected)
+        assertTrue(controller.state.value.inventory.domains.isEmpty())
+    }
+
+    @Test
+    fun removingAnotherAccountPreservesCurrentSelectionAndPage() = runTest {
+        val controller = AppController(
+            backgroundScope, SessionFactory { DemoSession(it) }, MemoryStore(), listOf(a, b),
+        )
+        controller.navigate(Page.RESOURCES)
+        controller.reloadConnections(listOf(a))
+        runCurrent()
+        assertEquals(a, controller.state.value.selected)
+        assertEquals(Page.RESOURCES, controller.state.value.page)
+    }
+
+    @Test
     fun writeSurvivesCancelledUiAndHasDurablePendingRecord() = runTest {
         val gate = CompletableDeferred<Unit>()
         var writes = 0

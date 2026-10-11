@@ -92,7 +92,7 @@ enum class Page(val title: String) {
 
 data class AppState(
     val connections: List<Connection>,
-    val selected: Connection,
+    val selected: Connection?,
     val page: Page = Page.OVERVIEW,
     val loading: Boolean = false,
     val inventory: Inventory = Inventory(emptyList(), emptyList()),

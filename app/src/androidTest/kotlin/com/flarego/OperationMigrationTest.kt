@@ -214,8 +214,8 @@ class OperationMigrationTest {
                 fail("the injected summary fault must propagate")
             } catch (_: Exception) {
             }
-            assertNull(owner.operationStore.get(stored.id), "the task write must roll back with the summary write")
-            assertTrue(owner.localStore.operations().none { it.id == stored.id }, "no summary row may remain")
+            assertNull("the task write must roll back with the summary write", owner.operationStore.get(stored.id))
+            assertTrue("no summary row may remain", owner.localStore.operations().none { it.id == stored.id })
         } finally {
             owner.driver.execute(null, "DROP TRIGGER IF EXISTS fail_summary", 0)
         }

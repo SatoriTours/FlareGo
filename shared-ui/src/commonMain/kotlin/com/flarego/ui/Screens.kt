@@ -30,7 +30,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("本月费用预估", color = Lime, style = MaterialTheme.typography.labelLarge)
                         Text(
-                            if (state.selected.demo) "演示 · USD" else "尚无预估",
+                            if (state.selected?.demo == true) "演示 · USD" else "尚无预估",
                             color = Lime,
                             style = MaterialTheme.typography.labelMedium,
                         )
@@ -41,7 +41,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                         style = MaterialTheme.typography.headlineLarge,
                     )
                     Text(
-                        if (state.selected.demo) "示例数据 · 不产生真实扣款" else "历史账单可在费用页查看，暂无账号费用预估",
+                        if (state.selected?.demo == true) "示例数据 · 不产生真实扣款" else "历史账单可在费用页查看，暂无账号费用预估",
                         color = Lime.copy(alpha = .8f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -99,7 +99,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                     }
             }
         }
-        if (state.selected.demo)
+        if (state.selected?.demo == true)
             item {
                 SectionCard {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -113,7 +113,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
         item {
             SectionCard {
                 Text("最近操作", style = MaterialTheme.typography.titleMedium)
-                val jobs = state.operations.filter { it.connectionId == state.selected.id }.take(3)
+                val jobs = state.operations.filter { it.connectionId == state.selected?.id }.take(3)
                 if (jobs.isEmpty()) Muted("暂无操作，所有变更可在操作记录追踪")
                 else
                     jobs.forEach {
@@ -137,7 +137,7 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit) {
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Muted("${domains.size} 个 · ${if (state.selected.demo) "演示账号" else "当前账号"}")
+                Muted("${domains.size} 个 · ${if (state.selected?.demo == true) "演示账号" else "当前账号"}")
             }
         }
         if (domains.isEmpty())
@@ -229,7 +229,7 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
             if (resources.isEmpty())
                 item { EmptyState(if (query.isBlank()) "暂无云资源" else "没有匹配资源", "尝试其他类型或刷新列表") }
             items(resources, key = { "${it.kind}:${it.id}" }) {
-                ResourceRow(it, state.selected.demo) { open(it) }
+                ResourceRow(it, state.selected?.demo == true) { open(it) }
             }
             items(state.inventory.notices.filterNot { it.startsWith("域名") }) { Notice(it) }
         }
@@ -308,19 +308,19 @@ fun ResourceScreen(state: AppState, openConsole: () -> Unit) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SectionCard(Modifier.weight(1f)) {
-                    Muted("${if (state.selected.demo) "示例用量" else "用量"}")
+                    Muted("${if (state.selected?.demo == true) "示例用量" else "用量"}")
                     Text(resource.usage ?: "—", style = MaterialTheme.typography.titleLarge)
                 }
                 SectionCard(Modifier.weight(1f)) {
                     Muted("数据状态")
                     Text(
-                        if (state.selected.demo) "演示" else "已读取",
+                        if (state.selected?.demo == true) "演示" else "已读取",
                         style = MaterialTheme.typography.titleLarge,
                     )
                 }
             }
         }
-        if (state.selected.demo && resource.kind == ResourceKind.WORKER)
+        if (state.selected?.demo == true && resource.kind == ResourceKind.WORKER)
             item {
                 SectionCard {
                     Text("请求趋势", style = MaterialTheme.typography.titleMedium)
@@ -328,7 +328,7 @@ fun ResourceScreen(state: AppState, openConsole: () -> Unit) {
                     Muted("示例指标 · 非实时监控")
                 }
             }
-        if (state.selected.demo && resource.kind == ResourceKind.R2)
+        if (state.selected?.demo == true && resource.kind == ResourceKind.R2)
             item {
                 SectionCard {
                     Text("对象目录 · 示例", style = MaterialTheme.typography.titleMedium)
@@ -358,13 +358,13 @@ fun BillingScreen(state: AppState, openConsole: () -> Unit) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             SectionCard {
-                Muted("本月预估${if (state.selected.demo) " · 演示 USD" else ""}")
+                Muted("本月预估${if (state.selected?.demo == true) " · 演示 USD" else ""}")
                 Text(
                     state.billing?.estimate?.let { "$$it" } ?: "—",
                     style = MaterialTheme.typography.headlineLarge,
                 )
                 Muted(
-                    if (state.selected.demo) "预算示例 $100 · 已使用 48.6%"
+                    if (state.selected?.demo == true) "预算示例 $100 · 已使用 48.6%"
                     else "Cloudflare API 未提供可靠的账号费用预估"
                 )
             }
@@ -372,7 +372,7 @@ fun BillingScreen(state: AppState, openConsole: () -> Unit) {
         state.billing?.notice?.let { item { Notice(it) } }
         item {
             Text(
-                if (state.selected.demo) "历史账单 · 示例" else "用户级账单历史",
+                if (state.selected?.demo == true) "历史账单 · 示例" else "用户级账单历史",
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -414,7 +414,8 @@ fun AccountsScreen(
     updates: @Composable () -> Unit = {},
 ) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Notice("账号仅保存于本机。真实 Token 使用 Android Keystore 加密；演示账号不连接云服务。") }
+        item { Notice("账号仅保存于本机。API Token 使用 Android Keystore 加密保存。") }
+        if (state.connections.isEmpty()) item { ServiceSetupCard(connect) }
         item { updates() }
         items(state.connections, key = { it.id }) { connection ->
             SectionCard {
@@ -435,7 +436,7 @@ fun AccountsScreen(
                     }
             }
         }
-        item {
+        if (state.connections.isNotEmpty()) item {
             Button(onClick = connect, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Add, null)
                 Text("连接 Cloudflare 账号")
@@ -448,7 +449,7 @@ fun AccountsScreen(
 fun JobsScreen(state: AppState, query: String) {
     val operations =
         state.operations.filter {
-            it.connectionId == state.selected.id && it.title.contains(query, true)
+            it.connectionId == state.selected?.id && it.title.contains(query, true)
         }
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Muted("当前账号的最近 200 条本机操作") }

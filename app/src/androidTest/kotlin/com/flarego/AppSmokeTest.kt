@@ -5,11 +5,20 @@ import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.Bitmap
 import android.view.WindowManager
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.flarego.core.application.AppController
+import com.flarego.core.demo.DemoSession
+import com.flarego.core.demo.demoConnections
+import com.flarego.core.ports.MemoryStore
+import com.flarego.core.ports.SessionFactory
+import com.flarego.ui.FlareGoApp
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,6 +28,38 @@ import org.junit.Test
 
 class AppSmokeTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    // Demo interactions are explicit test fixtures; production startup never seeds them.
+    private fun installDemoFixture() {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                val scope = rememberCoroutineScope()
+                val controller = remember {
+                    AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), demoConnections)
+                }
+                FlareGoApp(controller, { _, _, _ -> }, {}, {})
+            }
+        }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun freshInstallGuidesServiceAndKeySetupAcrossTabs() {
+        compose.onNodeWithText("添加你的第一个云服务").assertIsDisplayed()
+        compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
+        compose.onNodeWithText("api-gateway").assertDoesNotExist()
+        listOf("domains", "resources", "billing", "accounts").forEach { tab ->
+            compose.onNodeWithTag("nav-$tab").performClick()
+            compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
+        }
+        compose.onNodeWithText("添加服务并绑定密钥").performClick()
+        compose.onNodeWithText("获取 API Token").assertIsDisplayed()
+        compose.onNodeWithText("验证并连接").assertIsNotEnabled()
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithContentDescription("切换云账号").performClick()
+        compose.onNodeWithText("Production · 演示").assertDoesNotExist()
+        compose.onNodeWithText("Dev sandbox · 演示").assertDoesNotExist()
+    }
 
     private fun screenshot(name: String) {
         compose.waitForIdle()
@@ -37,6 +78,7 @@ class AppSmokeTest {
 
     @Test
     fun compactNavigationSearchAndDrawer() {
+        installDemoFixture()
         compose.onNodeWithTag("nav-resources").performClick()
         compose.onNodeWithText("api-gateway").assertIsDisplayed()
         screenshot("resources")
@@ -127,6 +169,8 @@ class AppSmokeTest {
         }
         instrumentation.addMonitor(monitor)
         try {
+            compose.onNodeWithText("前往 Cloudflare 配置密钥").performClick()
+            compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
             compose.onNodeWithTag("nav-accounts").performClick()
             compose.onNodeWithContentDescription("连接账号").performClick()
             compose.onNodeWithText("获取 API Token").performScrollTo().performClick()
@@ -134,6 +178,7 @@ class AppSmokeTest {
             compose.runOnIdle {
                 assertEquals(
                     listOf(
+                        "https://dash.cloudflare.com/profile/api-tokens",
                         "https://dash.cloudflare.com/profile/api-tokens",
                         "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
                     ),
@@ -150,6 +195,7 @@ class AppSmokeTest {
 
     @Test
     fun purchaseIsClearlyDemoAndRequiresConfirmation() {
+        installDemoFixture()
         compose.onNodeWithTag("nav-domains").performClick()
         compose.onNodeWithContentDescription("购买域名").performClick()
         compose.onNodeWithTag("search-field").performTextInput("my-cloud")

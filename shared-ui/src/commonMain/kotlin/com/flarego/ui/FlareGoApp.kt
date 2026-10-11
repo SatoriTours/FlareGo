@@ -72,11 +72,11 @@ fun FlareGoApp(
         mutableStateOf<DialogState?>(if (connectionDraft.isOpen) DialogState.Connect else null)
     }
     var searchOpen by
-        remember(state.page, state.selected.id) {
-            mutableStateOf(state.page == Page.BUY && state.selected.demo)
+        remember(state.page, state.selected?.id) {
+            mutableStateOf(state.page == Page.BUY && state.selected?.demo == true)
         }
-    var query by remember(state.page, state.selected.id) { mutableStateOf("") }
-    var searched by remember(state.page, state.selected.id) { mutableStateOf(false) }
+    var query by remember(state.page, state.selected?.id) { mutableStateOf("") }
+    var searched by remember(state.page, state.selected?.id) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     LaunchedEffect(controller) { controller.refresh() }
@@ -95,7 +95,8 @@ fun FlareGoApp(
         }
     val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS)
     val searchEnabled =
-        state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
+        state.selected != null &&
+            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
     val dismiss = {
         if (dialog is DialogState.Connect) connectionDraft.clear()
         dialog = null
@@ -136,7 +137,7 @@ fun FlareGoApp(
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color =
-                                    if (connection.id == state.selected.id)
+                                    if (connection.id == state.selected?.id)
                                         MaterialTheme.colorScheme.primaryContainer
                                     else MaterialTheme.colorScheme.surface,
                                 modifier =
@@ -156,7 +157,7 @@ fun FlareGoApp(
                                         modifier = Modifier.weight(1f),
                                         style = MaterialTheme.typography.bodyMedium,
                                     )
-                                    if (connection.id == state.selected.id)
+                                    if (connection.id == state.selected?.id)
                                         Icon(
                                             Icons.Default.Check,
                                             null,
@@ -249,7 +250,7 @@ fun FlareGoApp(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    "Cloudflare · ${state.selected.name}",
+                                    state.selected?.let { "Cloudflare · ${it.name}" } ?: "添加服务 · 绑定密钥",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -287,7 +288,11 @@ fun FlareGoApp(
                                         modifier = Modifier.size(21.dp),
                                     )
                                 }
-                            when (state.page) {
+                            if (state.selected == null) {
+                                IconButton(onClick = openConnection) {
+                                    Icon(Icons.Default.Add, "连接账号")
+                                }
+                            } else when (state.page) {
                                 Page.DOMAINS ->
                                     IconButton(onClick = { controller.navigate(Page.BUY) }) {
                                         Icon(Icons.Default.Add, "购买域名")
@@ -413,7 +418,9 @@ fun FlareGoApp(
                         }
                     }
                     Box(Modifier.weight(1f)) {
-                        when (state.page) {
+                        if (state.selected == null && state.page != Page.ACCOUNTS) {
+                            ServiceSetupScreen(openConnection)
+                        } else when (state.page) {
                             Page.OVERVIEW ->
                                 OverviewScreen(
                                     state,
@@ -443,7 +450,7 @@ fun FlareGoApp(
                                 PurchaseScreen(
                                     query,
                                     searched,
-                                    state.selected.demo,
+                                    state.selected?.demo == true,
                                     { name, price -> dialog = DialogState.Purchase(name, price) },
                                     { openConsole(Page.BUY) },
                                 )
@@ -475,7 +482,7 @@ fun FlareGoApp(
                     modal.domain,
                     modal.record,
                     modal.draft,
-                    state.selected.demo,
+                    state.selected?.demo == true,
                     { dialog = DialogState.Edit(modal.domain, modal.record, modal.returnDraft) },
                     {
                         if (modal.draft == null) controller.deleteDns(modal.domain, modal.record!!)
