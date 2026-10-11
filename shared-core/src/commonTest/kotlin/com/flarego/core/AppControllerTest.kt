@@ -239,12 +239,14 @@ class AppControllerTest {
         val entered = CompletableDeferred<Unit>()
         val sends = java.util.concurrent.atomic.AtomicInteger(0)
         var failure: (() -> Throwable)? = null
-        var lastCommand: DnsWriteCommand? = null
+        private val commandLock = Any()
+        private var commandSnapshot: DnsWriteCommand? = null
+        val lastCommand: DnsWriteCommand? get() = synchronized(commandLock) { commandSnapshot }
         /** When set, the write runs against a replaced credential for the same connection. */
         var alternate: CloudSession? = null
 
         override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
-            lastCommand = command
+            synchronized(commandLock) { commandSnapshot = command }
             entered.complete(Unit)
             gate?.await()
             failure?.let { throw it() }
@@ -433,15 +435,25 @@ class AppControllerTest {
         runCurrent()
         assertTrue(receipts.entered.isCompleted)
         assertFalse(deferred.isCompleted, "the write must still be in flight")
+        assertEquals(0, receipts.sends.get(), "the pause must still be before the typed send")
+        val preSend = fixture.tasks.tasks.values.single()
+        val commandBefore = requireNotNull(receipts.lastCommand)
+        assertRunningCommand(preSend, commandBefore, DnsOperationLifecycle.ACTION_CREATE)
         controller.navigate(Page.RESOURCES)
         runCurrent()
         controller.navigate(Page.DOMAINS)
         runCurrent()
-        val frozen = controller.state.value.operations.map { it.id }
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
+        val frozen = frozenUi.operations.map { it.id }
+        val sentinel = marker()
+        store.putOperation(sentinel)
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
+        assertEquals(frozenUi, controller.state.value)
+        assertEquals(listOf(sentinel), store.operations())
+        assertOriginalResult(expectedCompleted(preSend), fixture.tasks.tasks.values.single(), operation)
+        assertEquals(commandBefore, receipts.lastCommand)
         assertEquals(OperationStatus.SUCCESS, operation.status, "the legitimate result must succeed")
         assertEquals(1, receipts.sends.get(), "the legitimate session write must happen exactly once")
         assertEquals(
@@ -779,11 +791,13 @@ class AppControllerTest {
 
     /** Test-only completed receipt: the guard runs first, then the typed write is dispatched. */
     private class CompletedReceipt(private val session: CountingSession) : DnsReceiptSource {
+        private val lock = Any()
+        private var commandSnapshot: DnsWriteCommand? = null
         val sends = java.util.concurrent.atomic.AtomicInteger(0)
-        var lastCommand: DnsWriteCommand? = null
+        val lastCommand: DnsWriteCommand? get() = synchronized(lock) { commandSnapshot }
 
         override suspend fun write(command: DnsWriteCommand, beforeSend: () -> Unit): ExecutionReceipt {
-            lastCommand = command
+            synchronized(lock) { commandSnapshot = command }
             beforeSend()
             sends.incrementAndGet()
             when (command.actionKey) {
@@ -801,7 +815,10 @@ class AppControllerTest {
         private var saves = 0
         private var deletes = 0
         val entered = java.util.concurrent.CountDownLatch(1)
-        var gate: CompletableDeferred<Unit>? = null
+        private var pendingGate: CompletableDeferred<Unit>? = null
+        var gate: CompletableDeferred<Unit>?
+            get() = synchronized(lock) { pendingGate }
+            set(value) { synchronized(lock) { pendingGate = value } }
 
         val saveCount: Int get() = synchronized(lock) { saves }
         val deleteCount: Int get() = synchronized(lock) { deletes }
@@ -847,15 +864,24 @@ class AppControllerTest {
         assertFalse(deferred.isCompleted, "the write must still be in flight")
         val preSend = fixture.tasks.tasks.values.single()
         assertEquals(TaskState.RUNNING, preSend.state, "the pre-send metadata row must be RUNNING")
+        val commandBefore = requireNotNull(receipts.lastCommand)
+        assertRunningCommand(preSend, commandBefore, DnsOperationLifecycle.ACTION_CREATE)
         controller.selectConnection(real2)
         runCurrent()
         controller.selectConnection(real1)
         runCurrent()
-        val frozenOperations = controller.state.value.operations
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
+        val frozenOperations = frozenUi.operations
+        val sentinel = marker()
+        store.putOperation(sentinel)
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
+        assertEquals(frozenUi, controller.state.value)
+        assertEquals(listOf(sentinel), store.operations())
+        val expectedTask = expectedCompleted(preSend)
+        assertOriginalResult(expectedTask, fixture.tasks.tasks.values.single(), operation)
+        assertEquals(commandBefore, receipts.lastCommand)
         assertEquals(1, receipts.sends.get())
         assertEquals(1, session.saveCount)
         assertEquals(frozenOperations, controller.state.value.operations, "the frozen UI must not be republished")
@@ -889,15 +915,25 @@ class AppControllerTest {
         assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed delete must have happened")
         assertEquals(1, session.deleteCount, "exactly one typed delete")
         assertFalse(deferred.isCompleted)
+        val preSend = fixture.tasks.tasks.values.single()
+        val commandBefore = requireNotNull(receipts.lastCommand)
+        assertRunningCommand(preSend, commandBefore, DnsOperationLifecycle.ACTION_DELETE, record.id)
         controller.selectConnection(real2)
         runCurrent()
         controller.selectConnection(real1)
         runCurrent()
-        val frozenOperations = controller.state.value.operations
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
+        val frozenOperations = frozenUi.operations
+        val sentinel = marker()
+        store.putOperation(sentinel)
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
+        assertEquals(frozenUi, controller.state.value)
+        assertEquals(listOf(sentinel), store.operations())
+        assertOriginalResult(expectedCompleted(preSend), fixture.tasks.tasks.values.single(), operation)
+        assertEquals(commandBefore, receipts.lastCommand)
+        assertEquals(1, receipts.sends.get())
         assertEquals(0, session.saveCount)
         assertEquals(1, session.deleteCount)
         assertEquals(frozenOperations, controller.state.value.operations)
@@ -1071,16 +1107,27 @@ class AppControllerTest {
         assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed save must have happened")
         assertEquals(1, session.saveCount)
         assertFalse(deferred.isCompleted)
+        val preSend = fixture.tasks.tasks.values.single()
+        val commandBefore = requireNotNull(receipts.lastCommand)
+        assertRunningCommand(preSend, commandBefore, DnsOperationLifecycle.ACTION_CREATE)
         // Membership changes while the write is parked, then returns to the original set.
         controller.reloadConnections(listOf(real2))
         runCurrent()
         controller.reloadConnections(listOf(real1, real2))
         runCurrent()
-        val frozen = controller.state.value.operations
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
+        val frozen = frozenUi.operations
+        val sentinel = marker()
+        store.putOperation(sentinel)
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
+        assertEquals(frozenUi, controller.state.value)
+        assertEquals(listOf(sentinel), store.operations())
+        assertOriginalResult(expectedCompleted(preSend), fixture.tasks.tasks.values.single(), operation)
+        assertEquals(commandBefore, receipts.lastCommand)
+        assertEquals(1, receipts.sends.get())
+        assertEquals(0, session.deleteCount)
         assertEquals(1, session.saveCount)
         assertEquals(frozen, controller.state.value.operations, "a membership change must not be republished into")
         assertEquals(listOf("marker"), store.operations().map { it.id })
@@ -1107,15 +1154,25 @@ class AppControllerTest {
         assertTrue(session.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the typed delete must have happened")
         assertEquals(1, session.deleteCount)
         assertFalse(deferred.isCompleted)
+        val preSend = fixture.tasks.tasks.values.single()
+        val commandBefore = requireNotNull(receipts.lastCommand)
+        assertRunningCommand(preSend, commandBefore, DnsOperationLifecycle.ACTION_DELETE, record.id)
         controller.reloadConnections(listOf(real2))
         runCurrent()
         controller.reloadConnections(listOf(real1, real2))
         runCurrent()
-        val frozen = controller.state.value.operations
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
+        val frozen = frozenUi.operations
+        val sentinel = marker()
+        store.putOperation(sentinel)
         gate.complete(Unit)
         runCurrent()
         val operation = deferred.await()
+        assertEquals(frozenUi, controller.state.value)
+        assertEquals(listOf(sentinel), store.operations())
+        assertOriginalResult(expectedCompleted(preSend), fixture.tasks.tasks.values.single(), operation)
+        assertEquals(commandBefore, receipts.lastCommand)
+        assertEquals(1, receipts.sends.get())
         assertEquals(0, session.saveCount)
         assertEquals(1, session.deleteCount)
         assertEquals(frozen, controller.state.value.operations)
@@ -1388,6 +1445,58 @@ class AppControllerTest {
 
     private enum class AuthorityMutation { NONE, REVISION, FINGERPRINT, REVOKE, UI_EPOCH_ONLY }
 
+    /** Independent metadata and summary expectations for the original confirmed command. */
+    private fun assertRunningCommand(task: OperationTask, command: DnsWriteCommand, action: String, recordId: String? = null) {
+        assertTrue(task.id.isNotBlank())
+        assertEquals(TaskState.RUNNING, task.state)
+        assertEquals(real1.id, task.connectionId)
+        assertEquals(zoneFor(real1), task.scope)
+        assertEquals(action, task.actionKey)
+        assertEquals(action, command.actionKey)
+        assertEquals(zoneFor(real1), command.scope)
+        assertEquals(recordId, command.recordId)
+        val ref = recordId?.let { ResourceRef(zoneFor(real1), "dns_record", it) }
+        assertEquals(ref, task.resourceRef)
+        assertEquals(ref, command.resourceRef)
+        assertEquals("a".repeat(64), task.requestFingerprint)
+        assertEquals("a".repeat(64), command.requestFingerprint)
+        assertEquals("a".repeat(64), task.desiredHash)
+        assertEquals("a".repeat(64), command.desiredHash)
+        assertEquals(7, command.credentialRevision)
+        assertEquals("结果待核对，请刷新后检查", task.safeDetail)
+        assertEquals(1_000L, task.createdAtMs)
+        assertEquals(1_000L, task.updatedAtMs)
+        assertNull(task.providerRequestId)
+        assertNull(task.pollPath)
+    }
+
+    private fun expectedCompleted(preSend: OperationTask) = preSend.copy(
+        state = TaskState.SUCCEEDED,
+        safeDetail = "已确认完成",
+        updatedAtMs = 1_000,
+        providerRequestId = null,
+        pollPath = null,
+    )
+
+    private fun assertOriginalResult(expected: OperationTask, stored: OperationTask, operation: Operation) {
+        assertEquals(expected, stored, "the complete original task must survive settlement")
+        assertEquals(expected.id, operation.id)
+        assertEquals(real1.id, stored.connectionId)
+        assertEquals(zoneFor(real1), stored.scope)
+        assertEquals("a".repeat(64), stored.requestFingerprint)
+        assertEquals("a".repeat(64), stored.desiredHash)
+        assertEquals(1_000L, stored.createdAtMs)
+        assertEquals(1_000L, stored.updatedAtMs)
+        assertNull(stored.providerRequestId)
+        assertNull(stored.pollPath)
+        val succeeded = expected.state == TaskState.SUCCEEDED
+        val summary = Operation(expected.id, real1.id, "Cloudflare 操作",
+            if (succeeded) OperationStatus.SUCCESS else OperationStatus.UNKNOWN,
+            if (succeeded) "已确认完成" else "结果待核对，请刷新后检查")
+        assertEquals(summary, operation, "the caller must receive the literal canonical summary")
+        assertEquals(OperationTaskPersistence.summaryFor(expected), operation)
+    }
+
     private class LegacyAwaitCell(
         val controller: AppController,
         val fixture: AuthorityFixture,
@@ -1398,6 +1507,9 @@ class AppControllerTest {
         val fresh: CountingSession,
         val operation: Operation,
         val preSend: OperationTask,
+        val command: DnsWriteCommand,
+        val frozenUi: AppState,
+        val marker: Operation,
     )
 
     private suspend fun runLegacyFactoryAwaitCell(
@@ -1408,9 +1520,19 @@ class AppControllerTest {
         checkpoint: (FactoryStage) -> Unit = {},
     ): LegacyAwaitCell {
         val store = MemoryStore()
+        // Seed once before controller creation: the unchanged-authority control may
+        // legitimately refresh the current UI, but must not replace this full record.
+        val sentinel = marker()
+        store.putOperation(sentinel)
         val authority = CredentialState(real1, "z", 7, "a".repeat(64))
         val factory = ManagedFactory()
-        val legacy = LegacyDnsReceiptSource { factory.create(real1) }
+        val adapter = LegacyDnsReceiptSource { factory.create(real1) }
+        val commandLock = Any()
+        var commandSnapshot: DnsWriteCommand? = null
+        val legacy = DnsReceiptSource { command, beforeSend ->
+            synchronized(commandLock) { commandSnapshot = command }
+            adapter.write(command, beforeSend)
+        }
         val fixture = authorityFixture(scope, authority, legacy)
         val controller = AppController(scope, factory, store, listOf(real1, real2), fixture.lifecycle)
         checkpoint(FactoryStage.FIXTURE)
@@ -1439,8 +1561,10 @@ class AppControllerTest {
         assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
         // The metadata row that exists before any settlement decision.
         val captured = fixture.tasks.tasks.values.single()
+        val command = synchronized(commandLock) { requireNotNull(commandSnapshot) }
         assertEquals(TaskState.RUNNING, captured.state, "the captured row must be the pre-send RUNNING row")
         assertEquals(zoneFor(real1), captured.scope, "the captured row must keep the original scope")
+        assertRunningCommand(captured, command, DnsOperationLifecycle.ACTION_CREATE)
         checkpoint(FactoryStage.PARKED)
         when (mutation) {
             AuthorityMutation.REVISION -> authority.bumpRevision()
@@ -1455,19 +1579,33 @@ class AppControllerTest {
             controller.navigate(Page.DOMAINS)
             scheduler.runCurrent()
         }
-        store.putOperation(marker())
+        val frozenUi = controller.state.value
         gate.complete(Unit)
         checkpoint(FactoryStage.RELEASED)
         scheduler.runCurrent()
         val operation = caller.await()
         checkpoint(FactoryStage.AWAITED)
         val fresh = factory.lastIdentity as CountingSession
-        return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation, captured)
+        return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation, captured, command, frozenUi, sentinel)
+    }
+
+    private fun assertFactoryCell(cell: LegacyAwaitCell, expected: OperationTask, saves: Int) {
+        assertRunningCommand(cell.preSend, cell.command, DnsOperationLifecycle.ACTION_CREATE)
+        assertOriginalResult(expected, cell.fixture.tasks.tasks.values.single(), cell.operation)
+        assertEquals(cell.frozenUi, cell.controller.state.value)
+        assertEquals(listOf(cell.marker), cell.store.operations())
+        assertEquals(real1, cell.factory.lastParameter)
+        assertEquals(2, cell.factory.createCount)
+        assertNotSame(cell.actualInitial, cell.fresh)
+        assertEquals(saves, cell.fresh.saveCount)
+        assertEquals(0, cell.fresh.deleteCount)
+        assertEquals(zoneFor(real1), cell.command.scope)
     }
 
     @Test
     fun legacyFactoryAwaitUnchangedControlReportsUnknownWithTheWholeRow() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.NONE, uiRoundTrip = false, backgroundScope, testScheduler)
+        assertFactoryCell(cell, cell.preSend.copy(state = TaskState.UNKNOWN), saves = 1)
         assertNotSame(cell.actualInitial, cell.fresh, "the fresh acquisition must be a different session identity")
         assertEquals(2, cell.factory.createCount, "one initial and one fresh acquisition")
         assertEquals(1, cell.fresh.saveCount, "the fresh session must receive the typed write")
@@ -1483,6 +1621,7 @@ class AppControllerTest {
     @Test
     fun legacyFactoryAwaitWithARevisionChangeSendsNothing() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.REVISION, uiRoundTrip = false, backgroundScope, testScheduler)
+        assertFactoryCell(cell, cell.preSend, saves = 0)
         assertNotSame(cell.actualInitial, cell.fresh)
         assertEquals(0, cell.fresh.saveCount, "a revoked revision must not reach the typed write")
         assertEquals(0, cell.fresh.deleteCount)
@@ -1496,6 +1635,7 @@ class AppControllerTest {
     @Test
     fun legacyFactoryAwaitWithAFingerprintChangeSendsNothing() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.FINGERPRINT, uiRoundTrip = false, backgroundScope, testScheduler)
+        assertFactoryCell(cell, cell.preSend, saves = 0)
         assertEquals(0, cell.fresh.saveCount, "a changed input fingerprint must not reach the typed write")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
@@ -1506,6 +1646,7 @@ class AppControllerTest {
     @Test
     fun legacyFactoryAwaitWithARevokedAuthoritySendsNothing() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.REVOKE, uiRoundTrip = false, backgroundScope, testScheduler)
+        assertFactoryCell(cell, cell.preSend, saves = 0)
         assertEquals(0, cell.fresh.saveCount, "a revoked authority must not reach the typed write")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
@@ -1516,6 +1657,7 @@ class AppControllerTest {
     @Test
     fun legacyFactoryAwaitWithOnlyAuiEpochChangeStillWritesOnce() = runTest {
         val cell = runLegacyFactoryAwaitCell(AuthorityMutation.UI_EPOCH_ONLY, uiRoundTrip = true, backgroundScope, testScheduler)
+        assertFactoryCell(cell, cell.preSend.copy(state = TaskState.UNKNOWN), saves = 1)
         assertEquals(1, cell.fresh.saveCount, "a UI-only change must not revoke the authority")
         assertEquals(OperationStatus.UNKNOWN, cell.operation.status)
         val stored = cell.fixture.tasks.tasks.values.single()
