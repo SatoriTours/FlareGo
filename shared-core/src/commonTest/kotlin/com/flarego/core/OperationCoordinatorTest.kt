@@ -8,7 +8,6 @@ import com.flarego.core.ports.*
 import kotlin.test.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
@@ -90,36 +89,259 @@ class OperationCoordinatorTest {
 
     private val liveConnection = Connection("connection-1", "Live", "account-1")
 
-    private var appScope: CoroutineScope? = null
+    @Test
+    fun coordinatorFailuresFromOwnerCreationThroughResultAssertionsCompleteAllResources() = runTest {
+        for (failedStage in 0..5) {
+            val owner = ManagedResources()
+            val primary = AssertionError()
+            var owned = emptyList<Job>()
+            var appJob: Job? = null
+            val caught = runCatching {
+                withManagedResources(owner) {
+                    owner.drainWith { testScheduler.runCurrent() }
+                    val queue = RecordingQueue()
+                    val app = newScope(queue)
+                    appJob = app.coroutineContext[Job]
+                    fun checkpoint(stage: Int) {
+                        if (stage == failedStage) { owned = owner.jobsSnapshot(); throw primary }
+                    }
+                    checkpoint(0)
+                    val resolver = Resolver(live(), listOf(liveConnection))
+                    val store = TestStore()
+                    val plans = scopedIssuer(resolver, idsOf("plan-1", "confirm-1"))
+                    val engine = engine(plans, resolver, store, app)
+                    val confirmation = confirmOne(plans)
+                    checkpoint(1)
+                    val gate = CompletableDeferred<Unit>()
+                    var sends = 0
+                    val caller = owner.job(CoroutineScope(coroutineContext).async {
+                        engine.execute(confirmation) { sends++; gate.await(); ExecutionReceipt.Completed() }
+                    })
+                    runCurrent()
+                    checkpoint(2) // The app-owned execution is genuinely queued.
+                    assertFalse(caller.isCompleted)
+                    assertEquals(0, sends)
+                    queue.runAll()
+                    assertFalse(caller.isCompleted)
+                    assertEquals(1, sends)
+                    assertEquals(TaskState.RUNNING, store.tasks[confirmation.plan.id]?.state)
+                    checkpoint(3) // The real owner is inside the receipt body.
+                    gate.complete(Unit)
+                    queue.runAll()
+                    runCurrent()
+                    val result = caller.await()
+                    checkpoint(4)
+                    assertEquals(TaskState.SUCCEEDED, result.state)
+                    assertEquals(result, store.tasks[result.id])
+                    assertEquals(1, sends)
+                    checkpoint(5)
+                }
+            }.exceptionOrNull()
+            assertTrue(caught === primary)
+            assertTrue(requireNotNull(appJob).isCompleted)
+            assertTrue(owned.isNotEmpty())
+            assertTrue(owned.all { it.isCompleted }, "queued owners, suspended callers and gates must complete on failure")
+            assertEquals(0, owner.registeredCount)
+        }
+    }
 
-    private val extraScopes = mutableListOf<CoroutineScope>()
+    @Test
+    fun coordinatorCancellationPreservesThePrimaryAndEveryCleanupFailure() = runTest {
+        val owner = ManagedResources()
+        val primary = CancellationException()
+        val firstCleanup = IllegalStateException()
+        val secondCleanup = IllegalArgumentException()
+        var owned = emptyList<Job>()
+        val caught = runCatching {
+            withManagedResources(owner) {
+                owner.releaseWith { throw firstCleanup }
+                owner.drainWith { throw secondCleanup }
+                owner.drainWith { testScheduler.runCurrent() }
+                val queue = RecordingQueue()
+                val app = newScope(queue)
+                val gate = CompletableDeferred<Unit>()
+                owner.job(app.launch { gate.await() })
+                queue.runAll()
+                owned = owner.jobsSnapshot()
+                throw primary
+            }
+        }.exceptionOrNull()
+        assertTrue(caught === primary)
+        assertTrue(primary.suppressedExceptions.any { it === firstCleanup })
+        assertTrue(firstCleanup.suppressedExceptions.any { it === secondCleanup })
+        assertTrue(owned.all { it.isCompleted })
+        assertEquals(0, owner.registeredCount)
+    }
 
-    /** Every fixture scope is registered here and released, even when a test fails. */
-    private val ownedJobs = mutableListOf<Job>()
+    @Test
+    fun cleanupJoinHasARealBoundAndKeepsThePrimaryFailure() = runTest {
+        val owner = ManagedResources(joinTimeoutMs = 100)
+        val primary = AssertionError()
+        // Deliberately external to the registry: simulates an uncooperative child.
+        // The probe alone owns the emergency release and always joins it below.
+        val emergencyRelease = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var child: Job? = null
+        var appJob: Job? = null
+        try {
+            val started = System.nanoTime()
+            val caught = runCatching {
+                withManagedResources(owner) {
+                    val app = newScope(Dispatchers.Default)
+                    appJob = app.coroutineContext[Job]
+                    child = owner.job(app.launch {
+                        withContext(NonCancellable) { entered.complete(Unit); emergencyRelease.await() }
+                    })
+                    withContext(Dispatchers.Default) { entered.await() }
+                    throw primary
+                }
+            }.exceptionOrNull()
+            assertTrue(caught === primary)
+            assertTrue(primary.suppressedExceptions.isNotEmpty(), "a timed out join must be reported")
+            assertTrue(System.nanoTime() - started < 5_000_000_000L, "a virtual timeout cannot bound a real join")
+            assertFalse(requireNotNull(child).isCompleted, "the join must have timed out on the actual child")
+            assertFalse(requireNotNull(appJob).isCompleted)
+            assertEquals(0, owner.registeredCount)
+        } finally {
+            emergencyRelease.complete(Unit)
+            val completed = runBlocking(NonCancellable + Dispatchers.Default) {
+                withTimeoutOrNull(10_000) { child?.join(); appJob?.join(); true }
+            }
+            assertTrue(completed == true)
+            assertTrue(child?.isCompleted == true)
+            assertTrue(appJob?.isCompleted == true)
+        }
+    }
+
+    private var activeResources: ManagedResources? = null
+    private val resources: ManagedResources get() = checkNotNull(activeResources)
+
+    /** Keep existing test bodies intact while giving app work and UI callers owned jobs. */
+    private fun runTest(body: suspend ManagedTestScope.() -> Unit) = kotlinx.coroutines.test.runTest {
+        val owner = ManagedResources()
+        withManagedResources(owner) {
+            owner.drainWith { testScheduler.runCurrent() }
+            ManagedTestScope(this, owner).body()
+        }
+    }
+
+    private suspend fun <T> withManagedResources(owner: ManagedResources, body: suspend () -> T): T {
+        val previous = activeResources
+        var primary: Throwable? = null
+        activeResources = owner
+        try {
+            return body()
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                owner.teardown()
+            } catch (cleanup: Throwable) {
+                val first = primary
+                if (first == null) throw cleanup
+                if (first !== cleanup) first.addSuppressed(cleanup)
+            } finally {
+                activeResources = previous
+            }
+        }
+    }
+
+    private class ManagedTestScope(test: kotlinx.coroutines.test.TestScope, private val owner: ManagedResources) : CoroutineScope {
+        // The test body runs on runTest's job, never inside either of these owned jobs.
+        // Use the foreground test context: no inherited BackgroundWork marker.
+        private val callers = owner.scope(test.coroutineContext)
+        override val coroutineContext = callers.coroutineContext
+        val appScope = owner.scope(test.coroutineContext)
+        val appJob: Job = requireNotNull(appScope.coroutineContext[Job])
+        // Compatibility name for the preserved bodies; this is our owned appScope.
+        val backgroundScope: CoroutineScope get() = appScope
+        val testScheduler = test.testScheduler
+        fun runCurrent() = testScheduler.runCurrent()
+        fun advanceUntilIdle() = testScheduler.advanceUntilIdle()
+
+        fun launch(
+            context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+            start: CoroutineStart = CoroutineStart.DEFAULT,
+            block: suspend CoroutineScope.() -> Unit,
+        ): Job = owner.job(callers.launch(context, start, block))
+
+        fun <T> async(
+            context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+            start: CoroutineStart = CoroutineStart.DEFAULT,
+            block: suspend CoroutineScope.() -> T,
+        ): Deferred<T> = owner.job(callers.async(context, start, block))
+    }
+
+    /** Register deferred gates at creation, including the unchanged legacy test bodies. */
+    private inline fun <reified T> CompletableDeferred(): CompletableDeferred<T> {
+        val gate = kotlinx.coroutines.CompletableDeferred<T>()
+        activeResources?.job(gate)
+        if (T::class == Unit::class) {
+            activeResources?.releaseWith {
+                @Suppress("UNCHECKED_CAST")
+                gate.complete(Unit as T)
+            }
+        }
+        return gate
+    }
+
+    /** Callbacks run outside the monitor; every failure survives in memory. */
+    private class ManagedResources(private val joinTimeoutMs: Long = 10_000) {
+        private val lock = Any()
+        private val releases = mutableListOf<() -> Unit>()
+        private val jobs = mutableListOf<Job>()
+        private val drains = mutableListOf<() -> Unit>()
+        fun jobsSnapshot(): List<Job> = synchronized(lock) { jobs.toList() }
+        val registeredCount: Int get() = synchronized(lock) { releases.size + jobs.size + drains.size }
+
+        fun gate(gate: CompletableDeferred<Unit>) { job(gate); releaseWith { gate.complete(Unit) } }
+        fun <T : Job> job(job: T): T = job.also { synchronized(lock) { jobs += it } }
+        fun releaseWith(action: () -> Unit) { synchronized(lock) { releases += action } }
+        fun drainWith(action: () -> Unit) { synchronized(lock) { drains += action } }
+        fun scope(context: kotlin.coroutines.CoroutineContext): CoroutineScope {
+            val appJob = job(SupervisorJob(context[Job]))
+            return CoroutineScope(context + appJob)
+        }
+
+        fun teardown() {
+            val release = synchronized(lock) { releases.toList() }
+            val owned = synchronized(lock) { jobs.toList() }
+            val drain = synchronized(lock) { drains.toList() }
+            var failure: Throwable? = null
+            fun attempt(action: () -> Unit) {
+                try { action() } catch (next: Throwable) {
+                    val first = failure
+                    if (first == null) failure = next
+                    else if (first !== next) first.addSuppressed(next)
+                }
+            }
+            try {
+                // No suspension before all cancellation continuations have been drained
+                // on the test thread. A blocking join here would starve TestScheduler.
+                release.forEach { attempt(it) }
+                owned.forEach { job -> attempt { job.cancel() } }
+                drain.forEach { attempt(it) }
+                attempt {
+                    // This independent bridge has a real clock and cannot inherit test
+                    // cancellation or join the job executing the test body itself.
+                    val finished = runBlocking(NonCancellable + Dispatchers.Default) {
+                        withTimeoutOrNull(joinTimeoutMs) { owned.forEach { it.join() }; true }
+                    }
+                    assertTrue(finished == true, "all owned jobs must join within the real bound")
+                }
+                owned.forEach { job -> attempt { assertTrue(job.isCompleted, "each owned job must be completed") } }
+            } finally {
+                synchronized(lock) { releases.clear(); jobs.clear(); drains.clear() }
+            }
+            failure?.let { throw it }
+        }
+    }
 
     private fun newScope(
         dispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
         cancelled: Boolean = false,
-    ): CoroutineScope {
-        val job = SupervisorJob()
-        if (cancelled) job.cancel()
-        ownedJobs += job
-        return CoroutineScope(job + dispatcher).also { extraScopes += it }
-    }
-
-    /** Cancel and join every owned scope with a bound, so a failed test cannot leak work. */
-    @AfterTest
-    fun stopApplicationScope() {
-        appScope?.cancel()
-        appScope = null
-        extraScopes.forEach { it.cancel() }
-        extraScopes.clear()
-        val owned = ownedJobs.toList()
-        owned.forEach { it.cancel() }
-        val finished = runBlocking { withTimeoutOrNull(10_000) { owned.forEach { it.join() }; true } }
-        assertTrue(finished == true, "every owned job must complete within the bound")
-        ownedJobs.clear()
-    }
+    ): CoroutineScope = resources.scope(dispatcher).also { if (cancelled) it.cancel() }
 
     private fun live(revision: Long = 7, fp: String = fingerprint, scope: CloudScope = zone) =
         LiveOperationContext(liveConnection, scope, revision, fp)
@@ -134,7 +356,6 @@ class OperationCoordinatorTest {
         val idsSource = OperationIds { if (queue.isEmpty()) throw IllegalStateException("id factory exhausted") else queue.removeFirst() }
         val plans = ChangePlans(resolver, { clockMs }, idsSource)
         val scope = newScope()
-        appScope = scope
         val coordinator = OperationCoordinator(plans, store, resolver, { clockMs }, scope, Dispatchers.Unconfined)
         return Triple(plans, coordinator, store)
     }
@@ -391,7 +612,6 @@ class OperationCoordinatorTest {
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
         val scope = newScope()
-        appScope = scope
         val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val confirmation = confirmOne(plans)
         coordinator.execute(confirmation) { ExecutionReceipt.Unknown() }
@@ -478,7 +698,6 @@ class OperationCoordinatorTest {
             val queue = mutableListOf("plan-1", "confirm-1", "plan-2", "confirm-2")
             val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
             val scope = newScope()
-            appScope = scope
             val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
             val confirmation = confirmOne(plans)
             mutate(resolver)
@@ -499,14 +718,13 @@ class OperationCoordinatorTest {
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
         val scope = newScope()
-        appScope = scope
         val coordinator = OperationCoordinator(plans, taskStore, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val lifecycle =
             DnsOperationLifecycle(
                 resolver, plans, coordinator, { 1_000 }, { fixed },
                 { it == zone }, { _, beforeSend -> beforeSend(); ExecutionReceipt.Unknown() },   // legacy-style Unit adapter
             )
-        val controller = AppController(backgroundScope, SessionFactory { DemoSession(connection) }, store, listOf(connection), lifecycle)
+        val controller = AppController(scope, SessionFactory { DemoSession(connection) }, store, listOf(connection), lifecycle)
         val domain = Domain("zone-1", "example.com", "active", connection.id)
         val operation = controller.saveDns(domain, null, DnsDraft("A", "@", "192.0.2.1"))
         // A Unit-style source can never claim completion.
@@ -527,14 +745,13 @@ class OperationCoordinatorTest {
         val queue = mutableListOf("plan-1", "confirm-1")
         val plans = ChangePlans(resolver, { 1_000 }, { queue.removeFirst() })
         val scope = newScope()
-        appScope = scope
         val coordinator = OperationCoordinator(plans, taskStore, resolver, { 1_000 }, scope, Dispatchers.Unconfined)
         val lifecycle =
             DnsOperationLifecycle(
                 resolver, plans, coordinator, { 1_000 }, { fixed },
                 { it == zone }, { _, _ -> ExecutionReceipt.Completed() },
             )
-        val controller = AppController(backgroundScope, SessionFactory { DemoSession(connection) }, MemoryStore(), listOf(connection), lifecycle)
+        val controller = AppController(scope, SessionFactory { DemoSession(connection) }, MemoryStore(), listOf(connection), lifecycle)
         val operation = controller.saveDns(Domain(foreign.zoneId, "example.com", "active", connection.id), null, DnsDraft("A", "@", "192.0.2.1"))
         assertEquals(OperationStatus.FAILED, operation.status)
         assertTrue(taskStore.tasks.isEmpty(), "an unknown zone owner must produce zero tasks and zero writes")
@@ -792,10 +1009,12 @@ class OperationCoordinatorTest {
     }
 
     /** A dispatcher that only runs queued work when the test drains it, counting runs. */
-    private class RecordingQueue : CoroutineDispatcher() {
+    private inner class RecordingQueue : CoroutineDispatcher() {
         val runs = java.util.concurrent.atomic.AtomicInteger(0)
         private val lock = Any()
         private val queued = ArrayDeque<Runnable>()
+
+        init { activeResources?.drainWith { runAll() } }
 
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
             synchronized(lock) { queued.addLast(block) }
@@ -824,7 +1043,7 @@ class OperationCoordinatorTest {
         val one = confirmOne(plans, zone)
         val two = confirmOne(plans, zone)
         val holderEntered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val contenderEntered = java.util.concurrent.CountDownLatch(1)
         val holder =
             async(Dispatchers.Default) {
@@ -870,7 +1089,7 @@ class OperationCoordinatorTest {
         val confirmB = plans.confirm(planB.id, zone, 7, fingerprint, 1_000)
         assertNotEquals(confirmA.plan.id, confirmB.plan.id)
         val bothInside = java.util.concurrent.CountDownLatch(2)
-        val holdBoth = java.util.concurrent.CountDownLatch(1)
+        val holdBoth = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val sendsA = java.util.concurrent.atomic.AtomicInteger(0)
         val sendsB = java.util.concurrent.atomic.AtomicInteger(0)
         val jobs =
@@ -986,7 +1205,7 @@ class OperationCoordinatorTest {
         val blocker = confirmOne(plans, zone)
         val waiting = confirmOne(plans, zone)
         val holderEntered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val holder =
             async(Dispatchers.Default) {
                 holderEngine.execute(blocker) {
@@ -1118,7 +1337,7 @@ class OperationCoordinatorTest {
         val blocker = confirmOne(plans, zone)
         val waiting = confirmOne(plans, zone)
         val holderEntered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val holder =
             async(Dispatchers.Default) {
                 holderEngine.execute(blocker) {
@@ -1227,7 +1446,7 @@ class OperationCoordinatorTest {
         val engineA = OperationCoordinator(plans, store, resolverA, { 1_000 }, app, Dispatchers.Unconfined)
         val engineB = OperationCoordinator(plans, store, resolverB, { 1_000 }, app, Dispatchers.Unconfined)
         val bothInside = java.util.concurrent.CountDownLatch(2)
-        val hold = java.util.concurrent.CountDownLatch(1)
+        val hold = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val sendsScopeA = java.util.concurrent.atomic.AtomicInteger(0)
         val sendsScopeB = java.util.concurrent.atomic.AtomicInteger(0)
         val jobs =
@@ -1322,7 +1541,7 @@ class OperationCoordinatorTest {
         val holderEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, holderScope, Dispatchers.Unconfined)
         val waitingEngine = OperationCoordinator(plans, store, resolver, { 1_000 }, waitingScope, Dispatchers.Unconfined)
         val holderEntered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val holder =
             async(Dispatchers.Default) {
                 holderEngine.execute(confirmA) {
@@ -1402,10 +1621,10 @@ class OperationCoordinatorTest {
         val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
         val confirmation = confirmOne(plans)
         val entered = java.util.concurrent.CountDownLatch(1)
-        val hold = java.util.concurrent.CountDownLatch(1)
+        val hold = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val sends = java.util.concurrent.atomic.AtomicInteger(0)
         val owner =
-            async(Dispatchers.Default) {
+            async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
                 coordinator.execute(confirmation) {
                     entered.countDown()
                     assertTrue(hold.await(5, java.util.concurrent.TimeUnit.SECONDS), "the owner must be released")
@@ -1604,7 +1823,7 @@ class OperationCoordinatorTest {
         val coordinator = OperationCoordinator(plans, store, resolver, { 1_000 }, app, Dispatchers.Unconfined)
         val confirmation = confirmOne(plans)
         val entered = java.util.concurrent.CountDownLatch(1)
-        val hold = java.util.concurrent.CountDownLatch(1)
+        val hold = java.util.concurrent.CountDownLatch(1).also { resources.releaseWith(it::countDown) }
         val ownerSends = java.util.concurrent.atomic.AtomicInteger(0)
         val standbySends = java.util.concurrent.atomic.AtomicInteger(0)
         // The owner caller starts undispatched, so it wins admission and enters the gated body.

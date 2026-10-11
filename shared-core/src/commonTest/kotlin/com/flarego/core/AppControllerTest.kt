@@ -6,10 +6,7 @@ import com.flarego.core.demo.DemoSession
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import kotlin.test.*
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.async
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -235,7 +232,7 @@ class AppControllerTest {
      * A receipt source that really runs the write: it must call [beforeSend] and then the
      * session, so a suspended gate is genuinely inside the confirmed-write path.
      */
-    private class ReceiptPath(
+    private inner class ReceiptPath(
         private val session: CloudSession,
         private val gate: CompletableDeferred<Unit>? = null,
     ) : DnsReceiptSource {
@@ -263,10 +260,12 @@ class AppControllerTest {
     }
 
     /** A dispatcher that really holds queued work until it is explicitly drained. */
-    private class PausableDispatcher : CoroutineDispatcher() {
+    private inner class PausableDispatcher : CoroutineDispatcher() {
         private val lock = Any()
         private val queued = ArrayDeque<Runnable>()
         private var held = false
+
+        init { activeResources?.drainWith { drain() } }
 
         var paused: Boolean
             get() = synchronized(lock) { held }
@@ -1127,35 +1126,227 @@ class AppControllerTest {
         assertEquals(ZoneScope(AccountScope(real1.id, real1.accountId), "z"), stored.scope)
     }
 
-    /** Owns every gate, job and drainable a scenario creates; teardown joins with a real bound. */
-    private class ManagedResources {
+    private enum class FactoryStage { OWNED_SCOPE, FIXTURE, REFRESH, INITIAL_ASSERTIONS, CALLER, PARKED, RELEASED, AWAITED, FINAL_ASSERTIONS }
+
+    @Test
+    fun factoryFailuresFromFixtureThroughFinalAssertionsCompleteEveryOwnedJob() = runTest {
+        for (failedStage in FactoryStage.entries) {
+            val owner = ManagedResources()
+            val primary = AssertionError()
+            var owned = emptyList<Job>()
+            var appJob: Job? = null
+            val caught = runCatching {
+                withManagedResources(owner) {
+                    owner.drainWith { testScheduler.runCurrent() }
+                    val app = owner.scope(coroutineContext)
+                    appJob = app.coroutineContext[Job]
+                    fun checkpoint(stage: FactoryStage) {
+                        if (stage == failedStage) {
+                            owned = owner.jobsSnapshot()
+                            throw primary
+                        }
+                    }
+                    checkpoint(FactoryStage.OWNED_SCOPE)
+                    val cell = runLegacyFactoryAwaitCell(AuthorityMutation.NONE, false, app, testScheduler, ::checkpoint)
+                    assertEquals(cell.preSend.copy(state = TaskState.UNKNOWN), cell.fixture.tasks.tasks.values.single())
+                    assertEquals(1, cell.fresh.saveCount)
+                    checkpoint(FactoryStage.FINAL_ASSERTIONS)
+                }
+            }.exceptionOrNull()
+            assertTrue(caught === primary, "the original phase failure must survive cleanup")
+            assertTrue(requireNotNull(appJob).isCompleted, "the app owner must complete even before a caller exists")
+            assertTrue(owned.isNotEmpty())
+            assertTrue(owned.all { it.isCompleted }, "all gates and callers created before the failure must complete")
+            assertEquals(0, owner.registeredCount, "the registry is cleared after completion checks")
+        }
+    }
+
+    @Test
+    fun factoryFailureKeepsCleanupFailuresAndStillCompletesTheRealAcquisition() = runTest {
+        val owner = ManagedResources()
+        val primary = AssertionError()
+        val cleanup = IllegalStateException()
+        var owned = emptyList<Job>()
+        var laterDrainRan = false
+        val caught = runCatching {
+            withManagedResources(owner) {
+                owner.drainWith { throw cleanup }
+                owner.drainWith { testScheduler.runCurrent(); laterDrainRan = true }
+                val app = owner.scope(coroutineContext)
+                runLegacyFactoryAwaitCell(AuthorityMutation.NONE, false, app, testScheduler) { stage ->
+                    if (stage == FactoryStage.PARKED) {
+                        owned = owner.jobsSnapshot()
+                        throw primary
+                    }
+                }
+            }
+        }.exceptionOrNull()
+        assertTrue(caught === primary)
+        assertTrue(primary.suppressedExceptions.any { it === cleanup }, "cleanup failure must be attached without replacing the assertion")
+        assertTrue(laterDrainRan)
+        assertTrue(owned.all { it.isCompleted })
+        assertEquals(0, owner.registeredCount)
+    }
+
+    @Test
+    fun managedCleanupDrainsCancellationBeforeJoiningTheOwnedAppJob() {
+        val scheduler = TestCoroutineScheduler()
+        var emergencyJob: Job? = null
+        try {
+            val appJob = kotlinx.coroutines.SupervisorJob().also { emergencyJob = it }
+            val app = kotlinx.coroutines.CoroutineScope(StandardTestDispatcher(scheduler) + appJob)
+            val resources = ManagedResources()
+            resources.job(appJob)
+            resources.drainWith { scheduler.runCurrent() }
+            val entered = CompletableDeferred<Unit>()
+            val caller = app.launch { entered.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+            resources.job(caller)
+            scheduler.runCurrent()
+            assertTrue(entered.isCompleted)
+            val failure = runCatching { resources.teardown() }.exceptionOrNull()
+            assertTrue(failure == null, "cancelled work must be drained before the real join")
+            assertTrue(appJob.isCompleted)
+            assertTrue(caller.isCompleted)
+        } finally {
+            emergencyJob?.cancel()
+            scheduler.runCurrent()
+        }
+    }
+
+    @Test
+    fun managedCleanupReportsDrainFailureAndStillRunsEveryDrain() {
+        val resources = ManagedResources()
+        val failure = IllegalStateException()
+        var laterDrainRan = false
+        resources.drainWith { throw failure }
+        resources.drainWith { laterDrainRan = true }
+        val caught = runCatching { resources.teardown() }.exceptionOrNull()
+        assertTrue(caught === failure, "the cleanup failure must remain available in memory")
+        assertTrue(laterDrainRan, "a failed drain must not skip the remaining resources")
+    }
+
+    private var activeResources: ManagedResources? = null
+    private val resources: ManagedResources get() = checkNotNull(activeResources)
+
+    /** Keep existing test bodies intact while giving app work and UI callers owned jobs. */
+    private fun runTest(body: suspend ManagedTestScope.() -> Unit) = kotlinx.coroutines.test.runTest {
+        val owner = ManagedResources()
+        withManagedResources(owner) {
+            owner.drainWith { testScheduler.runCurrent() }
+            ManagedTestScope(this, owner).body()
+        }
+    }
+
+    private suspend fun <T> withManagedResources(owner: ManagedResources, body: suspend () -> T): T {
+        val previous = activeResources
+        var primary: Throwable? = null
+        activeResources = owner
+        try {
+            return body()
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                owner.teardown()
+            } catch (cleanup: Throwable) {
+                val first = primary
+                if (first == null) throw cleanup
+                if (first !== cleanup) first.addSuppressed(cleanup)
+            } finally {
+                activeResources = previous
+            }
+        }
+    }
+
+    private class ManagedTestScope(test: kotlinx.coroutines.test.TestScope, private val owner: ManagedResources) : CoroutineScope {
+        // The test body runs on runTest's job, never inside either of these owned jobs.
+        // Use the foreground test context: no inherited BackgroundWork marker.
+        private val callers = owner.scope(test.coroutineContext)
+        override val coroutineContext = callers.coroutineContext
+        val appScope = owner.scope(test.coroutineContext)
+        val appJob: Job = requireNotNull(appScope.coroutineContext[Job])
+        // Compatibility name for the preserved bodies; this is our owned appScope.
+        val backgroundScope: CoroutineScope get() = appScope
+        val testScheduler = test.testScheduler
+        fun runCurrent() = testScheduler.runCurrent()
+        fun advanceUntilIdle() = testScheduler.advanceUntilIdle()
+
+        fun launch(
+            context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+            start: CoroutineStart = CoroutineStart.DEFAULT,
+            block: suspend CoroutineScope.() -> Unit,
+        ): Job = owner.job(callers.launch(context, start, block))
+
+        fun <T> async(
+            context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+            start: CoroutineStart = CoroutineStart.DEFAULT,
+            block: suspend CoroutineScope.() -> T,
+        ): Deferred<T> = owner.job(callers.async(context, start, block))
+    }
+
+    /** Register deferred gates at creation, including the unchanged legacy test bodies. */
+    private inline fun <reified T> CompletableDeferred(): CompletableDeferred<T> {
+        val gate = kotlinx.coroutines.CompletableDeferred<T>()
+        activeResources?.job(gate)
+        if (T::class == Unit::class) {
+            activeResources?.releaseWith {
+                @Suppress("UNCHECKED_CAST")
+                gate.complete(Unit as T)
+            }
+        }
+        return gate
+    }
+
+    /** Callbacks run outside the monitor; every failure survives in memory. */
+    private class ManagedResources(private val joinTimeoutMs: Long = 10_000) {
         private val lock = Any()
-        private val gates = mutableListOf<CompletableDeferred<Unit>>()
-        private val jobs = mutableListOf<kotlinx.coroutines.Job>()
+        private val releases = mutableListOf<() -> Unit>()
+        private val jobs = mutableListOf<Job>()
         private val drains = mutableListOf<() -> Unit>()
+        fun jobsSnapshot(): List<Job> = synchronized(lock) { jobs.toList() }
+        val registeredCount: Int get() = synchronized(lock) { releases.size + jobs.size + drains.size }
 
-        fun gate(gate: CompletableDeferred<Unit>) { synchronized(lock) { gates += gate } }
-        fun job(job: kotlinx.coroutines.Job) { synchronized(lock) { jobs += job } }
+        fun gate(gate: CompletableDeferred<Unit>) { job(gate); releaseWith { gate.complete(Unit) } }
+        fun <T : Job> job(job: T): T = job.also { synchronized(lock) { jobs += it } }
+        fun releaseWith(action: () -> Unit) { synchronized(lock) { releases += action } }
         fun drainWith(action: () -> Unit) { synchronized(lock) { drains += action } }
-
-        /** Release every gate and drain the queues so parked work can proceed. */
-        fun releaseGates() {
-            synchronized(lock) { gates.toList() }.forEach { it.complete(Unit) }
-            synchronized(lock) { drains.toList() }.forEach { action -> runCatching { action() } }
+        fun scope(context: kotlin.coroutines.CoroutineContext): CoroutineScope {
+            val appJob = job(SupervisorJob(context[Job]))
+            return CoroutineScope(context + appJob)
         }
 
-        /** Release, then cancel and really join every owned job with a bounded wait. */
         fun teardown() {
-            releaseGates()
+            val release = synchronized(lock) { releases.toList() }
             val owned = synchronized(lock) { jobs.toList() }
-            owned.forEach { it.cancel() }
-            val finished = kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeoutOrNull(10_000) { owned.forEach { it.join() }; true } }
-            assertTrue(finished == true, "every owned job must complete within the real bound")
-            synchronized(lock) {
-                gates.clear()
-                jobs.clear()
-                drains.clear()
+            val drain = synchronized(lock) { drains.toList() }
+            var failure: Throwable? = null
+            fun attempt(action: () -> Unit) {
+                try { action() } catch (next: Throwable) {
+                    val first = failure
+                    if (first == null) failure = next
+                    else if (first !== next) first.addSuppressed(next)
+                }
             }
+            try {
+                // No suspension before all cancellation continuations have been drained
+                // on the test thread. A blocking join here would starve TestScheduler.
+                release.forEach { attempt(it) }
+                owned.forEach { job -> attempt { job.cancel() } }
+                drain.forEach { attempt(it) }
+                attempt {
+                    // This independent bridge has a real clock and cannot inherit test
+                    // cancellation or join the job executing the test body itself.
+                    val finished = runBlocking(NonCancellable + Dispatchers.Default) {
+                        withTimeoutOrNull(joinTimeoutMs) { owned.forEach { it.join() }; true }
+                    }
+                    assertTrue(finished == true, "all owned jobs must join within the real bound")
+                }
+                owned.forEach { job -> attempt { assertTrue(job.isCompleted, "each owned job must be completed") } }
+            } finally {
+                synchronized(lock) { releases.clear(); jobs.clear(); drains.clear() }
+            }
+            failure?.let { throw it }
         }
     }
 
@@ -1214,6 +1405,7 @@ class AppControllerTest {
         uiRoundTrip: Boolean,
         scope: kotlinx.coroutines.CoroutineScope,
         scheduler: kotlinx.coroutines.test.TestCoroutineScheduler,
+        checkpoint: (FactoryStage) -> Unit = {},
     ): LegacyAwaitCell {
         val store = MemoryStore()
         val authority = CredentialState(real1, "z", 7, "a".repeat(64))
@@ -1221,62 +1413,55 @@ class AppControllerTest {
         val legacy = LegacyDnsReceiptSource { factory.create(real1) }
         val fixture = authorityFixture(scope, authority, legacy)
         val controller = AppController(scope, factory, store, listOf(real1, real2), fixture.lifecycle)
+        checkpoint(FactoryStage.FIXTURE)
         controller.refresh()
+        checkpoint(FactoryStage.REFRESH)
         scheduler.runCurrent()
         // The session the controller really acquired during refresh.
         val actualInitial = factory.firstIdentity
         assertEquals(1, factory.createCount, "the refresh must acquire exactly one session")
         assertEquals(real1, factory.lastParameter, "the factory must be asked for the trusted connection")
-        val resources = ManagedResources()
-        var caller: kotlinx.coroutines.Deferred<Operation>? = null
-        var firstFailure: Throwable? = null
-        var preSend: OperationTask? = null
-        try {
-            val gate = CompletableDeferred<Unit>()
-            resources.gate(gate)
-            factory.gateTheFreshAcquisition(gate)
-            caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
-            resources.job(caller)
-            scheduler.runCurrent()
-            assertTrue(factory.freshEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the fresh create must be entered")
-            assertEquals(2, factory.createCount, "the fresh acquisition must be the second create")
-            assertFalse(caller.isCompleted, "the write must still be in flight")
-            val freshNow = factory.lastIdentity as CountingSession
-            assertNotSame(actualInitial, freshNow, "the fresh acquisition must be a different session identity")
-            assertEquals(0, freshNow.saveCount, "no typed write may happen while create is still parked")
-            assertEquals(0, freshNow.deleteCount, "no typed delete may happen while create is still parked")
-            assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
-            // The metadata row that exists before any settlement decision.
-            val captured = fixture.tasks.tasks.values.single()
-            assertEquals(TaskState.RUNNING, captured.state, "the captured row must be the pre-send RUNNING row")
-            assertEquals(zoneFor(real1), captured.scope, "the captured row must keep the original scope")
-            preSend = captured
-            when (mutation) {
-                AuthorityMutation.REVISION -> authority.bumpRevision()
-                AuthorityMutation.FINGERPRINT -> authority.changeFingerprint()
-                AuthorityMutation.REVOKE -> authority.revoke()
-                AuthorityMutation.NONE, AuthorityMutation.UI_EPOCH_ONLY -> Unit
-            }
-            if (uiRoundTrip) {
-                // A pure UI epoch change: navigation only, so the original authority stays live.
-                controller.navigate(Page.RESOURCES)
-                scheduler.runCurrent()
-                controller.navigate(Page.DOMAINS)
-                scheduler.runCurrent()
-            }
-            store.putOperation(marker())
-        } catch (failure: Throwable) {
-            firstFailure = failure
-        } finally {
-            // Release only: the caller must be able to finish before the registry joins it.
-            resources.releaseGates()
-        }
+        checkpoint(FactoryStage.INITIAL_ASSERTIONS)
+        val gate = CompletableDeferred<Unit>()
+        resources.gate(gate)
+        factory.gateTheFreshAcquisition(gate)
+        val caller = kotlinx.coroutines.CoroutineScope(scope.coroutineContext).async { controller.saveDns(domain(), null, draft()) }
+        resources.job(caller)
+        checkpoint(FactoryStage.CALLER)
         scheduler.runCurrent()
-        val operation = caller?.await() ?: throw IllegalStateException("the caller was never created")
-        resources.teardown()
-        firstFailure?.let { throw it }
+        assertTrue(factory.freshEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the fresh create must be entered")
+        assertEquals(2, factory.createCount, "the fresh acquisition must be the second create")
+        assertFalse(caller.isCompleted, "the write must still be in flight")
+        val freshNow = factory.lastIdentity as CountingSession
+        assertNotSame(actualInitial, freshNow, "the fresh acquisition must be a different session identity")
+        assertEquals(0, freshNow.saveCount, "no typed write may happen while create is still parked")
+        assertEquals(0, freshNow.deleteCount, "no typed delete may happen while create is still parked")
+        assertEquals(real1, factory.lastParameter, "the fresh acquisition must use the trusted connection")
+        // The metadata row that exists before any settlement decision.
+        val captured = fixture.tasks.tasks.values.single()
+        assertEquals(TaskState.RUNNING, captured.state, "the captured row must be the pre-send RUNNING row")
+        assertEquals(zoneFor(real1), captured.scope, "the captured row must keep the original scope")
+        checkpoint(FactoryStage.PARKED)
+        when (mutation) {
+            AuthorityMutation.REVISION -> authority.bumpRevision()
+            AuthorityMutation.FINGERPRINT -> authority.changeFingerprint()
+            AuthorityMutation.REVOKE -> authority.revoke()
+            AuthorityMutation.NONE, AuthorityMutation.UI_EPOCH_ONLY -> Unit
+        }
+        if (uiRoundTrip) {
+            // A pure UI epoch change: navigation only, so the original authority stays live.
+            controller.navigate(Page.RESOURCES)
+            scheduler.runCurrent()
+            controller.navigate(Page.DOMAINS)
+            scheduler.runCurrent()
+        }
+        store.putOperation(marker())
+        gate.complete(Unit)
+        checkpoint(FactoryStage.RELEASED)
+        scheduler.runCurrent()
+        val operation = caller.await()
+        checkpoint(FactoryStage.AWAITED)
         val fresh = factory.lastIdentity as CountingSession
-        val captured = requireNotNull(preSend) { "the pre-send row must have been captured" }
         return LegacyAwaitCell(controller, fixture, store, factory, authority, actualInitial, fresh, operation, captured)
     }
 
