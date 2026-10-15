@@ -4,9 +4,19 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flarego.core.application.AppController
+import com.flarego.core.application.operations.*
+import com.flarego.core.cloudflare.inventory.CloudflareDirectoryClient
+import com.flarego.core.cloudflare.billing.CloudflareBillingClient
+import com.flarego.core.cloudflare.identity.CloudflareCapabilityClient
+import com.flarego.core.demo.*
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.launch
 import com.flarego.core.cloudflare.CloudflareSession
+import com.flarego.core.cloudflare.HttpTransport
+import com.flarego.core.ports.*
 import com.flarego.core.model.*
-import com.flarego.core.ports.SessionFactory
+import com.flarego.core.cloudflare.identity.CloudflareIdentityClient
+import com.flarego.core.cloudflare.protocol.CloudflareGateway
 import com.flarego.core.updates.*
 import com.flarego.platform.*
 import com.flarego.ui.ConnectionDraft
@@ -15,7 +25,11 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FlareGoViewModel(application: Application) : AndroidViewModel(application) {
+class FlareGoViewModel @JvmOverloads constructor(
+    application: Application,
+    private val operationDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+    private val transportForToken: (String) -> HttpTransport = { CloudflareTransport(it) },
+) : AndroidViewModel(application) {
     val updater =
         UpdateController(
             viewModelScope,
@@ -47,22 +61,77 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
     val operationStore = localDatabase.operationStore
     private val vault = TokenVault(application)
     val connectionDraft = ConnectionDraft()
-    val controller =
-        AppController(
-            viewModelScope,
-            SessionFactory { connection ->
-                val token =
-                    try {
-                        withContext(Dispatchers.IO) { vault.get(connection.id) }
-                    } catch (_: Exception) {
-                        null
+    private val credentialRevisions = ConcurrentHashMap<String, Long>()
+    private fun credentialRevision(id: String) = credentialRevisions[id] ?: 0L
+    private lateinit var controllerRef: AppController
+    private suspend fun gateway(connection: Connection): CloudflareGateway {
+        val token = try { withContext(Dispatchers.IO) { vault.get(connection.id) } }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        if (token == null) throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED,"本机凭据无法解密，请断开后重新连接账号")
+        return CloudflareGateway(transportForToken(token), nowMs = System::currentTimeMillis,
+            parseHttpDate = CloudflareHttpDates::parse)
+    }
+    private val sessionFactory = SessionFactory { connection ->
+        if (connection.demo) DemoSession(connection)
+        else {
+            val gateway = gateway(connection)
+            // The legacy DNS adapter uses the same clock-aware gateway. Its Unit receipt remains unknown.
+            CloudflareSession(connection, HttpTransport { error("Requests must use the gateway") }, gateway)
+        }
+    }
+    private val operationRuntime = AppOperationRuntime(viewModelScope,operationStore,operationDispatcher,
+        { controllerRef.state.value }, { controllerRef.operationEpoch }, ::credentialRevision,
+        sessionFactory,AndroidFingerprint(),OperationClock(System::currentTimeMillis),
+        OperationIds { UUID.randomUUID().toString() }, { controllerRef.publishTasks(it) })
+    val controller = AppController(viewModelScope,sessionFactory,store,store.connections(),
+        dnsOperations = operationRuntime,
+        productFactory = ProductSessionFactory { connection ->
+            if (connection.demo) {
+                ProductServices(DemoDirectory(connection),object : ScopedBillingPort {
+                    override suspend fun history(scope: CloudScope, request: PageRequest): CloudPage<BillingEntry> {
+                        ScopeGuard.requireOwned(scope,connection)
+                        if (scope !is AccountScope || request.token != null) throw CloudFailure(CloudFailureCode.INVALID_INPUT,"演示账单仅提供一页示例")
+                        val entries = DemoSession(connection).billing().invoices.map { bill ->
+                            BillingEntry(bill.id,scope,bill.date,bill.amount,bill.currency,"示例 · ${bill.description}",null,null,null)
+                        }
+                        return CloudPage(entries.take(request.limit),null,entries.size.toLong())
                     }
-                if (token == null) throw CloudException("本机凭据无法解密，请断开后重新连接账号")
-                CloudflareSession(connection, CloudflareTransport(token))
-            },
-            store,
-            store.connections(),
-        )
+                },object : CapabilityPort {
+                    override suspend fun status(scope: CloudScope, actionKey: String): CapabilityStatus {
+                        ScopeGuard.requireOwned(scope,connection)
+                        return CapabilityStatus(actionKey,scope,availability = CapabilityAvailability.UNKNOWN,reason = "显式演示连接")
+                    }
+                })
+            } else {
+                val gateway = gateway(connection)
+                ProductServices(CloudflareDirectoryClient(connection,gateway),CloudflareBillingClient(connection,gateway),
+                    CloudflareCapabilityClient(connection,gateway,System::currentTimeMillis),
+                    CloudflareDirectoryClient(connection,gateway,WorkersDirectoryMode.LEGACY))
+            }
+        }, credentialRevisionQuery = ::credentialRevision, nowMs = System::currentTimeMillis,
+    ).also { controllerRef = it }
+
+    init { viewModelScope.launch { operationRuntime.recover() } }
+    suspend fun reconcileTask(id: String) = operationRuntime.reconcile(id)
+
+    private fun identity(token: String): CloudflareIdentityClient {
+        val cleanToken = token.trim()
+        if (cleanToken.isBlank() || cleanToken.any(Char::isWhitespace))
+            throw CloudException("请检查 Token；Token 不能包含空格或换行")
+        return CloudflareIdentityClient(CloudflareGateway(transportForToken(cleanToken),
+            nowMs = System::currentTimeMillis, parseHttpDate = CloudflareHttpDates::parse))
+    }
+
+    suspend fun discoverAccounts(token: String, request: PageRequest): CloudPage<AccountSummary> =
+        identity(token).discover(request)
+
+    suspend fun verifyDraftToken(token: String, kind: TokenKind, accountId: String?): TokenVerification {
+        val account = accountId?.trim()?.lowercase()
+        if (kind == TokenKind.ACCOUNT_OWNED && account?.matches(Regex("[a-f0-9]{32}")) != true)
+            throw CloudException("Account ID 必须为 32 位十六进制字符")
+        return identity(token).verifyToken(kind, account)
+    }
 
     suspend fun connect(name: String, accountId: String, token: String) {
         val cleanAccount = accountId.trim().lowercase()
@@ -78,10 +147,11 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
         val existing = store.connections().find { it.accountId == cleanAccount }
         val connection =
             Connection(existing?.id ?: UUID.randomUUID().toString(), name.trim(), cleanAccount)
-        CloudflareSession(connection, CloudflareTransport(cleanToken)).verifyAccount()
+        identity(cleanToken).verifyAccount(cleanAccount)
+        credentialRevisions[connection.id] = credentialRevision(connection.id) + 1
+        controller.invalidateSession(connection.id)
         withContext(Dispatchers.IO) { vault.put(connection.id, cleanToken) }
         store.putConnection(connection)
-        controller.invalidateSession(connection.id)
         controller.reloadConnections(store.connections())
         controller.selectConnection(connection)
     }
@@ -93,9 +163,19 @@ class FlareGoViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun disconnect(connection: Connection) {
-        vault.remove(connection.id)
-        store.removeConnection(connection.id)
+        credentialRevisions[connection.id] = credentialRevision(connection.id) + 1
         controller.invalidateSession(connection.id)
-        controller.reloadConnections(store.connections())
+        // Main stays free while a metadata writer releases the shared latch after IO.
+        viewModelScope.launch {
+            try {
+                operationRuntime.removeConnection(connection.id) {
+                    vault.remove(connection.id)
+                    operationStore.removeConnection(connection.id)
+                    store.removeConnection(connection.id)
+                }
+                controller.reloadConnections(store.connections())
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { controller.reportDisconnectFailure() }
+        }
     }
 }

@@ -14,11 +14,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.model.*
+import com.flarego.core.application.inventory.*
+import kotlinx.coroutines.launch
 
 private val ListPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp)
 
 @Composable
-fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit) {
+fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit, refreshAll: () -> Unit = {}) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Surface(
@@ -53,7 +55,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                 SectionCard(Modifier.weight(1f).clickable { navigate(Page.RESOURCES) }) {
                     Muted("云资源")
                     Text(
-                        "${state.inventory.resources.size}",
+                        if (state.productLoading) loadedLabel(state.products.filterKeys { it in resourceProducts }.values.toList()) else "${state.inventory.resources.size}",
                         style = MaterialTheme.typography.headlineSmall,
                     )
                     Muted("Workers / R2 / D1 / KV")
@@ -61,10 +63,12 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                 SectionCard(Modifier.weight(1f).clickable { navigate(Page.DOMAINS) }) {
                     Muted("我的域名")
                     Text(
-                        "${state.inventory.domains.size}",
+                        if (state.productLoading) loadedLabel(listOfNotNull(state.products[ProductKey.ZONES])) else "${state.inventory.domains.size}",
                         style = MaterialTheme.typography.headlineSmall,
                     )
-                    Muted("${state.inventory.domains.count { it.status == "active" }} 个已激活")
+                    Muted(if (state.productLoading && state.products[ProductKey.ZONES]?.observedAtMs == null) "激活状态未加载"
+                        else if (state.productLoading) "已加载域名中 ${state.inventory.domains.count { it.status == "active" }} 个已激活"
+                        else "${state.inventory.domains.count { it.status == "active" }} 个已激活")
                 }
             }
         }
@@ -122,6 +126,7 @@ fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit
                     }
             }
         }
+        if (state.productLoading) item { OutlinedButton(onClick = refreshAll,modifier = Modifier.fillMaxWidth()) { Text("刷新全部产品") } }
         items(state.inventory.notices) { Notice(it) }
     }
 }
@@ -187,14 +192,15 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit) {
 }
 
 @Composable
-fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Unit) {
+fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Unit,
+    selectKind: (ResourceKind) -> Unit = {}, refresh: () -> Unit = {}, more: () -> Unit = {}, selectWorkers: (com.flarego.core.ports.WorkersDirectoryMode) -> Unit = {}) {
     var filter by remember { mutableStateOf<ResourceKind?>(null) }
     Column {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            TextButton(onClick = { filter = null }, contentPadding = PaddingValues(6.dp)) {
+            if (!state.productLoading) TextButton(onClick = { filter = null }, contentPadding = PaddingValues(6.dp)) {
                 Text(
                     "全部",
                     color =
@@ -203,24 +209,29 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
                 )
             }
             ResourceKind.entries.forEach { kind ->
-                TextButton(onClick = { filter = kind }, contentPadding = PaddingValues(6.dp)) {
+                TextButton(onClick = { if (state.productLoading) selectKind(kind) else filter = kind }, contentPadding = PaddingValues(6.dp)) {
                     Text(
                         when (kind) {
-                            ResourceKind.WORKER -> "边缘计算"
-                            ResourceKind.R2 -> "存储"
+                            ResourceKind.WORKER -> if (state.productLoading) "Workers" else "边缘计算"
+                            ResourceKind.R2 -> if (state.productLoading) "R2" else "存储"
                             ResourceKind.D1 -> "数据库"
                             ResourceKind.KV -> "KV"
                         },
                         color =
-                            if (filter == kind) MaterialTheme.colorScheme.primary
+                            if ((if (state.productLoading) state.resourceKind else filter) == kind) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         }
+        if (state.productLoading && state.resourceKind == ResourceKind.WORKER) Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceEvenly) {
+            TextButton(onClick = { selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.MODERN) }) { Text("Workers 现代目录") }
+            TextButton(onClick = { selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.LEGACY) }) { Text("Workers 旧目录") }
+        }
+        if (state.productLoading) ProductStatus(state.products[state.resourceKind.product()],refresh,more)
         val resources =
             state.inventory.resources.filter {
-                (filter == null || it.kind == filter) && it.name.contains(query, true)
+                (if (state.productLoading) it.kind == state.resourceKind else (filter == null || it.kind == filter)) && it.name.contains(query, true)
             }
         LazyColumn(
             contentPadding = ListPadding,
@@ -353,6 +364,59 @@ fun ResourceScreen(state: AppState, openConsole: () -> Unit) {
     }
 }
 
+/** Typed history presentation; ownership and row scope are checked before any amounts are shown. */
+@Composable
+fun ScopedBillingScreen(connection: Connection, scope: CloudScope, history: CloudPage<BillingEntry>, openConsole: () -> Unit) {
+    val source = when (scope) {
+        is AccountScope -> BillingSource.ACCOUNT_HISTORY
+        is UserScope -> BillingSource.USER_HISTORY_LEGACY
+        else -> {
+            Notice("不支持此账单范围，请选择账号或用户")
+            return
+        }
+    }
+    val owned = try {
+        ScopeGuard.requireOwned(scope, connection)
+        true
+    } catch (_: CloudFailure) { false }
+    if (!owned) {
+        Notice("账单范围与当前连接不一致，请重新加载")
+        return
+    }
+    if (history.items.any { it.scope != scope }) {
+        Notice("账单数据与所选范围不一致，请重新加载")
+        return
+    }
+    LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (connection.demo) item { Notice("演示 · 示例数据，不产生真实扣款") }
+        item { Text(source.title, style = MaterialTheme.typography.titleMedium) }
+        if (source == BillingSource.USER_HISTORY_LEGACY) {
+            item { Notice("用户级历史可能包含其他账号，不能作为当前账号费用。") }
+        }
+        item { Muted("已加载 ${history.items.size} 条历史记录，未提供费用预估") }
+        if (history.items.isEmpty()) item { Notice("暂无账单历史") }
+        items(history.items) { bill ->
+            SectionCard {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(bill.occurredAt?.substringBefore('T') ?: "时间未知", style = MaterialTheme.typography.titleMedium)
+                    Text("${bill.amount ?: "未知"} ${bill.currency ?: "币种未知"}",
+                        style = MaterialTheme.typography.titleMedium)
+                }
+                Text(bill.description ?: "未提供账单说明", style = MaterialTheme.typography.bodyMedium)
+                Muted(bill.status?.let { "状态：$it" } ?: "状态未知")
+                Muted(bill.id)
+                bill.invoiceId?.let { Muted("发票：$it") }
+                bill.receiptId?.let { Muted("收据：$it") }
+            }
+        }
+        item {
+            OutlinedButton(onClick = openConsole, modifier = Modifier.fillMaxWidth()) {
+                Text("在官方控制台查看费用与发票")
+            }
+        }
+    }
+}
+
 @Composable
 fun BillingScreen(state: AppState, openConsole: () -> Unit) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -372,7 +436,7 @@ fun BillingScreen(state: AppState, openConsole: () -> Unit) {
         state.billing?.notice?.let { item { Notice(it) } }
         item {
             Text(
-                if (state.selected?.demo == true) "历史账单 · 示例" else "用户级账单历史",
+                if (state.selected?.demo == true) "历史账单 · 示例" else BillingSource.USER_HISTORY_LEGACY.title,
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -390,7 +454,7 @@ fun BillingScreen(state: AppState, openConsole: () -> Unit) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(bill.date, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${bill.amount ?: "—"} ${bill.currency}",
+                        "${bill.amount ?: "未知"} ${bill.currency}",
                         style = MaterialTheme.typography.titleMedium,
                     )
                 }
@@ -446,15 +510,35 @@ fun AccountsScreen(
 }
 
 @Composable
-fun JobsScreen(state: AppState, query: String) {
+fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> Unit)? = null) {
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf<String?>(null) }
+    var checkError by remember { mutableStateOf<String?>(null) }
+    val tasks = state.tasks.filter { it.connectionId == state.selected?.id && (it.actionKey.contains(query,true) || taskLabel(it.state).contains(query,true)) }
     val operations =
         state.operations.filter {
             it.connectionId == state.selected?.id && it.title.contains(query, true)
         }
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Muted("当前账号的最近 200 条本机操作") }
-        if (operations.isEmpty()) item { EmptyState("暂无操作记录", "DNS 变更及模拟注册结果会显示在这里") }
-        items(operations, key = { it.id }) { op ->
+        checkError?.let { item { Notice(it) } }
+        items(tasks,key = { "task:${it.id}" }) { task -> SectionCard {
+            Text("DNS 任务",style = MaterialTheme.typography.titleMedium)
+            Pill(taskLabel(task.state),task.state != TaskState.SUCCEEDED)
+            Text(task.safeDetail,style = MaterialTheme.typography.bodyMedium)
+            if (reconcile != null && task.state !in listOf(TaskState.SUCCEEDED,TaskState.FAILED))
+                OutlinedButton(enabled = checking == null,onClick = {
+                    checking = task.id;checkError = null
+                    scope.launch {
+                        try { reconcile(task.id) }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (failure: Exception) { checkError = com.flarego.core.application.safeMessage(failure) }
+                        finally { checking = null }
+                    }
+                }) { Text(if (checking == task.id) "核对中" else "只读核对") }
+        } }
+        if (operations.isEmpty() && tasks.isEmpty()) item { EmptyState("暂无操作记录", "DNS 变更及模拟注册结果会显示在这里") }
+        items(operations.filter { op -> state.tasks.none { it.id == op.id } }, key = { it.id }) { op ->
             SectionCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
@@ -468,4 +552,32 @@ fun JobsScreen(state: AppState, query: String) {
             }
         }
     }
+}
+
+private val resourceProducts = setOf(ProductKey.WORKERS,ProductKey.R2,ProductKey.D1,ProductKey.KV)
+private fun loadedLabel(states: List<ProductLoadState>): String {
+    val observed = states.filter { it.observedAtMs != null }
+    return if (observed.isEmpty()) "未加载" else "已加载 ${observed.sumOf { it.content.count() }}"
+}
+@Composable
+fun ProductStatus(state: ProductLoadState?, refresh: () -> Unit, more: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp,vertical = 6.dp),verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceBetween,verticalAlignment = Alignment.CenterVertically) {
+            Muted(if (state?.observedAtMs == null) "未加载" else "已加载 ${state.content.count()} · ${if (state.allPagesLoaded) "全部" else "尚未完整"}")
+            TextButton(enabled = state?.loading != true,onClick = refresh) { Text("刷新当前产品") }
+        }
+        state?.error?.let { Notice(it.publicMessage,refresh) }
+        if (state?.next != null) OutlinedButton(enabled = !state.loading,onClick = more) { Text("加载更多") }
+    }
+}
+private fun taskLabel(state: TaskState): String = when(state) {
+    TaskState.QUEUED -> "等待执行"
+    TaskState.RUNNING -> "执行中"
+    TaskState.ACCEPTED -> "已受理"
+    TaskState.SUCCEEDED -> "已确认完成"
+    TaskState.PARTIAL -> "部分完成"
+    TaskState.FAILED -> "执行失败"
+    TaskState.UNKNOWN -> "待核对"
+    TaskState.RECONCILING -> "核对中"
+    TaskState.ACTION_REQUIRED -> "需要处理"
 }

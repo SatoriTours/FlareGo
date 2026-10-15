@@ -109,6 +109,9 @@ class MainActivity : ComponentActivity() {
                 },
                 updater = current.updater,
                 connectionDraft = current.connectionDraft,
+                discoverAccounts = current::discoverAccounts,
+                verifyToken = current::verifyDraftToken,
+                reconcileTask = current::reconcileTask,
             )
         }
     }

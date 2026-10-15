@@ -24,7 +24,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.AppController
+import com.flarego.core.application.inventory.*
 import com.flarego.core.model.*
+import com.flarego.core.ports.*
 import com.flarego.core.updates.UpdateController
 import kotlinx.coroutines.launch
 
@@ -63,6 +65,9 @@ fun FlareGoApp(
     sensitiveScreen: (Boolean) -> Unit = {},
     updater: UpdateController? = null,
     connectionDraft: ConnectionDraft = remember { ConnectionDraft() },
+    discoverAccounts: (suspend (String, PageRequest) -> CloudPage<AccountSummary>)? = null,
+    verifyToken: (suspend (String, TokenKind, String?) -> TokenVerification)? = null,
+    reconcileTask: (suspend (String) -> Unit)? = null,
 ) {
     val state by controller.state.collectAsState()
     val updateState = updater?.state?.collectAsState()?.value
@@ -79,7 +84,7 @@ fun FlareGoApp(
     var searched by remember(state.page, state.selected?.id) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
-    LaunchedEffect(controller) { controller.refresh() }
+    LaunchedEffect(controller) { controller.start() }
     LaunchedEffect(searchOpen) { if (searchOpen) focus.requestFocus() }
     DisposableEffect(dialog is DialogState.Connect) {
         sensitiveScreen(dialog is DialogState.Connect)
@@ -426,10 +431,14 @@ fun FlareGoApp(
                                     state,
                                     controller::navigate,
                                     { dialog = DialogState.Create },
+                                    controller::refreshAllProducts,
                                 )
-                            Page.DOMAINS -> DomainsScreen(state, query, controller::openDomain)
+                            Page.DOMAINS -> Column {
+                                if (state.productLoading) ProductStatus(state.products[ProductKey.ZONES],controller::refresh,{controller.loadMore(ProductKey.ZONES)})
+                                DomainsScreen(state, query, controller::openDomain)
+                            }
                             Page.RESOURCES ->
-                                ResourcesScreen(state, query, controller::openResource)
+                                ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode)
                             Page.DNS ->
                                 DnsScreen(state, query) {
                                     state.domain?.let { domain ->
@@ -437,7 +446,21 @@ fun FlareGoApp(
                                     }
                                 }
                             Page.RESOURCE -> ResourceScreen(state) { openConsole(Page.RESOURCE) }
-                            Page.BILLING -> BillingScreen(state) { openConsole(Page.BILLING) }
+                            Page.BILLING -> if (state.productLoading) Column {
+                                Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceEvenly) {
+                                    TextButton(onClick = { controller.selectBillingSource(BillingSource.ACCOUNT_HISTORY) }) { Text("账号账单") }
+                                    TextButton(onClick = { controller.selectBillingSource(BillingSource.USER_HISTORY_LEGACY) }) { Text("用户账单（旧接口）") }
+                                }
+                                if (state.billingSource == BillingSource.USER_HISTORY_LEGACY) {
+                                    BillingScreen(state) { openConsole(Page.BILLING) }
+                                } else {
+                                    ProductStatus(state.products[ProductKey.BILLING],controller::refresh,{controller.loadMore(ProductKey.BILLING)})
+                                    val selected = state.selected
+                                    val history = state.products[ProductKey.BILLING]
+                                    if (selected != null && history?.observedAtMs != null)
+                                        ScopedBillingScreen(selected,history.scope,CloudPage((history.content as? ProductContent.Billing)?.items.orEmpty(),history.next,history.total)) { openConsole(Page.BILLING) }
+                                }
+                            } else BillingScreen(state) { openConsole(Page.BILLING) }
                             Page.ACCOUNTS ->
                                 AccountsScreen(
                                     state,
@@ -445,7 +468,7 @@ fun FlareGoApp(
                                     { dialog = DialogState.Disconnect(it) },
                                     { updater?.let { UpdatePanel(it) } },
                                 )
-                            Page.JOBS -> JobsScreen(state, query)
+                            Page.JOBS -> JobsScreen(state, query, reconcileTask)
                             Page.BUY ->
                                 PurchaseScreen(
                                     query,
@@ -460,7 +483,7 @@ fun FlareGoApp(
             }
         }
         when (val modal = dialog) {
-            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft)
+            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft, discoverAccounts, verifyToken)
             DialogState.Create ->
                 CreateResourceDialog(dismiss) {
                     dialog = null

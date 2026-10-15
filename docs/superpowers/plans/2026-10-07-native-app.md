@@ -1,5 +1,7 @@
 # FlareGo 原生应用实施计划
 
+> 历史计划：首版任务已完成并有历史验证。2026-10-11 的 `98cc0c9` 已将默认演示账号改为添加服务／密钥引导；下面的原始设计约束和勾选保留为首版记录，当前行为以 [原生实现规格](../../native-spec.md) 为准，最新实现及验证状态见 [开发进度](../../development-progress.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在 FlareGo 构建可安装的原生 Android 首版，保留已确认的紧凑导航设计并接入 Cloudflare。
@@ -59,3 +61,5 @@
 - [x] 更新 README 和架构中的原生技术决定，提供 APK 路径与能力边界。
 
 当前目录没有 Git 仓库，因此在用户指定目录直接开发，不创建 worktree、不提交或推送。批准的设计与开发指令已构成执行授权，继续实施，不重复要求审批。
+
+**本轮回归（2026-10-15）：**隔离分支 P1 Task9 完成生产装配，core 285／平台 82／原生 49 项与 Debug 构建／lint 通过，发布契约 10 项通过；未重建签名 Release、未验证真实 APK 升级或触发发布。见 [Task9 验证](../../cloudflare-audit/p1-task9-verification-2026-10-15.md)。

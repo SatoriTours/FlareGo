@@ -59,6 +59,12 @@ fun interface ZoneOwnerCheck {
     fun owns(scope: ZoneScope): Boolean
 }
 
+interface DnsOperations {
+    suspend fun create(zone: ZoneScope, draft: DnsDraft, frozenBefore: DnsRecord? = null): OperationTask
+    suspend fun update(zone: ZoneScope, recordId: String, draft: DnsDraft, frozenBefore: DnsRecord? = null): OperationTask
+    suspend fun delete(zone: ZoneScope, recordId: String, frozenBefore: DnsRecord? = null): OperationTask
+}
+
 /**
  * The real DNS consumer of the confirmed-write path.
  *
@@ -75,14 +81,14 @@ class DnsOperationLifecycle(
     private val fingerprint: FingerprintPort,
     private val owner: ZoneOwnerCheck,
     private val receipts: DnsReceiptSource,
-) {
-    suspend fun create(zone: ZoneScope, draft: DnsDraft, frozenBefore: DnsRecord? = null): OperationTask =
+) : DnsOperations {
+    override suspend fun create(zone: ZoneScope, draft: DnsDraft, frozenBefore: DnsRecord?): OperationTask =
         run(ACTION_CREATE, zone, null, draft, frozenBefore)
 
-    suspend fun update(zone: ZoneScope, recordId: String, draft: DnsDraft, frozenBefore: DnsRecord? = null): OperationTask =
+    override suspend fun update(zone: ZoneScope, recordId: String, draft: DnsDraft, frozenBefore: DnsRecord?): OperationTask =
         run(ACTION_PATCH, zone, recordId, draft, frozenBefore)
 
-    suspend fun delete(zone: ZoneScope, recordId: String, frozenBefore: DnsRecord? = null): OperationTask =
+    override suspend fun delete(zone: ZoneScope, recordId: String, frozenBefore: DnsRecord?): OperationTask =
         run(ACTION_DELETE, zone, recordId, DnsDraft("DELETE", "", ""), frozenBefore)
 
     private suspend fun run(
@@ -105,7 +111,7 @@ class DnsOperationLifecycle(
                 recordId = recordId,
                 draft = draft,
                 frozenBefore = frozenBefore,
-                desiredHash = fingerprint.sha256(CanonicalJson.encode(desired(recordId, draft, live))),
+                desiredHash = fingerprint.sha256(CanonicalJson.encode(dnsDesired(live.connection.id, recordId, draft))),
                 requestFingerprint = fingerprint.sha256(CanonicalJson.encode(semanticInput(actionKey, zone, recordId, draft, live.connection.id))),
                 credentialRevision = live.credentialRevision,
             )
@@ -169,18 +175,6 @@ class DnsOperationLifecycle(
             put("draft", draftOf(draft))
         }
 
-    private fun desired(recordId: String?, draft: DnsDraft, live: LiveOperationContext): JsonElement =
-        buildJsonObject {
-            put("connection", live.connection.id)
-            put("type", draft.type)
-            put("name", draft.name)
-            put("content", draft.content)
-            put("ttl", draft.ttl)
-            put("proxied", draft.proxied)
-            draft.priority?.let { put("priority", it) }
-            put("record", recordId ?: "")
-        }
-
     private fun before(record: DnsRecord): JsonElement =
         buildJsonObject {
             put("id", record.id)
@@ -211,3 +205,15 @@ class DnsOperationLifecycle(
 /** A reviewed relative locator for a zone-scoped record, used by receipt-aware sources. */
 internal fun dnsRecordLocator(zone: ZoneScope, recordId: String?): String =
     "/zones/${encodePath(zone.zoneId)}/dns_records" + (recordId?.let { "/${encodePath(it)}" } ?: "")
+
+internal fun dnsDesired(connectionId: String, recordId: String?, draft: DnsDraft): JsonElement =
+        buildJsonObject {
+            put("connection", connectionId)
+            put("type", draft.type)
+            put("name", draft.name)
+            put("content", draft.content)
+            put("ttl", draft.ttl)
+            put("proxied", draft.proxied)
+            draft.priority?.let { put("priority", it) }
+            put("record", recordId ?: "")
+        }

@@ -1,5 +1,7 @@
 # GitHub 发布与应用更新实施计划
 
+> 历史计划：Task1–4 的首版交付及签名升级记录见 [发布验证](../../release-verification.md)。当前发布门禁以 [发布说明](../../releases.md) 和 workflow 为准；2026-10-12 重新运行 10 项发布契约测试通过。本次进度整理没有创建 Tag／Release，历史发布验收不证明最新源码已发布或完整构建通过，详见 [开发进度](../../development-progress.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 发布签名的 FlareGo 开源 Android 应用，打通提交、Tag 与应用内更新闭环。
@@ -70,3 +72,5 @@
 
 - 提交构建与 v0.1.0 Tag 构建均已成功发布，已验证两 APK 校验文件和同证书。App 真实覆盖升级已通过 10000 → 10002（提交通道）→ 10003（正式通道）；下载及授权期间 Activity 重建恢复通过。签名临时私钥和密码已删除，四项 GitHub Secrets 保留。
 - 追加草稿版本下限、严格 ASCII Tag 校验及滚动 latest 的 Tag/说明同步；7 项 CI 契约测试通过。验证记录见 docs/release-verification.md。
+
+**本轮回归（2026-10-15）：**隔离分支 P1 Task9 完成生产装配，core 285／平台 82／原生 49 项与 Debug 构建／lint 通过，发布契约 10 项通过；未重建签名 Release、未验证真实 APK 升级或触发发布。见 [Task9 验证](../../cloudflare-audit/p1-task9-verification-2026-10-15.md)。

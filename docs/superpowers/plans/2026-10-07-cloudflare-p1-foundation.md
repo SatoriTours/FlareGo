@@ -8,7 +8,29 @@
 
 **Tech Stack:** Kotlin 2.3.20、Compose Multiplatform 1.10.1、SQLDelight 2.3.2、OkHttp 4.12.0、coroutines 1.10.2、kotlinx.serialization-json 1.8.1；JDK 17；不增加后端。
 
-**Spec:** `docs/cloudflare-coverage-audit.md` §4.2／4.4、§5–§9；P0 台账计划为前置依赖。用户已随 P0–P2 总览批准连续实施；P0 工程出口已通过。当前禁用 Gradle／Android／native，纯 common/JVM 可用预检通过的缓存 Kotlin 编译器和 JUnit 验证；平台、迁移、原生与真实账号验收仍单列，不能据此冒称通过。
+**Spec:** `docs/cloudflare-coverage-audit.md` §4.2／4.4、§5–§9；P0 台账计划为前置依赖。用户已随 P0–P2 总览批准连续实施；P0 工程出口已通过。早期实施在禁用 Gradle／Android／native 的边界下使用缓存编译器和 JUnit；这是历史验证范围，不代表后来没有平台报告。当前证据分别登记于 [开发进度](../../development-progress.md)，平台、迁移、原生与真实账号验收不能由 common/JVM 单测替代。
+
+## 当前状态（2026-10-15）
+
+核对基线 `98cc0c9`。Task1–4 有实现及分层工程通过记录；Task4 设备验证本轮已补齐；Task5 原证明缺口已有当前会话复核，本轮按用户选择采用当前会话的本地有限复核；Task6–9 已在隔离分支实现并通过本地工程验收、尚未提交合并。P1 本地工程出口通过，主线集成与真实云验收未完成。
+
+| 任务 | 代码状态 | 验收状态 |
+| --- | --- | --- |
+| T1 | 已实现，`debe2a4` | 历史工程验收通过；本次 scope 20 项通过 |
+| T2 | 已实现，`3359cdc`→`daef35a` | 旧记录为有限 JVM 工程通过；本轮正式 Gradle 平台单测 82 项通过，Debug 构建与 lint 通过 |
+| T3 | 已实现，`6870298`→`2257a30` | 旧记录为有限 JVM 工程通过；本次 gateway 48 项通过 |
+| T4 | 已实现，`be0e391`→`c98bc39` | 源码／common 有限通过；本轮 task 模型 21 项及 API 36 迁移／事务／所有权 9 项通过；设备测试夹具修正尚未合并 |
+| T5 | 已实现，`ed5d8cf` 起，测试更新至 `4542b55` | 旧 NOT APPROVED 历史结论保留；后续证明缺口已由当前会话逐项复核，独立复审未执行；Gradle coordinator 54／controller 41 项通过 |
+| T6 | 隔离分支已实现，尚未提交或合并 | 本地自审与 core 221／平台 82／设备 30 项验证通过；真实云账号未验收 |
+| T7 | 隔离分支目录端口已实现，尚未提交或合并 | 本地自审与 core 243／平台 82 项、Debug 构建及 lint 通过；Task9 已在隔离分支完成装配，真实云未验收 |
+| T8 | 隔离分支客户端和界面组件已实现，尚未提交或合并 | 本地自审与 core 260／平台 82／设备 37 项、Debug 构建及 lint 通过；Task9 已在隔离分支完成装配，真实云未验收 |
+| T9 | 隔离分支已实现，尚未提交或合并 | core 285／平台 82／原生 49 项、Debug 构建及 lint 通过，当前会话本地复核通过；真实云未验收 |
+
+主线基线仍未启用可选任务流程；隔离分支生产 ViewModel 已组装 coordinator、lifecycle 与真实 task store，接入启动恢复、凭据失效／异步断开及只读核对。旧 Unit receipt 保持 UNKNOWN，不重发；仅 PATCH 的读回目标哈希一致可确认成功。完整边界见 [Task9 验证记录](../../cloudflare-audit/p1-task9-verification-2026-10-15.md)。
+
+下方勾选只补记能够由源码或提交直接证明的编写／实现／提交步骤；RED 历史和完整平台 GREEN 缺证据时保留未勾选，不将整个任务追认为验收通过。
+
+**本轮复核方式：**用户明确选择“由当前会话完成本地复核”。Task5 旧证明缺口按本轮有限清单完成本地复核，外部独立复审不再作为本轮待办；该选择不代表生产接线、Task6–9 或 P1 整体验收完成。
 
 ## Global Constraints
 
@@ -69,9 +91,11 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - [x] **Step 4：运行 GREEN。** 独立目标 20＋全套 46（原 26＋新 20）通过，实际 14 main＋5 test 源编译；5 个额外临时 oracle 测试通过（25／51），实际 BASE 控制器回放 3 个断言失败、当前 GREEN。333 审计＋10 CI 通过，固定 pin／catalog／5,323,243 字节 ledger／REST blobs／协议 CSV 未改。仅既有 9 个 UpdateTest opt-in 警告，未运行 Gradle／Android／native。
 - [x] **Step 5：提交。** `debe2a426a08d345554e6c11a32f2d0ee340d9e7`，只 stage 六个许可路径。
 
-**Task1 独立验收：**规格／质量通过（`4e526af→debe2a4`）。四 scope／完整资源身份／本地所有权与云权限分离、能力实现与可用性正交、未知枚举安全值、分页未知量、稳定错误兼容均验证。AppController 除 safeMessage 外仅增加 typed uncertain 判别，防止未知写入错误记为 FAILED，不改生命周期／导航。宿主 JDK21＋target/release17、compiler-only reflect2.2.10 是已披露的窄 JVM 验证，不是 Gradle/KMP/Android／迁移验收；无新 Cloudflare API 支持／真实 L2 宣称。延期非阻塞文案：枚举解析注释与 case/trim 实际行为不一致、通用数值提示未区分 total=0 合法边界。Task2 尚未实施，先检查纯 JVM HTTP/MockWebServer 可验证性。
+**Task1 独立验收（历史）：**规格／质量通过（`4e526af→debe2a4`）。四 scope／完整资源身份／本地所有权与云权限分离、能力实现与可用性正交、未知枚举安全值、分页未知量、稳定错误兼容均验证。AppController 除 safeMessage 外仅增加 typed uncertain 判别，防止未知写入错误记为 FAILED，不改生命周期／导航。宿主 JDK21＋target/release17、compiler-only reflect2.2.10 是已披露的窄 JVM 验证，不是 Gradle/KMP/Android／迁移验收；无新 Cloudflare API 支持／真实 L2 宣称。延期非阻塞文案：枚举解析注释与 case/trim 实际行为不一致、通用数值提示未区分 total=0 合法边界。Task2 的可行性检查及实现后来已完成，见本页当前状态。
 
 ## Task 2：多媒体请求、响应与安全传输
+
+**进度核对：**实现及后续安全修复已提交至 `daef35a`，有限 JVM 工程通过为历史记录。2026-10-13 本轮正式 Gradle 平台 82 项通过，其中 Client／Protocol／Transfer 共 76 项；Debug 构建与 lint 通过。没有真实文件产品或云账号验收。
 
 **Files:** Modify `shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/HttpTransport.kt`、`android-platform/src/main/kotlin/com/flarego/platform/{CloudflareClient,CloudflareTransport}.kt`；Create `shared-core/src/commonMain/kotlin/com/flarego/core/ports/TransferPort.kt`、`android-platform/src/main/kotlin/com/flarego/platform/CloudflareTransfers.kt`；Test `android-platform/src/test/kotlin/com/flarego/platform/{CloudflareClientTest,CloudflareProtocolTest,CloudflareTransferTest}.kt`。
 
@@ -84,7 +108,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `TransferPort.download(request: HttpRequest, sink: ByteSink): HttpResponseHead` 为 suspend；HttpResponseHead 只有 status／headers／transferredBytes。
 - body／source／sink 所有权：请求交给 transport 后，由 transport 在成功、失败、取消路径关闭；错误响应不写入下载文件，失败由调用方删除临时产物。
 
-- [ ] **Step 1：写失败测试。** MockWebServer 验证二进制 `[0,255,128]` 原样返回、multipart 原样字段、35 秒现有 bounded call timeout 保持；4 MiB＋1 bounded response 明确失败；大于 4 MiB download 走 sink 而非内存。验证 POST 在连接中断与 503 Retry-After:0 时 requestCount=1；重定向后第二主机 requestCount=0；恶意 `//host`、scheme、`..`／编码 traversal、CRLF headers、Authorization／Host 注入全拒绝。
+- [x] **Step 1：写失败测试。** 测试源码已存在；RED 执行另记。MockWebServer 验证二进制 `[0,255,128]` 原样返回、multipart 原样字段、35 秒现有 bounded call timeout 保持；4 MiB＋1 bounded response 明确失败；大于 4 MiB download 走 sink 而非内存。验证 POST 在连接中断与 503 Retry-After:0 时 requestCount=1；重定向后第二主机 requestCount=0；恶意 `//host`、scheme、`..`／编码 traversal、CRLF headers、Authorization／Host 注入全拒绝。
   ```kotlin
   assertContentEquals(byteArrayOf(0, -1, -128), response.bytes)
   assertEquals(1, server.requestCount)
@@ -92,11 +116,13 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
   ```
   另测取消调用触发 Call.cancel、关闭 stream，阻塞 IO 不占用 UI 线程。
 - [ ] **Step 2：运行 RED。** `./gradlew :android-platform:testDebugUnitTest --tests 'com.flarego.platform.CloudflareProtocolTest' --tests 'com.flarego.platform.CloudflareTransferTest'`。
-- [ ] **Step 3：实现传输与兼容构造。** Bearer／Accept 由平台注入，业务 headers 允许表单 Content-Type、条件头等审核字段；固定 HTTPS 主机；OkHttp 禁止自动重试与认证 follow-up，写 body 一律 one-shot。取消桥接到 Call.cancel；download 和 upload source 使用固定大小 buffer；上传 payload 禁用内容日志。文件策略独立较长 timeout（总超时 10 分钟、read 60 秒），不改变普通请求 15／20／35 秒超时；这些 timeout 后仍可能 unknown。
+- [x] **Step 3：实现传输与兼容构造。** Bearer／Accept 由平台注入，业务 headers 允许表单 Content-Type、条件头等审核字段；固定 HTTPS 主机；OkHttp 禁止自动重试与认证 follow-up，写 body 一律 one-shot。取消桥接到 Call.cancel；download 和 upload source 使用固定大小 buffer；上传 payload 禁用内容日志。文件策略独立较长 timeout（总超时 10 分钟、read 60 秒），不改变普通请求 15／20／35 秒超时；这些 timeout 后仍可能 unknown。
 - [ ] **Step 4：运行 GREEN。** 目标测试、既有 CloudflareClientTest 和 core CloudflareTest 均通过；取消后无继续读写。
-- [ ] **Step 5：提交。** `git commit -m "feat: add safe Cloudflare binary and streaming transport"`。
+- [x] **Step 5：提交。** 初始实现 `3359cdc`，后续修复至 `daef35a`。
 
 ## Task 3：策略注册、响应解码、分页与只读限流
+
+**进度核对：**实现及修复已提交至 `2257a30`，有限 JVM 工程通过为历史记录；本次从当前源码运行 gateway 48 项及 core 全套 202 项通过，不包含 Android 工程验证。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/{ActionPolicies,CloudflareGateway,ResponseDecoders,Pagination}.kt`、`android-platform/src/main/kotlin/com/flarego/platform/CloudflareHttpDates.kt`、`shared-core/src/commonTest/kotlin/com/flarego/core/CloudflareGatewayTest.kt`；Modify `shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt`。
 
@@ -107,18 +133,20 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `Pagination.decode(root: JsonObject, strategy: PaginationStrategy): PageMetadata`；策略 Number／Cursor／None；`PageMetadata(next, total)`；空 cursor 终止，重复 cursor 失败。
 - READ 仅在策略允许时对 429 最多重试 2 次；Retry-After 合法秒数或 HTTP-date，最多等待 60 秒；超出则返回限流和建议等待，不提早发送。缺头使用 1／2 秒退避；WRITE 不重试。5xx 本批不自动重试。HTTP-date由Android平台java.time RFC1123解析器注入，core不引入java.time；测试注入固定时钟／解析器。
 
-- [ ] **Step 1：写失败测试。** `readOnlyPostIsNotMarkedUnknownWrite` 用测试注册的只读 POST 检查异常 uncertain=false；`write429DoesNotReplay` requestCount=1；`acceptedIsNotSuccessCompletion` 202 状态保留；`partialFailureRetainsProviderResult` 保留 safe partial metadata；`cursorLoopFails`；`headerCaseIsInsensitive`；恶意已注册 key 搭配不相干 path 被拒绝。
+- [x] **Step 1：写失败测试。** 测试源码已存在；RED 执行另记。`readOnlyPostIsNotMarkedUnknownWrite` 用测试注册的只读 POST 检查异常 uncertain=false；`write429DoesNotReplay` requestCount=1；`acceptedIsNotSuccessCompletion` 202 状态保留；`partialFailureRetainsProviderResult` 保留 safe partial metadata；`cursorLoopFails`；`headerCaseIsInsensitive`；恶意已注册 key 搭配不相干 path 被拒绝。
   ```kotlin
   assertFalse(readFailure.uncertain)
   assertEquals(1, writeRequests)
   assertEquals(202, accepted.status)
   ```
 - [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareGatewayTest'`。
-- [ ] **Step 3：实现公共协议。** 解码器不把全部非 JSON 当异常；只有各产品知道 partial 语义，公共层不将 HTTP 200／success=false 宣告“未执行”。旧 Session 转用 gateway，保留 API 字段转换供回归，分页改为显式策略而非全端点 per_page＋page。
+- [x] **Step 3：实现公共协议。** 解码器不把全部非 JSON 当异常；只有各产品知道 partial 语义，公共层不将 HTTP 200／success=false 宣告“未执行”。旧 Session 转用 gateway，保留 API 字段转换供回归，分页改为显式策略而非全端点 per_page＋page。
 - [ ] **Step 4：运行 GREEN。** 目标测试和 core 全部测试通过；每次请求只匹配一个手写策略；输入明文 SECRET 不进入异常输出。
-- [ ] **Step 5：提交。** `git commit -m "feat: decode Cloudflare protocols with explicit action policies"`。
+- [x] **Step 5：提交。** 初始实现 `6870298`，后续修复至 `2257a30`。
 
 ## Task 4：持久化任务与兼容数据库升级
+
+**进度核对：**实现 `be0e391`、修复 `c98bc39` 已提交，历史结论为源码／common 有限通过。本轮在 API 36 临时模拟器实际执行 9 项 `OperationMigrationTest`，覆盖迁移、事务回滚和共享 driver／owner；修正过时预期及跨账号路径夹具后全套通过，测试修正尚未合并。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/model/OperationTask.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/ports/OperationStore.kt`、`shared-core/src/commonMain/sqldelight/com/flarego/db/Tasks.sq`、`shared-core/src/commonMain/sqldelight/com/flarego/db/1.sqm`、`android-platform/src/main/kotlin/com/flarego/platform/{LocalDatabase,AndroidOperationStore}.kt`；Modify `android-platform/src/main/kotlin/com/flarego/platform/AndroidLocalStore.kt`、`app/src/main/kotlin/com/flarego/FlareGoViewModel.kt`；Test `app/src/androidTest/kotlin/com/flarego/OperationMigrationTest.kt`。
 
@@ -129,18 +157,20 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - LocalDatabase 统一持有一个 FlareGoDatabase，注入旧 LocalStore 和新 OperationStore；不为每个 store 重开独立连接。
 - 旧 OperationStatus 三个值不改名；新任务通过 summary 映射 success／failed／unknown（partial／accepted 等 detail 明确，不谎称成功）。
 
-- [ ] **Step 1：写失败测试。** 用 Android SQLite 建立精确旧 connection／operation 表并设置 `PRAGMA user_version=1`，存三种旧状态，再由新 driver 升到 v2；断言老账号和老操作不丢、tasks 表存在、事务故障不会只写 summary。未来未知状态字符串读为 UNKNOWN，不调用 valueOf 崩溃；断开连接清除对应 tasks 但保留其他连接。
+- [x] **Step 1：写失败测试。** 9 项设备测试源码已存在，RED 执行另记。用 Android SQLite 建立精确旧 connection／operation 表并设置 `PRAGMA user_version=1`，存三种旧状态，再由新 driver 升到 v2；断言老账号和老操作不丢、task 表存在、事务故障不会只写 summary。未来未知状态字符串读为 UNKNOWN，不调用 valueOf 崩溃；断开连接清除对应 tasks 但保留其他连接。
   ```kotlin
   assertEquals(3, localStore.operations().size)
   assertEquals(TaskState.UNKNOWN, operationStore.get("future")!!.state)
   assertNull(operationStore.get("disconnected-task"))
   ```
 - [ ] **Step 2：运行 RED。** 有模拟器后 `./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.flarego.OperationMigrationTest`；没有设备记录阻塞，不以单测代替 migration 验收。
-- [ ] **Step 3：实现 schema／1.sqm 与 store。** 新增表，不破坏旧列；1.sqm 与 fresh Tasks.sq 建表结构一致。新TaskState与旧OperationStatus的持久化读取都采用未知值回退UNKNOWN，禁止裸valueOf导致未来版本数据崩溃。拒绝 payload／credential 字段；store schema 仅安全定位和指纹。数据库退出时统一关闭，主线程不做大 IO。
-- [ ] **Step 4：运行 GREEN。** 重跑 migration 测试和 LocalPersistenceTest；旧、新安装路径均通过，原旧操作记录仍可读。
-- [ ] **Step 5：提交。** `git commit -m "feat: persist recoverable Cloudflare task metadata"`。
+- [x] **Step 3：实现 schema／1.sqm 与 store。** 对应源码已提交；设备行为仍须 Step4 验证。新增表，不破坏旧列；1.sqm 与 fresh Tasks.sq 建表结构一致。新TaskState与旧OperationStatus的持久化读取都采用未知值回退UNKNOWN，禁止裸valueOf导致未来版本数据崩溃。拒绝 payload／credential 字段；store schema 仅安全定位和指纹。数据库退出时统一关闭，主线程不做大 IO。
+- [x] **Step 4：运行 GREEN。** 本轮 API 36 全套原生 23 项通过，包含 migration 9 项与 LocalPersistenceTest 2 项；旧、新安装路径、原记录、事务回滚及共享所有权均通过。初次 3 项失败系过时文案预期和跨账号路径夹具，修正仅在隔离分支，见 [验证记录](../../cloudflare-audit/p1-foundation-verification-2026-10-13.md)。本轮不补造历史 RED。
+- [x] **Step 5：提交。** 初始实现 `be0e391`，后续修复 `c98bc39`。
 
 ## Task 5：预览、确认、执行与恢复状态机
+
+**进度核对：**`ed5d8cf` 起已有状态机／DNS 可选包装及测试，最后测试提交 `4542b55`。旧调度记录在 `277e50c` 的质量结论仍未通过，随后 `22a20ef`／`4542b55` 补充清理及契约测试且本轮已逐项完成当前会话复核；独立子 Agent 复审因自动审批拒绝外部 provider 源码传输而未执行。本轮 Gradle 54 项 coordinator／41 项 controller 测试通过；用户随后选择当前会话本地复核作为本轮方式；生产 ViewModel 尚未启用可选 DNS 生命周期。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/application/operations/{ChangePlans,OperationCoordinator,CanonicalJson}.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/ports/FingerprintPort.kt`、`android-platform/src/main/kotlin/com/flarego/platform/AndroidFingerprint.kt`、`shared-core/src/commonTest/kotlin/com/flarego/core/OperationCoordinatorTest.kt`；Modify `shared-core/src/commonMain/kotlin/com/flarego/core/application/AppController.kt`（仅抽出操作生命周期，导航行为保持）。
 
@@ -154,7 +184,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `suspend reconcile(taskId: String, read: suspend (OperationTask) -> Reconciliation): OperationTask`；结果 Matched／NotApplied／StillUnknown／ActionRequired。只回读，不重新调用 write。
 - `recoverPending(): List<OperationTask>`：RUNNING→UNKNOWN，未发送 QUEUED→ACTION_REQUIRED；ACCEPTED 可查询，已确认写入不自动 replay。
 
-- [ ] **Step 1：写失败测试。** 同一 plan 双击写次数=1；输入改变／过期／scope改变／credentialRevision改变写次数=0；同资源锁冲突阻止并发；task 先持久化后发送；UI取消不导致重复写；执行器取消／进程恢复只标 unknown；202→ACCEPTED；明确 partial→PARTIAL；核对读取不可恢复为 write。
+- [x] **Step 1：写失败测试。** 已有受版本管理的测试并多轮补充，证明是否完整仍待质量复审。同一 plan 双击写次数=1；输入改变／过期／scope改变／credentialRevision改变写次数=0；同资源锁冲突阻止并发；task 先持久化后发送；UI取消不导致重复写；执行器取消／进程恢复只标 unknown；202→ACCEPTED；明确 partial→PARTIAL；核对读取不可恢复为 write。
   ```kotlin
   assertEquals(1, writes)
   assertEquals(TaskState.UNKNOWN, recoveredRunning.state)
@@ -162,11 +192,13 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
   ```
   特别覆盖“provider success=false 但可能已部分应用”，不得 FAILED＝未执行。
 - [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.OperationCoordinatorTest'`。
-- [ ] **Step 3：实现状态机。** 注入时钟／ID 工厂／安全 hash 函数便于测试；同资源串行而非全账号所有写一个锁。AppController 旧 DNS 写走 coordinator-compatible wrapper，原 UI 仍先确认；disconnect 使 revision 失效，未发送任务停止，已发请求的结果归原 connection。
-- [ ] **Step 4：运行 GREEN。** 新测试和已有 AppControllerTest，尤其 cancelled UI、unknown 不重放、旧 factory 不重缓存，全通过。document 说明 fingerprint 不是厂商幂等键，也不提供跨进程 exactly-once。
-- [ ] **Step 5：提交。** `git commit -m "feat: coordinate confirmed Cloudflare writes and reconciliation"`。
+- [ ] **Step 3：实现状态机并确认接入边界。** 状态机与可选 wrapper 已有源码；生产接线及断开协调尚待应用集成，不能整体勾选为已交付。注入时钟／ID 工厂／安全 hash 函数便于测试；同资源串行而非全账号所有写一个锁。AppController 旧 DNS 写走 coordinator-compatible wrapper，原 UI 仍先确认；disconnect 使 revision 失效，未发送任务停止，已发请求的结果归原 connection。
+- [x] **Step 4：运行 GREEN。** 本轮正式 Gradle core 202 项通过，包含 coordinator 54／controller 41 项，覆盖 cancelled UI、unknown 不重放、旧 factory 重新获取。fingerprint 不是厂商幂等键，不提供跨进程 exactly-once。生产接线另列，不能由本轮本地有限复核宣布 Task5 整体验收。
+- [x] **Step 5：提交。** 初始实现 `ed5d8cf`，后续修复与测试至 `4542b55`；提交不代表质量验收通过。
 
 ## Task 6：账号发现、Token 类型与能力探测
+
+**Task6 当轮状态：**隔离分支已实现并完成本地自审及验证，尚未提交或合并。正式 Gradle core 221、平台 82、设备 30 项全部通过；真实云账号未验证。见 [Task 6 验证记录](../../cloudflare-audit/p1-task6-verification-2026-10-13.md)。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/ports/{IdentityPort,CapabilityPort}.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt`、`shared-core/src/commonTest/kotlin/com/flarego/core/CloudflareIdentityTest.kt`；Modify `app/src/main/kotlin/com/flarego/FlareGoViewModel.kt`、`shared-ui/src/commonMain/kotlin/com/flarego/ui/{ConnectionDraft,Forms}.kt`；Test `app/src/androidTest/kotlin/com/flarego/AccountDiscoveryTest.kt`。
 
@@ -176,18 +208,20 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `CapabilityPort.status(scope, actionKey): CapabilityStatus`；只读探测有缓存与独立过期，403 映射 PERMISSION_REQUIRED，不擅自推断具体缺失套餐。
 - 连接 UI “发现账号”为显式只读动作；发现受限时仍支持原手工 Account ID。保存条件继续要求指定 account 可读取；可选 token verification 不取代账号验证。
 
-- [ ] **Step 1：写失败测试。** accounts分页可选择账号；discover403仍可手动连接并成功验证；用户 token 不误用 account verify；账户 token 不强制通过 user verify；Token 本身有效但该账号不可读拒绝保存；确认后草稿清空、重建保留规则与旧 ConnectionHelpTest 一致。
+- [x] **Step 1：写失败测试。** accounts分页可选择账号；discover403仍可手动连接并成功验证；用户 token 不误用 account verify；账户 token 不强制通过 user verify；Token 本身有效但该账号不可读拒绝保存；确认后草稿清空、重建保留规则与旧 ConnectionHelpTest 一致。
   ```kotlin
   assertEquals("account-id", identity.verifyAccount("account-id").id)
   assertTrue(manualConnectAllowedAfterDiscovery403)
   assertEquals(0, savedConnectionsWhenAccountDenied)
   ```
-- [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareIdentityTest'`；设备可用时目标 AccountDiscoveryTest 必须先失败。
-- [ ] **Step 3：实现 discovery 和原生选择 UI。** 在凭据草稿生命周期内查询，不打印列表原始响应；选定 scope 后才保存连接。核心 Account ID 32 位校验保留；不引入 Global API Key 回退。生产 UI 不宣称 token verify 返回完整权限清单。
-- [ ] **Step 4：运行 GREEN。** 新 core／原生测试，加 ConnectionHelpTest 和连接恢复测试；发现失败不会清空用户草稿或断开已有账号。
-- [ ] **Step 5：提交。** `git commit -m "feat: discover Cloudflare accounts without requiring broad tokens"`。
+- [x] **Step 2：运行 RED。** 实际核心 19 项失败于未实现方法、设备 7 项失败于缺少控件；非编译失败。原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareIdentityTest'`；设备可用时目标 AccountDiscoveryTest 必须先失败。
+- [x] **Step 3：实现 discovery 和原生选择 UI。** 在凭据草稿生命周期内查询，不打印列表原始响应；选定 scope 后才保存连接。核心 Account ID 32 位校验保留；不引入 Global API Key 回退。生产 UI 不宣称 token verify 返回完整权限清单。
+- [x] **Step 4：运行 GREEN。** 新 core／原生测试，加 ConnectionHelpTest 和连接恢复测试；发现失败不会清空用户草稿或断开已有账号。
+- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行。计划命令： `git commit -m "feat: discover Cloudflare accounts without requiring broad tokens"`。
 
 ## Task 7：新 Workers 目录与分产品目录端口
+
+**Task7 当轮状态：**2026-10-14 隔离分支目录端口已实现并完成本地自审。新增目录测试 22 项 RED→GREEN，全套 core 243／平台 82 项通过，Debug 构建与 lint 通过；本轮未重跑设备。当时尚待 Task9 装配，现已在同一隔离分支完成，尚未提交或合并，真实云未验收。见 [验证记录](../../cloudflare-audit/p1-task7-verification-2026-10-14.md)。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/ports/ProductDirectoryPort.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/demo/DemoDirectory.kt`、`shared-core/src/commonTest/kotlin/com/flarego/core/CloudflareDirectoryTest.kt`；Modify `shared-core/src/commonMain/kotlin/com/flarego/core/model/Models.kt`（CloudResource 增加可选来源与 legacy 标志，不破坏构造）。
 
@@ -198,18 +232,22 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - 新 Worker id 为 immutable ID，name 为显示／script name；两者分别保存，不以旧脚本名称替代新 ID。新接口 per_page=50，不超过官方 max100。
 - R2／D1／KV 分页各自策略，单次返回一页；legacy inventory() 可作为兼容门面，不用于新版每次页面刷新全产品。
 
-- [ ] **Step 1：写失败测试。** worker名与id不同仍正确显示和定位；deployed_on=null无时间占位造假；新列表403无旧接口请求；显式LEGACY标来源；R2 cursor 无 page 参数；同名跨 scope 不混；kind=KV 不调用 Workers／R2／D1。
+- [x] **Step 1：写失败测试。** worker名与id不同仍正确显示和定位；deployed_on=null无时间占位造假；新列表403无旧接口请求；显式LEGACY标来源；R2 cursor 无 page 参数；同名跨 scope 不混；kind=KV 不调用 Workers／R2／D1。
   ```kotlin
   assertEquals("immutable-id", worker.id)
   assertEquals("script-name", worker.name)
   assertEquals(0, callsToLegacyAfter403)
   ```
-- [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareDirectoryTest'`。
-- [ ] **Step 3：实现目录客户端与 DemoDirectory。** 使用 Task 3 gateway；解析固定 Schema 新 shape；分页失败保留明确错误不以空目录冒充。demo与真实分离，演示数据有示例标识。
-- [ ] **Step 4：运行 GREEN。** 新测试与原目录分页隔离测试通过；新目录尚无真实账号证据时只登记 L1，不宣布完整 Workers 管理。
-- [ ] **Step 5：提交。** `git commit -m "feat: page Cloudflare product directories and migrate Workers identity"`。
+- [x] **Step 2：运行 RED。** 实际编译成功后 22 项失败于未实现行为；原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareDirectoryTest'`。
+- [x] **Step 3：实现目录客户端与 DemoDirectory。** 使用 Task 3 gateway；解析固定 Schema 新 shape；分页失败保留明确错误不以空目录冒充。demo与真实分离，演示数据有示例标识。
+- [x] **Step 4：运行 GREEN。** 新测试与原目录分页隔离测试通过；新目录尚无真实账号证据时只登记 L1，不宣布完整 Workers 管理。
+- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: page Cloudflare product directories and migrate Workers identity"`。
 
 ## Task 8：账号账单试点与明确兼容范围
+
+**Task8 当轮状态：**2026-10-15 隔离分支客户端／界面组件已实现并完成本地自审。新增核心 17／原生 7 项 RED→GREEN，全套 core 260／平台 82／设备 37 项通过，Debug 应用／测试 APK 构建与 lint 通过。当时尚待 Task9 装配及来源选择，现已在同一隔离分支完成，尚未提交或合并，真实云未验收。见 [验证记录](../../cloudflare-audit/p1-task8-verification-2026-10-15.md)。
+
+**实施补充：**账号接口可选的 occurredAt／currency／description／status／invoiceId／receiptId 保留 nullable；用户旧模式须在 client 构造时显式绑定 UserScope。新增 `ScopedBillingScreenTest.kt` 验证标题、未知金额、零值和范围保护，既有用户旧界面保持原入口；生产来源选择已在 Task9 完成；没有可信用户 ID 时保留单独用户旧界面，不伪造 UserScope。
 
 **Files:** Create `shared-core/src/commonMain/kotlin/com/flarego/core/ports/ScopedBillingPort.kt`、`shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/billing/CloudflareBillingClient.kt`、`shared-core/src/commonTest/kotlin/com/flarego/core/ScopedBillingTest.kt`；Modify `shared-core/src/commonMain/kotlin/com/flarego/core/model/Models.kt`、`shared-ui/src/commonMain/kotlin/com/flarego/ui/Screens.kt`。
 
@@ -219,16 +257,16 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `BillingSource`：ACCOUNT_HISTORY／USER_HISTORY_LEGACY；用户兼容模式不能映射到 account费用或自动回退。
 - 页面明确显示“当前账号账单历史”或“用户级账单历史 · 旧接口”；无金额时“未知”，不显示 0，不建立不存在的 estimate。
 
-- [ ] **Step 1：写失败测试。** account path正确、分页与scope保留；amount=20.99保存字符串；missing amount为null；account403不请求userhistory；用户模式标题不可变账号级；HTTP错误不以demo发票补齐。
+- [x] **Step 1：写失败测试。** account path正确、分页与scope保留；amount=20.99保存字符串；missing amount为null；account403不请求userhistory；用户模式标题不可变账号级；HTTP错误不以demo发票补齐。
   ```kotlin
   assertEquals("20.99", entry.amount)
   assertNull(entryWithoutAmount.amount)
   assertEquals(0, userHistoryCallsAfterAccount403)
   ```
-- [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ScopedBillingTest'`。
-- [ ] **Step 3：实现与 UI 标识。** 读取固定 Schema account_billing_history，不仅替换URL。保留旧用户范围入口作为显式选择；hosted_invoice_url 本批不自动请求或携Token打开，PDF／订阅／金额合计在P4。
-- [ ] **Step 4：运行 GREEN。** 新测试及 billingHasNoInventedEstimate 通过；账单 scope 与 selected connection 匹配。
-- [ ] **Step 5：提交。** `git commit -m "feat: read scoped Cloudflare account billing history"`。
+- [x] **Step 2：运行 RED。** 实际核心 17 项、设备就绪后的原生 7 项均失败于未实现行为；首次模拟器 OFFLINE 仅记 SETUP。原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ScopedBillingTest'`。
+- [x] **Step 3：实现与 UI 标识。** 读取固定 Schema account_billing_history，不仅替换URL。保留旧用户范围入口作为显式选择；hosted_invoice_url 本批不自动请求或携Token打开，PDF／订阅／金额合计在P4。
+- [x] **Step 4：运行 GREEN。** 新测试及 billingHasNoInventedEstimate 通过；账单 scope 与 selected connection 匹配。
+- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: read scoped Cloudflare account billing history"`。
 
 ## Task 9：按产品加载、状态隔离与应用集成
 
@@ -240,15 +278,15 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - `ProductContent`密封类Zones(items: List<Domain>)／Resources(items: List<CloudResource>)／Billing(items: List<BillingEntry>)；`ProductLoadState(content: ProductContent, next: PageToken?, total: Long?, loading: Boolean, error: CloudFailure?, scope: AccountScope, credentialRevision: Long, observedAtMs: Long?, allPagesLoaded: Boolean)`。scope表示此页所属选择账号；BillingEntry自身的UserScope／AccountScope另行保留，不能把用户账单归入该页账号。不同产品有各自状态，不共用一个 loading／error；只有首请求完成且所有后续页读完才allPagesLoaded=true，不让 UI 解读供应商 JSON。
 - AppController 构造增加可选 productFactory，原测试可继续使用旧 CloudSession；生产与demo都在此 task 使用新 loader。旧 inventory分支仅是迁移兼容，P2集成后评审去除，不扩展新产品。
 
-- [ ] **Step 1：写失败测试。** 进域名只请求ZONES、不默认加载账单；选R2只加载R2；明示全产品刷新可分别加载，某个403不清空其他成功数据；换账号取消／丢弃旧结果；同connection换Token后旧结果不能写入；局部页加载不显示为“总数已完整”。
+- [x] **Step 1：写失败测试。** 进域名只请求ZONES、不默认加载账单；选R2只加载R2；明示全产品刷新可分别加载，某个403不清空其他成功数据；换账号取消／丢弃旧结果；同connection换Token后旧结果不能写入；局部页加载不显示为“总数已完整”。
   ```kotlin
   assertEquals(listOf(ProductKey.ZONES), requestedProducts)
   assertEquals("new-account", state.scope.accountId)
   assertFalse(state.allPagesLoaded)
   ```
-- [ ] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ProductLoaderTest'`；设备可用时目标 ProductLoadingTest。
-- [ ] **Step 3：接线并完成最小原生界面。** 五底部入口不改；资源页增加四类产品选择与分页加载；Overview只展示已知结果与“未加载／已加载N”，不把第一页当全量或将未知用量补0；操作页展示新state的安全detail与核对入口。授权真实端点测试作为单独准入任务，凭据不进入仓库。
-- [ ] **Step 4：全量 GREEN 与阶段验收。**
+- [x] **Step 2：运行 RED。** `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ProductLoaderTest'`；设备可用时目标 ProductLoadingTest。
+- [x] **Step 3：接线并完成最小原生界面。** 五底部入口不改；资源页增加四类产品选择与分页加载；Overview只展示已知结果与“未加载／已加载N”，不把第一页当全量或将未知用量补0；操作页展示新state的安全detail与核对入口。授权真实端点测试作为单独准入任务，凭据不进入仓库。
+- [x] **Step 4：全量 GREEN 与阶段验收。**
   ```sh
   ./gradlew :shared-core:jvmTest :android-platform:testDebugUnitTest \
     :app:assembleDebug :app:lintDebug :android-platform:lintDebug
@@ -267,4 +305,4 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - P0台账对应行从NONE变PROTOCOL需契约测试；OPERABLE须真实授权账号证据。基础通过不代表部署／对象操作已经实现。
 - 验收需确认原11项、演示、账号草稿、凭据持久化、应用更新与签名规则不回归；本计划不发布版本。
 
-**执行状态：**Task1 工程验收通过；Task2–9、迁移／平台／原生／真实账号验收尚未实施。P2 必须使用这里固定的 scope／page／gateway／operations 契约。
+**执行状态（2026-10-15）：**Task1–9 均有实现；主线 Task1–5，隔离分支 Task6–9 与迁移测试修正尚未提交合并。Task5 按用户选择完成当前会话本地有限复核；Task9 完成生产装配及本地复核修复，最终 core 285／平台 82／原生 49 项、Debug 应用／测试 APK 与 lint 通过，审计 333／CI 10 项通过。P1 本地工程出口通过，真实账号验收保持 0；P2 十项尚未实现。提交步骤因未获明确提交／合并／推送授权保持未勾选，不将未合并成果写成主线已交付。

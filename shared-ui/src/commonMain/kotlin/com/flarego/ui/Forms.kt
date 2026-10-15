@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.flarego.core.application.safeMessage
 import com.flarego.core.application.validateDns
 import com.flarego.core.model.*
+import com.flarego.core.ports.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -31,10 +32,13 @@ fun ConnectionDialog(
     onDismiss: () -> Unit,
     connect: suspend (String, String, String) -> Unit,
     draft: ConnectionDraft = remember { ConnectionDraft() },
+    discoverAccounts: (suspend (String, PageRequest) -> CloudPage<AccountSummary>)? = null,
+    verifyToken: (suspend (String, TokenKind, String?) -> TokenVerification)? = null,
 ) {
     var error by remember { mutableStateOf<String?>(null) }
     var accountInvalid by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var readBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     val dismiss = {
@@ -46,6 +50,31 @@ fun ConnectionDialog(
             uriHandler.openUri(url)
         } catch (_: Exception) {
             error = "无法打开浏览器，请安装或启用浏览器后重试"
+        }
+    }
+    val discover: (PageToken?) -> Unit = { page ->
+        val action = discoverAccounts
+        if (action != null && !readBusy && !busy) {
+            val expectedRevision = draft.revision
+            val token = draft.token
+            readBusy = true
+            error = null
+            scope.launch {
+                try {
+                    val result = action(token, PageRequest(token = page))
+                    if (draft.revision == expectedRevision) {
+                        draft.discoveredAccounts =
+                            (if (page == null) result.items else draft.discoveredAccounts + result.items).distinctBy { it.id }
+                        draft.nextAccountsPage = result.next
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    if (draft.revision == expectedRevision) error = safeMessage(failure)
+                } finally {
+                    readBusy = false
+                }
+            }
         }
     }
     AlertDialog(
@@ -68,6 +97,7 @@ fun ConnectionDialog(
                     draft.name,
                     { draft.name = it },
                     label = { Text("账号名称") },
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -79,6 +109,7 @@ fun ConnectionDialog(
                         accountInvalid = false
                     },
                     label = { Text("Account ID") },
+                    enabled = !busy,
                     isError = accountInvalid,
                     supportingText =
                         if (accountInvalid) ({ Text("请输入 32 位十六进制 Account ID") }) else null,
@@ -102,6 +133,7 @@ fun ConnectionDialog(
                     draft.token,
                     { draft.token = it },
                     label = { Text("API Token") },
+                    enabled = !busy,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
@@ -109,6 +141,70 @@ fun ConnectionDialog(
                 Muted(
                     "Token 仅显示一次，请创建后及时复制；不要使用 Global API Key。Token 将加密保存在本机。"
                 )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(TokenKind.UNKNOWN to "类型未知", TokenKind.USER_OWNED to "用户 Token",
+                        TokenKind.ACCOUNT_OWNED to "账号 Token").forEach { (kind, label) ->
+                        FilterChip(
+                            selected = draft.tokenKind == kind,
+                            onClick = { draft.tokenKind = kind; error = null },
+                            enabled = !busy,
+                            label = { Text(label) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Muted("Token 类型由你选择；验证只检查当前状态，不返回完整权限清单。发现账号受限时可继续手填 Account ID。")
+                if (verifyToken != null) {
+                    OutlinedButton(
+                        enabled = !busy && !readBusy && draft.token.isNotBlank() &&
+                            draft.tokenKind != TokenKind.UNKNOWN &&
+                            (draft.tokenKind != TokenKind.ACCOUNT_OWNED || draft.accountId.isNotBlank()),
+                        onClick = {
+                            val expectedRevision = draft.revision
+                            val token = draft.token
+                            val kind = draft.tokenKind
+                            val accountId = draft.accountId
+                            readBusy = true
+                            error = null
+                            scope.launch {
+                                try {
+                                    val result = verifyToken(token, kind, accountId)
+                                    if (draft.revision == expectedRevision) draft.tokenVerification = result
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (failure: Exception) {
+                                    if (draft.revision == expectedRevision) error = safeMessage(failure)
+                                } finally { readBusy = false }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("验证 Token（可选）") }
+                }
+                draft.tokenVerification?.notice?.let { Muted(it) }
+                if (discoverAccounts != null) {
+                    OutlinedButton(
+                        enabled = !busy && !readBusy && draft.token.isNotBlank(),
+                        onClick = { discover(null) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("发现账号") }
+                    draft.discoveredAccounts.forEach { account ->
+                        TextButton(
+                            enabled = !busy && !readBusy,
+                            onClick = {
+                                draft.accountId = account.id
+                                if (draft.name.isBlank()) draft.name = account.name
+                                accountInvalid = false
+                                error = null
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("discovered-account-${account.id}"),
+                        ) { Text("${account.name}\n${account.id}") }
+                    }
+                    draft.nextAccountsPage?.let { next ->
+                        TextButton(enabled = !busy && !readBusy, onClick = { discover(next) }) {
+                            Text("发现更多账号")
+                        }
+                    }
+                }
                 Muted(
                     "账号验证需 Account Settings · Read，域名列表需 Zone · Read；DNS 查询需 DNS · Read，编辑需 DNS · Edit。Workers、R2、D1、KV 读取权限按需授予；账单需要用户级 Billing · Read。"
                 )
@@ -128,12 +224,12 @@ fun ConnectionDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (busy || readBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row(Modifier.align(Alignment.End)) {
                     TextButton(enabled = !busy, onClick = dismiss) { Text("取消") }
                     TextButton(
                         enabled =
-                            !busy && draft.name.isNotBlank() &&
+                            !busy && !readBusy && draft.name.isNotBlank() &&
                                 draft.accountId.isNotBlank() && draft.token.isNotBlank(),
                         onClick = {
                             if (!draft.accountId.trim().matches(Regex("[a-fA-F0-9]{32}"))) {

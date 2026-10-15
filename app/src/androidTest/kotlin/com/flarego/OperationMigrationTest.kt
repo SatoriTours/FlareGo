@@ -52,7 +52,7 @@ class OperationMigrationTest {
         state,
         "已登记，等待执行",
         "provider-request-1",
-        "/accounts/account-1/dns_records/record-1",
+        "/accounts/$accountId/dns_records/record-1",
         1_000,
         updatedAtMs,
     )
@@ -121,7 +121,10 @@ class OperationMigrationTest {
         assertTrue(rawTableNames().contains("task"))
         val stored = task()
         owner.operationStore.put(stored)
-        assertEquals(stored, owner.operationStore.get(stored.id))
+        assertEquals(
+            stored.copy(safeDetail = "结果待核对，请刷新后检查"),
+            owner.operationStore.get(stored.id),
+        )
     }
 
     @Test
@@ -172,7 +175,8 @@ class OperationMigrationTest {
         val owner = owner()
         val stored = task(state = TaskState.SUCCEEDED)
         owner.operationStore.putWithSummary(stored, OperationTaskPersistence.summaryFor(stored))
-        assertEquals(stored, owner.operationStore.get(stored.id))
+        // All metadata survives, while caller detail is replaced by fixed public text.
+        assertEquals(stored.copy(safeDetail = "已确认完成"), owner.operationStore.get(stored.id))
         val summary = owner.localStore.operations().single { it.id == stored.id }
         assertEquals(OperationStatus.SUCCESS, summary.status)
         assertNotEquals(stored.safeDetail, summary.detail)
@@ -249,10 +253,14 @@ class OperationMigrationTest {
     fun removingAConnectionClearsOnlyItsOwnTasks() {
         val owner = owner()
         owner.operationStore.put(task(id = "task-1", connectionId = "connection-1", accountId = "account-1"))
-        owner.operationStore.put(task(id = "task-2", connectionId = "connection-2", accountId = "account-2"))
+        val other = task(id = "task-2", connectionId = "connection-2", accountId = "account-2")
+        owner.operationStore.put(other)
         owner.localStore.removeConnection("connection-1")
         assertNull(owner.operationStore.get("task-1"))
-        assertEquals("task-2", owner.operationStore.get("task-2")!!.id)
+        assertEquals(
+            other.copy(safeDetail = "结果待核对，请刷新后检查"),
+            owner.operationStore.get("task-2"),
+        )
         assertTrue(owner.operationStore.list("connection-2").isNotEmpty())
     }
 

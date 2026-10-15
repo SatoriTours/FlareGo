@@ -123,7 +123,9 @@ class AppSmokeTest {
         compose.onNode(hasSetTextAction() and hasText("API Token"))
             .performScrollTo().performTextInput(secret)
 
+        compose.onNodeWithText("账号 Token").performScrollTo().performClick()
         compose.activityRule.scenario.recreate()
+        compose.onNodeWithText("账号 Token").performScrollTo().assertIsSelected()
 
         compose.onNode(hasSetTextAction() and hasText("账号名称"))
             .performScrollTo().assertTextContains("恢复测试")

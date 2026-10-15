@@ -1,5 +1,8 @@
 package com.flarego.core.model
 
+import com.flarego.core.application.inventory.*
+import com.flarego.core.ports.WorkersDirectoryMode
+
 data class Connection(
     val id: String,
     val name: String,
@@ -22,6 +25,10 @@ data class CloudResource(
     val kind: ResourceKind,
     val detail: String,
     val usage: String? = null,
+    val source: String? = null,
+    val legacy: Boolean = false,
+    val resourceRef: ResourceRef? = null,
+    val deployedOn: String? = null,
 )
 
 data class DnsRecord(
@@ -64,6 +71,30 @@ data class Billing(
     val notice: String? = null,
 )
 
+enum class BillingSource(val title: String) {
+    ACCOUNT_HISTORY("当前账号账单历史"),
+    USER_HISTORY_LEGACY("用户级账单历史 · 旧接口"),
+}
+
+data class BillingEntry(
+    val id: String,
+    val scope: CloudScope,
+    val occurredAt: String?,
+    val amount: String?,
+    val currency: String?,
+    val description: String?,
+    val status: String?,
+    val invoiceId: String?,
+    val receiptId: String?,
+) {
+    val source: BillingSource
+        get() = when (scope) {
+            is AccountScope -> BillingSource.ACCOUNT_HISTORY
+            is UserScope -> BillingSource.USER_HISTORY_LEGACY
+            else -> throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY, "暂不支持此范围的账单历史")
+        }
+}
+
 enum class OperationStatus(val label: String) {
     SUCCESS("已完成"),
     FAILED("未完成"),
@@ -103,6 +134,13 @@ data class AppState(
     val dnsLoading: Boolean = false,
     val error: String? = null,
     val operations: List<Operation> = emptyList(),
+    val productLoading: Boolean = false,
+    val products: Map<ProductKey, ProductLoadState> = emptyMap(),
+    val resourceKind: ResourceKind = ResourceKind.WORKER,
+    val tasks: List<OperationTask> = emptyList(),
+    val billingSource: BillingSource = BillingSource.ACCOUNT_HISTORY,
+    val legacyBillingLoading: Boolean = false,
+    val workersMode: WorkersDirectoryMode = WorkersDirectoryMode.MODERN,
 )
 
 class CloudException(val publicMessage: String, val uncertain: Boolean = false) :

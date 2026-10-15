@@ -8,7 +8,13 @@
 
 **Tech Stack:** 沿用 Kotlin／Compose／SQLDelight／OkHttp 与 Android SDK 版本；Python 标准库用于固定 Schema 的局部定义生成，Android Storage Access Framework 用于文件选择。
 
-**Spec:** `docs/cloudflare-coverage-audit.md` §2、§3.1、§5–§9；依赖 `2026-10-07-cloudflare-p1-foundation.md` 的共同契约。本计划尚待评审，54 项是候选接入范围，不是已验收结果。
+**Spec:** `docs/cloudflare-coverage-audit.md` §2、§3.1、§5–§9；依赖 `2026-10-07-cloudflare-p1-foundation.md` 的共同契约。本计划已随 P0–P2 总览获批推进，P0 已完成工程风险审核；54 项仍是候选接入范围，不是已实现或已验收结果。
+
+## 当前状态（2026-10-15）
+
+核对基线 `98cc0c9`：本计划 Task1–10 均尚未开始产品实现。已有旧 DNS 列表／五类 CRUD 属首版；P1 的流式传输、gateway 和 DNS 状态机包装属于公共基础，不能计为 P2 的 21 类模型、批量、文件、Zone 或 DNSSEC 产品完成。
+
+P1 Task1–9 已有实现，迁移验证与 Task5 本地复核已补齐；Task6–9 隔离分支已完成产品／任务装配与本地工程验收，尚未提交合并或完成真实云验收。本计划仍未开始产品实现。任务逐项状态、缺失文件与验证边界见 [开发进度](../../development-progress.md)。下方保留实施要求，未勾选的步骤仍待执行。
 
 ## Global Constraints
 
@@ -282,4 +288,4 @@
 - [Import／Export官方说明](https://github.com/cloudflare/cloudflare-docs/blob/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/docs/dns/manage-dns-records/how-to/import-and-export.mdx)：3次／分钟／用户、cf-proxied优先级、支持的BIND directives。
 - [导入文件大小官方定义](https://github.com/cloudflare/cloudflare-docs/blob/e3a9cf758c28273178d56918399068c6d2eb8a1d/src/content/partials/dns/zone-file-size-limit.mdx)：256 KiB／262144字节。
 
-**未执行说明：**此文件提供逐任务、接口、RED／GREEN命令与验收门禁；所有产品开发和云端验收仍未开始。
+**未执行说明（2026-10-12）：**此文件提供 P2 的逐任务、接口、RED／GREEN命令与验收门禁；P2 产品实现及对应云端验收均未开始。此结论不否认已存在的首版 DNS 或 P1 公共基础实现。

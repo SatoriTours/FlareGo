@@ -2,6 +2,8 @@
 
 设计日期：2026-10-07。目标是个人多云管理 App，先完整跑通 Cloudflare 的高频操作，再扩展 AWS、Google Cloud、Azure、阿里云与腾讯云。默认主要终端是手机，桌面可以使用同一套产品信息架构。当前仓库已按用户确认的 dreamtools 技术栈实现原生 Android 首版，并保留设计原型。后端服务、完整 Registrar 注册和多云适配为后续扩展。具体实现范围见 [原生规格](native-spec.md)。
 
+开发状态核对（2026-10-15，`98cc0c9`）：P0 工程台账已交付；P1 已有安全协议、作用域及任务基础，Task4 设备迁移已通过，Task5 原证明缺口已有本地复核、本轮采用用户选择的本地有限复核，Task6–9 已在隔离分支实现并通过本地工程验收、尚未提交合并，P2 未实现。该分支生产 DNS 已启用确认执行、启动恢复和只读核对，按产品目录及账号账单已接入；主线仍为原基线；下文目标架构不等于当前运行时能力。逐项实现与验证证据见 [开发进度](development-progress.md)。
+
 ## 1. 核心决策
 
 采用 **Clean Architecture + Ports & Adapters + 模块化单体**。业务用例定义需要的接口，厂商适配器、数据库、HTTP 框架实现接口，所有代码依赖指向业务内部。个人首版由本机 Kotlin 应用用例直接调用云 API，使用本机 Keystore 与 SQLDelight。未来增加团队协作或后台同步时，再引入独立 API 服务与任务执行器；下文 API、队列和工作区设计描述这个扩展方案。
@@ -199,7 +201,7 @@ android-platform/         # Keystore / HTTPS transport / SQLDelight Android driv
 
 ## 9. 凭据、同步与验证
 
-当前本机版本将 Token 通过 Android Keystore AES/GCM 加密保存，SQLDelight 只存连接元数据与操作记录，系统备份/设备迁移禁用；只向固定 Cloudflare HTTPS 主机发送凭据且不跟随重定向。Token 输入页使用 FLAG_SECURE。未来服务端版本中 App 只持有 FlareGo 会话与连接 ID；真实云凭据通过 TLS 一次性交给后端凭据服务，日志、埋点、通知和审计均不含完整密钥。Web 使用 HttpOnly 会话 cookie 配合 CSRF / Origin 校验，移动端使用短期会话与安全存储。每次 API 与后台任务都验证工作区和 scope 的归属；不得信任客户端传来的云账号 ID。
+当前本机版本将 Token 通过 Android Keystore AES/GCM 加密保存，SQLDelight 存连接元数据、操作记录与安全任务元数据，主线任务 store 尚未接入 DNS，隔离分支 Task9 已完成生产任务接线与本地验收；系统备份/设备迁移禁用，只向固定 Cloudflare HTTPS 主机发送凭据且不跟随重定向。Token 输入页使用 FLAG_SECURE。未来服务端版本中 App 只持有 FlareGo 会话与连接 ID；真实云凭据通过 TLS 一次性交给后端凭据服务，日志、埋点、通知和审计均不含完整密钥。Web 使用 HttpOnly 会话 cookie 配合 CSRF / Origin 校验，移动端使用短期会话与安全存储。每次 API 与后台任务都验证工作区和 scope 的归属；不得信任客户端传来的云账号 ID。
 
 CredentialResolver 支持 Token、角色交换、刷新与吊销；厂商请求集中由适配器 HttpTransport 处理超时、分页、限流和错误映射。购买、部署等未知结果不盲重试。队列传递 operationId / credentialRef，不传明文密钥。
 

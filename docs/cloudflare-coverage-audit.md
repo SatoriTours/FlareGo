@@ -1,8 +1,8 @@
 # Cloudflare 接口缺口盘点与全覆盖开发方案（评审草案）
 
-盘点日期：2026-10-07。当前用途：需求评审、范围决策与分批排期；**不是已批准执行的实施规格**，本轮不开发产品功能、不调用真实云写接口。
+盘点基线日期：2026-10-07。本文保留固定 Schema 的缺口与长期路线，具体实施规格见分阶段计划；实时开发状态统一见 [开发进度](development-progress.md)，不把基线盘点当作最新验收结果。
 
-进度更新：用户已同意继续细化本方案；现已形成 [P0–P2实施计划总览](superpowers/plans/2026-10-07-cloudflare-p0-p2-index.md) 及三份分阶段计划，等待对这些新计划的评审确认。不得把这次同意解释为已批准全量产品实现或真实云写操作。
+进度更新（2026-10-15，主线基线 `98cc0c9`）：P0–P2 计划已获批。P1 Task1–5 在主线，Task6–9 在隔离分支实现并通过本地工程验收（core 285／平台 82／原生 49 项），尚未提交合并。分支已组装 16 个手写策略对应的产品调用、按产品加载及安全任务恢复；主线冻结台账仍登记原 11 项，真实云 verified 保持 0。P2 尚未实现，不能把基础建设计成全覆盖交付。
 
 ## 1. 目标、基线与结论
 
@@ -17,7 +17,7 @@
 - [固定版本 Schema](https://raw.githubusercontent.com/cloudflare/api-schemas/6b00f157496cd6a1792a613dc94654c51273aeb9/openapi.json)。文件 SHA-256 与统计口径见 [snapshot.json](cloudflare-audit/snapshot.json)。
 - 未使用真实账号、Token 或付款信息；源码检查与已有隔离测试不是云端端到端验收。
 
-### 1.2 数量结论
+### 1.2 固定基线的数量结论
 
 | 项目 | 数量 | 含义 |
 | --- | ---: | --- |
@@ -45,7 +45,7 @@
 
 CSV 的 `implemented_subset` 只表示源码已有调用路径；**没有任何行被标记为“真实账号全量验收通过”**。`availability_review` 和 `implementation_review` 目前均待评审；CSV 不是可直接执行的请求白名单。
 
-## 2. 当前真实支持到什么程度
+## 2. 真实 API 调用范围（2026-10-12 核对仍为以下 11 项）
 
 证据主要来自：
 
@@ -53,7 +53,7 @@ CSV 的 `implemented_subset` 只表示源码已有调用路径；**没有任何�
 - `shared-core/.../application/DnsValidation.kt`：DNS 可写类型与约束。
 - `shared-core/.../ports/Ports.kt`、`model/Models.kt`：当前仅目录、DNS、账单端口，资源类型仅 Workers／R2／D1／KV。
 - `shared-ui/.../Screens.kt`、`Purchase.kt`、`Forms.kt`：详情、演示购买与控制台入口。
-- `android-platform/.../CloudflareClient.kt`：固定主机、Bearer、JSON 单次写入、无自动重试。
+- `android-platform/.../CloudflareClient.kt`、`CloudflareTransport.kt`：固定主机、Bearer、JSON／二进制／multipart／流式传输；写请求无自动重放。通用传输已实现不等于各产品文件操作已接入。
 - `shared-core/src/commonTest/.../CloudflareTest.kt`：已有隔离测试。
 
 表中路径均省略 `https://api.cloudflare.com/client/v4`。
@@ -420,17 +420,19 @@ P0 的两类门禁分开评估，不互相替代：
 
 P1／P2 的 5／11／54 项提议清单与边界登记在 `protocols.json`，原协调会话已完成[逐项工程风险审核](cloudflare-audit/p0-admission-risk-review.md)：并集 65，35 读／30 写；其余 3,594 项不因宽泛产品归属提前准入。审核只准许按已批计划开发，不是用户真实云资格／危险动作许可，不把提议 JSON 改成运行时白名单。未知 setting key、套餐与权限仍阻塞。
 
-P0 Task1–4 及工程出口已独立验收：最后修复 `9711224`，333 项审计＋10 项 CI 测试通过；固定 SHA／全部计数／3 产物字节／5,323,243 字节 ledger 重放不变。实际 committed checkout 的 126 协议测试通过，强制 S3 73 全集门禁执行，仅额外 ignored 原 MD 比较跳过 1；本地证据不是远程 Actions。真实账号验收仍 0，无新产品功能宣称。P1 Task1 的 scope／capability／error／page 模型已工程验收（`debe2a4`）：独立 20 新测试／46 JVM 全套、333＋10 Python 测试通过，未增加真实云 API 支持／资格。Task2–9／P2 尚未实施，下一步在不运行 Gradle／Android／native 的限制下预检纯 JVM HTTP/MockWebServer。
+P0 Task1–4 及工程出口已有独立验收记录，最后修复 `9711224`。2026-10-12 再运行 333 项审计＋10 项 CI 测试及固定 Schema 台账检查通过，ledger 为 5,323,243 字节；生成 endpoints／products 的行序及字段一致，CSV CRLF／checkout LF 差异单独披露。历史 126 项协议验证记录保留在 P0 计划，本地证据不等于远程 Actions。
+
+P1 主线基线仍为 `98cc0c9`，Task1–5 有实现；Task6–9 隔离分支已完成本地工程验证和当前会话复核，尚未提交合并。最终正式 Gradle core 285／平台 82／原生 49 项通过，Debug 应用／测试 APK 及 lint 通过；审计 333／发布契约 10 项通过。分支生产目录、账号账单、显式旧模式及安全任务恢复已装配，真实资格仍为 0，主线冻结台账实际 App 调用范围仍为原 11 项；分支 16 项技术调用待集成时按实际提交更新 L1 源码基线。见 [开发进度](development-progress.md)。
 
 推荐采用 **C：协议基础层＋产品模块＋受控原生能力页**，目标为全部合格管理 API 到 L2、高频产品到 L3，保留向全部 L3 扩展的独立子项目路线。
 
-下一步请评审三个关键边界：
+最初需求评审的三个关键边界（历史）：
 
 1. 是否接受上述“全 L2＋高频 L3”作为第一轮全覆盖目标，还是每个产品都必须 L3？
 2. Enterprise／专用凭据／预览能力是否纳入开发但等待授权环境验收？本草案默认纳入，不假装普通 Token 可用。
 3. 是否批准先细化 P0／P1／P2 的独立规格，而不是直接启动全量并行开发？
 
-用户已确认继续细化，逐文件／逐任务／逐测试的 [P0–P2计划](superpowers/plans/2026-10-07-cloudflare-p0-p2-index.md) 已另行写出；执行沿用用户的Paseo角色分工，待新计划评审后进入实施。此次仅新增盘点与规划资料，没有修改产品代码，也没有运行产品构建或真实云端测试。
+用户后来已评审并批准 [P0–P2计划](superpowers/plans/2026-10-07-cloudflare-p0-p2-index.md)，不能继续显示为等待新计划审批。迁移验证与 Task5 本地证明复核已补齐，本轮采用用户选择的本地有限复核；Task6–9 已完成分支实现与本地工程验收，后续为授权集成与 P2，其他产品再按独立计划细化。本批次补齐基础验证并实现 Task6–9 的分支客户端／组件／生产装配，没有执行真实云操作。
 
 ## 11. 主要官方依据
 

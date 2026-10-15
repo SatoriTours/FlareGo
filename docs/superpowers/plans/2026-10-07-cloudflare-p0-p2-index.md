@@ -1,8 +1,16 @@
 # Cloudflare P0–P2 实施计划总览
 
-## 当前批准边界
+## 当前进度（2026-10-15）
+
+源码核对基线 `98cc0c9`。P0 四项工程验收已有记录；P1 Task1–5 在主线，Task6–9 已在隔离分支实现并通过本地工程验收、尚未提交合并。Task4 设备迁移已验证，Task5 原证明缺口按用户选择完成当前会话本地有限复核，Task9 生产任务及产品装配已验证。P2 十项尚未开始产品实现；真实云资格未验收。
+
+最终正式 Gradle core 285／平台 82／原生 49 项通过，Debug 应用／测试 APK 和 lint 通过（0 error，分别 3／4 warning），审计 333／发布契约 10 项通过。没有提交、合并、推送、Tag 或 Release。详见 [开发进度](../../development-progress.md) 与 [Task9 验证](../../cloudflare-audit/p1-task9-verification-2026-10-15.md)。
+
+## 原始批准边界与本次范围
 
 用户已评审本总览与三份计划，并明确回复“好的，开始执行”，批准按 P0→P1→P2 顺序实施。执行限定在隔离功能分支，沿用计划中的明确文件与分任务提交边界；不包含合并、推送、Tag／Release、真实云端写入或扣款授权，也不启动 P3–P9 全量开发。
+
+上段记录最初计划批准范围；旧调度记录另有继续推进后续产品的意向，本次不重新判定历史授权，也不启动产品实现。本次用户要求是核对代码和整理进度文档。
 
 沿用路线：公开合格管理 API 最终达到可操作能力 L2，高频产品达到专用深度管理 L3。Enterprise／预览／专用协议留在目标与阻塞台账中，不因为缺测试账号就消失；REST目录登记不等于全量执行白名单。
 
@@ -16,7 +24,7 @@
 
 合计 **23个任务**，每项都有文件、接口、RED／实现／GREEN步骤与提交边界。计划里的测试命令是未来执行要求，不是本轮已经运行的测试。
 
-[54个P2候选端点](../../cloudflare-audit/p2-candidate-endpoints.csv)是固定快照的工作包投影，所有行状态为候选待评审；Task分配：T2=6、T3=6、T5=1、T6=2、T7=6、T8=4、T9=29，总计54。无弃用信号，但并不保证所有套餐／参数可用。
+[54个P2候选端点](../../cloudflare-audit/p2-candidate-endpoints.csv)是固定快照的工作包投影，候选状态保留；P0 已完成对应工程风险审核，产品实现与账号资格尚未验收。Task分配：T2=6、T3=6、T5=1、T6=2、T7=6、T8=4、T9=29，总计54。无弃用信号，但并不保证所有套餐／参数可用。
 
 ## 实施顺序
 
@@ -55,11 +63,15 @@ P1基础接口稳定后才并行产品适配器；不让DNS／Workers／账单�
 
 ## 工作区与Git安全
 
-执行空间已通过 Paseo 创建：`wks_6f62148aacd51c72`，标题“【自动】Cloudflare覆盖基础”，路径 `/home/jimxl/.paseo/worktrees/2bpfajhp/cloudflare-coverage-foundation`，分支 `feature/cloudflare-coverage-foundation`。基线为本地 `main` 的 `bb1366de46c03e482d8d98ab25b7dde4abb93f15`；协调入口仍是原会话 `a83844db-c78e-457f-b9f0-5e3266b7657a`。原目录的 10 份规划／审计文件已安全复制并逐文件核对内容，没有复制凭据或本机配置。
+历史执行空间通过 Paseo 创建为 `wks_6f62148aacd51c72`，标题“【自动】Cloudflare覆盖基础”，路径 `/home/jimxl/.paseo/worktrees/2bpfajhp/cloudflare-coverage-foundation`，分支 `feature/cloudflare-coverage-foundation`。基线为本地 `main` 的 `bb1366de46c03e482d8d98ab25b7dde4abb93f15`；原协调入口为 `a83844db-c78e-457f-b9f0-5e3266b7657a`。当时已复制核对所需规划资料。
+
+2026-10-12 本地核对：只登记主目录 worktree；`main` 为 `98cc0c9`，本地功能分支保留在 `4542b55`，其提交已在当前 main 历史中。不能凭旧 workspace 记录推断当前 Paseo 运行或归档状态；本次不归档、不合并或推送。
+
+2026-10-13 验证补齐：新建 `【自动】Cloudflare基础完善`（`wks_e60bb589a4c1ce32`），分支 `feature/cloudflare-foundation-completion`，路径 `/home/jimxl/.paseo/worktrees/2bpfajhp/cloudflare-foundation-completion`，基线 `98cc0c9`。原会话 `8ab5bb87-3e58-4851-9b28-cf5b174ad3a7` 保持协调入口；测试修正保留在该执行空间，文档同步主目录。尚未提交、合并或推送，因此不归档。
 
 - P0／P1可作为同一“Cloudflare覆盖基础”开发批次复用一个功能空间；P2作为Zone／DNS产品批次另行决定复用还是新建，不能仅按标题猜归属。
 - 自动创建的功能空间标题须为“【自动】Cloudflare覆盖基础”／“【自动】Cloudflare域名解析管理”等中文名称；合法英文分支名在创建前确认。
-- 当前规划资料仍是主目录中的未跟踪文件。创建基于HEAD的worktree不会自动带入它们：获得文档提交授权后先做明确文档提交，或将所需资料安全复制到执行空间并核对内容；不假装计划已在基线中。
+- 规划资料已由 `331fd3e` 纳入版本管理。历史上未跟踪资料的复制步骤已完成；未来创建 worktree 时仍须核对实际基线及必要文件，不重复复制旧状态。
 - 记录原会话、workspace ID／路径／分支／基线及相关Agent；固定沟通入口不迁移。
 - 提交步骤仅作用于已批准批次的明确文件；不覆盖其他任务、不用`git add .`，没有合并／推送授权就不合并或推送。
 - 不创建Tag／Release；最终本地合并＋主分支推送成功后，按项目生命周期安全检查才能归档对应临时空间。
@@ -75,9 +87,9 @@ P0完成资格／字段审查后，以可执行产品工作包估算；用DNS、
 - [x] 用户评审本总览与三份计划，确认先按P0→P1→P2推进。
 - [x] 按批准计划中的明确文档／源码提交边界，在已告知的隔离功能分支实施；合并／推送／发布仍分别处理。
 - [x] P0 工程门禁通过：固定分母／全量归属／协议资格门禁及 65 项工程风险审核；字段／套餐／权限未知仍显式阻塞，无用户批准 L0-only／排除，不宣称真实可用。
-- [x] 验收分层已明确：离线 mock／契约、平台／emulator、sandbox／真实授权证据分别登记，不相互代替；当前未运行 Gradle／Android／native／真实试点，危险写入仍逐动作授权。
+- [x] 验收分层已明确：离线 mock／契约、平台／emulator、sandbox／真实授权证据分别登记，不相互代替；本轮 Debug／API 36 测试通过，已有历史 Release 报告不等于最新签名升级或阶段全量通过，危险写入仍逐动作授权。
 
-**P0 交付状态：**Task1–4 规格／质量通过（最后修复 `9711224`），独立 333＋10 测试、固定 pin／catalog／ledger 字节重放、实际 committed checkout 的 126 协议测试通过（仅额外 raw-MD 比较 skip1，73 全集主体执行）。[P0 工程风险审核](../../cloudflare-audit/p0-admission-risk-review.md)覆盖 65 唯一接口／35 读／30 写，未来 3,594 不扩准入，真实 L2 仍 0。P1 Task1 已通过工程验收（`debe2a4`）：20 新测试／46 JVM 全套、333＋10 Python 测试通过，窄 JVM 证明不替代 Gradle／Android／native。Task2–9／P2 尚未实施，下一步预检纯 JVM HTTP/MockWebServer；工具不可用则报告验证阻塞，不跳过测试冒称通过。
+**工程交付状态：**P0 Task1–4 规格／质量通过的历史记录保留于各任务（最后修复 `9711224`）。[P0 工程风险审核](../../cloudflare-audit/p0-admission-risk-review.md)覆盖 65 唯一接口／35 读／30 写，未来 3,594 不扩准入，真实 L2 仍 0。P1 已推进到 Task5，不能继续按“Task2–9 尚未实施”安排工作；Task5 有限证明缺口已有本地复核、迁移验证已补齐；本轮采用用户选择的本地有限复核，Task9 已完成隔离分支的本地工程验收，后续为授权集成与 P2 产品开发。最新证据与缺口以本页开头和 [开发进度](../../development-progress.md) 为准。
 
 ## 规划阶段验证与未执行项（历史记录）
 

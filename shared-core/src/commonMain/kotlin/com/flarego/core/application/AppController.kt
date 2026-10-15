@@ -1,6 +1,7 @@
 package com.flarego.core.application
 
-import com.flarego.core.application.operations.DnsOperationLifecycle
+import com.flarego.core.application.inventory.*
+import com.flarego.core.application.operations.DnsOperations
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import kotlin.random.Random
@@ -14,11 +15,14 @@ class AppController(
     private val store: LocalStore,
     connections: List<Connection>,
     /** Optional opt-in confirmed-write path for DNS writes; the legacy path is unchanged. */
-    private val dnsOperations: DnsOperationLifecycle? = null,
+    private val dnsOperations: DnsOperations? = null,
+    private val productFactory: ProductSessionFactory? = null,
+    private val credentialRevisionQuery: ((String) -> Long)? = null,
+    private val nowMs: () -> Long = { 0L },
 ) {
     private val mutable =
         MutableStateFlow(
-            AppState(connections, connections.firstOrNull(), operations = store.operations())
+            AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = productFactory != null)
         )
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private val sessions = mutableMapOf<String, CloudSession>()
@@ -42,6 +46,72 @@ class AppController(
         }
     }
 
+    private fun account(connection: Connection?) = connection?.let { AccountScope(it.id,it.accountId) }
+    private val selectedScope = MutableStateFlow(account(state.value.selected))
+    private val loader = productFactory?.let {
+        ProductLoader(scope, it, selectedScope,
+            { id -> credentialRevisionQuery?.invoke(id) ?: (sessionVersions[id] ?: 0).toLong() },
+            { account -> state.value.connections.find { it.id == account.connectionId && it.accountId == account.accountId } }, nowMs)
+    }
+    val operationEpoch: Long get() = uiEpoch.toLong()
+
+    init {
+        loader?.let { products -> scope.launch {
+            products.states.collect { loaded ->
+                mutable.update { current ->
+                    val valid = loaded.filterValues { it.scope == account(current.selected) }
+                    current.copy(products = valid, inventory = Inventory(
+                        (valid[ProductKey.ZONES]?.content as? ProductContent.Zones)?.items.orEmpty(),
+                        valid.values.flatMap { (it.content as? ProductContent.Resources)?.items.orEmpty() }),
+                        loading = if (current.page == Page.BILLING && current.billingSource == BillingSource.USER_HISTORY_LEGACY) current.legacyBillingLoading else activeProduct(current)?.let { valid[it]?.loading } == true)
+                }
+            }
+        } }
+    }
+
+    private fun activeProduct(current: AppState = state.value): ProductKey? = when(current.page) {
+        Page.DOMAINS -> ProductKey.ZONES
+        Page.RESOURCES -> current.resourceKind.product()
+        Page.BILLING -> if (current.billingSource == BillingSource.ACCOUNT_HISTORY) ProductKey.BILLING else null
+        else -> null
+    }
+    private fun loadActive(force: Boolean = false) {
+        val key = activeProduct() ?: return
+        if (force || loader?.states?.value?.get(key) == null) loader?.load(key)
+    }
+    private fun resetProducts() {
+        selectedScope.value = account(state.value.selected)
+        loader?.resetSelection()
+        if (loader != null) mutable.update { it.copy(products = emptyMap(), inventory = Inventory(emptyList(),emptyList()), billing = null, loading = false) }
+    }
+    fun start() { if (loader == null) refresh() else loadActive() }
+    fun selectBillingSource(source: BillingSource) {
+        if (loader == null || state.value.billingSource == source) return
+        revision++
+        mutable.update { it.copy(billingSource = source, billing = null, legacyBillingLoading = false, loading = false, error = null) }
+        refresh()
+    }
+    fun selectWorkersMode(mode: WorkersDirectoryMode) {
+        if (loader == null) return
+        mutable.update { it.copy(workersMode = mode) }
+        loader.selectWorkersMode(mode)
+    }
+
+    fun selectResourceKind(kind: ResourceKind) {
+        mutable.update { it.copy(resourceKind = kind, loading = loader?.states?.value?.get(kind.product())?.loading == true) }
+        if (loader != null) loadActive()
+    }
+    fun loadMore(product: ProductKey) {
+        val next = state.value.products[product]?.next ?: return
+        loader?.load(product, PageRequest(token = next))
+    }
+    fun refreshAllProducts() {
+        if (loader == null) refresh() else ProductKey.entries.forEach { loader.load(it) }
+    }
+    fun publishTasks(tasks: List<OperationTask>) {
+        mutable.update { current -> current.copy(tasks = tasks.filter { t -> current.connections.any { it.id == t.connectionId } }, operations = store.operations()) }
+    }
+
     fun navigate(page: Page) {
         bumpUiEpoch()
         dnsRevision++
@@ -54,6 +124,11 @@ class AppController(
                 dnsLoading = false,
                 error = null,
             )
+        }
+        if (loader != null) {
+            mutable.update { it.copy(loading = if (page == Page.BILLING && it.billingSource == BillingSource.USER_HISTORY_LEGACY) it.legacyBillingLoading else activeProduct()?.let { key -> loader.states.value[key]?.loading } == true) }
+            loadActive()
+            if (page == Page.BILLING && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY && state.value.billing == null) refresh()
         }
     }
 
@@ -80,13 +155,21 @@ class AppController(
                 else -> state.value.page
             }
         mutable.update {
-            AppState(it.connections, connection, page = root, operations = store.operations())
+            AppState(it.connections, connection, page = root, operations = store.operations(), productLoading = loader != null, resourceKind = it.resourceKind, tasks = it.tasks, workersMode = it.workersMode)
         }
+        resetProducts()
         refresh()
     }
 
     fun invalidateSession(id: String) {
         bumpUiEpoch()
+        revision++
+        dnsRevision++
+        if (state.value.selected?.id == id) {
+            resetProducts()
+            mutable.update { it.copy(domain = null, resource = null, dns = emptyList(), dnsLoading = false, error = null) }
+        }
+        loader?.invalidate(id)
         sessions.remove(id)
         sessionVersions[id] = (sessionVersions[id] ?: 0) + 1
     }
@@ -97,20 +180,27 @@ class AppController(
         val retained = connections.firstOrNull { it.id == selected?.id }
         sessions.keys.retainAll(connections.map { it.id }.toSet())
         if (retained != null) {
-            mutable.update { it.copy(connections = connections, selected = retained, operations = store.operations()) }
+            mutable.update { it.copy(connections = connections, selected = retained, operations = store.operations(), tasks = it.tasks.filter { task -> connections.any { c -> c.id == task.connectionId } }) }
+            if (retained != selected) {
+                sessions.remove(retained.id)
+                sessionVersions[retained.id] = (sessionVersions[retained.id] ?: 0) + 1
+                selectConnection(retained)
+            }
         } else {
             // Invalidate every outstanding read before dropping the old account's data.
             revision++
             dnsRevision++
             mutable.update {
-                AppState(connections, connections.firstOrNull(), operations = store.operations())
+                AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = loader != null)
             }
+            resetProducts()
             refresh()
         }
     }
 
     fun openResource(resource: CloudResource) {
         if (state.value.selected == null) return
+        if (loader != null && (resource.resourceRef?.scope != account(state.value.selected) || resource !in state.value.inventory.resources)) return
         bumpUiEpoch()
         mutable.update { it.copy(page = Page.RESOURCE, resource = resource, error = null) }
     }
@@ -118,10 +208,15 @@ class AppController(
     fun openDomain(domain: Domain) {
         bumpUiEpoch()
         if (domain.connectionId != state.value.selected?.id) return
+        if (loader != null && domain !in state.value.inventory.domains) return
         mutable.update {
             it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null)
         }
         loadDns(domain)
+    }
+
+    fun reportDisconnectFailure() {
+        mutable.update { it.copy(error = "本机断开未完成，请重试；云端操作结果仍需核对") }
     }
 
     fun dismissError() {
@@ -129,6 +224,27 @@ class AppController(
     }
 
     fun refresh() {
+        if (loader != null && state.value.page == Page.BILLING && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY) {
+            val connection = state.value.selected ?: return
+            val request = ++revision
+            val sessionVersion = sessionVersions[connection.id] ?: 0
+            mutable.update { it.copy(legacyBillingLoading = true, loading = true, error = null) }
+            scope.launch {
+                try {
+                    val result = session(connection).billing()
+                    if (request == revision && state.value.selected == connection && (sessionVersions[connection.id] ?: 0) == sessionVersion && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY)
+                        mutable.update { it.copy(billing = result, legacyBillingLoading = false,
+                            loading = if (it.page == Page.BILLING) false else it.loading) }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    if (request == revision && state.value.selected == connection && (sessionVersions[connection.id] ?: 0) == sessionVersion && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY)
+                        mutable.update { it.copy(billing = Billing(emptyList(),notice = safeMessage(failure)), legacyBillingLoading = false,
+                            loading = if (it.page == Page.BILLING) false else it.loading) }
+                }
+            }
+            return
+        }
+        if (loader != null) { loadActive(force = true); state.value.domain?.let(::loadDns); return }
         val connection = state.value.selected ?: return
         val request = ++revision
         mutable.update { it.copy(loading = true, error = null) }
