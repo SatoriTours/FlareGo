@@ -1,5 +1,7 @@
 # Cloudflare P1：协议、作用域、任务与接口迁移 Implementation Plan
 
+**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](../../cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 建立安全且可扩展的产品接入基础，接入账号发现／验证，试点新版 Workers 目录与账号级账单，原有 DNS／演示／更新不回归。
@@ -10,7 +12,7 @@
 
 **Spec:** `docs/cloudflare-coverage-audit.md` §4.2／4.4、§5–§9；P0 台账计划为前置依赖。用户已随 P0–P2 总览批准连续实施；P0 工程出口已通过。早期实施在禁用 Gradle／Android／native 的边界下使用缓存编译器和 JUnit；这是历史验证范围，不代表后来没有平台报告。当前证据分别登记于 [开发进度](../../development-progress.md)，平台、迁移、原生与真实账号验收不能由 common/JVM 单测替代。
 
-## 当前状态（2026-10-15）
+## 集成前状态（2026-10-15）
 
 核对基线 `98cc0c9`。Task1–4 有实现及分层工程通过记录；Task4 设备验证本轮已补齐；Task5 原证明缺口已有当前会话复核，本轮按用户选择采用当前会话的本地有限复核；Task6–9 已在隔离分支实现并通过本地工程验收、尚未提交合并。P1 本地工程出口通过，主线集成与真实云验收未完成。
 
@@ -217,7 +219,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - [x] **Step 2：运行 RED。** 实际核心 19 项失败于未实现方法、设备 7 项失败于缺少控件；非编译失败。原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareIdentityTest'`；设备可用时目标 AccountDiscoveryTest 必须先失败。
 - [x] **Step 3：实现 discovery 和原生选择 UI。** 在凭据草稿生命周期内查询，不打印列表原始响应；选定 scope 后才保存连接。核心 Account ID 32 位校验保留；不引入 Global API Key 回退。生产 UI 不宣称 token verify 返回完整权限清单。
 - [x] **Step 4：运行 GREEN。** 新 core／原生测试，加 ConnectionHelpTest 和连接恢复测试；发现失败不会清空用户草稿或断开已有账号。
-- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行。计划命令： `git commit -m "feat: discover Cloudflare accounts without requiring broad tokens"`。
+- [x] **Step 5：提交。** 本轮保留未提交改动，按授权再执行。计划命令： `git commit -m "feat: discover Cloudflare accounts without requiring broad tokens"`。
 
 ## Task 7：新 Workers 目录与分产品目录端口
 
@@ -241,7 +243,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - [x] **Step 2：运行 RED。** 实际编译成功后 22 项失败于未实现行为；原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.CloudflareDirectoryTest'`。
 - [x] **Step 3：实现目录客户端与 DemoDirectory。** 使用 Task 3 gateway；解析固定 Schema 新 shape；分页失败保留明确错误不以空目录冒充。demo与真实分离，演示数据有示例标识。
 - [x] **Step 4：运行 GREEN。** 新测试与原目录分页隔离测试通过；新目录尚无真实账号证据时只登记 L1，不宣布完整 Workers 管理。
-- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: page Cloudflare product directories and migrate Workers identity"`。
+- [x] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: page Cloudflare product directories and migrate Workers identity"`。
 
 ## Task 8：账号账单试点与明确兼容范围
 
@@ -266,7 +268,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - [x] **Step 2：运行 RED。** 实际核心 17 项、设备就绪后的原生 7 项均失败于未实现行为；首次模拟器 OFFLINE 仅记 SETUP。原计划命令： `./gradlew :shared-core:jvmTest --tests 'com.flarego.core.ScopedBillingTest'`。
 - [x] **Step 3：实现与 UI 标识。** 读取固定 Schema account_billing_history，不仅替换URL。保留旧用户范围入口作为显式选择；hosted_invoice_url 本批不自动请求或携Token打开，PDF／订阅／金额合计在P4。
 - [x] **Step 4：运行 GREEN。** 新测试及 billingHasNoInventedEstimate 通过；账单 scope 与 selected connection 匹配。
-- [ ] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: read scoped Cloudflare account billing history"`。
+- [x] **Step 5：提交。** 本轮保留未提交改动，按授权再执行；计划命令： `git commit -m "feat: read scoped Cloudflare account billing history"`。
 
 ## Task 9：按产品加载、状态隔离与应用集成
 
@@ -295,7 +297,7 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
   python3 -m unittest discover -s tools/cloudflare_audit/tests -v
   ```
   emulator未运行或真实账号不可用必须报告未验收；新功能矩阵区分mock／emulator／真实账号证据。
-- [ ] **Step 5：提交。** `git commit -m "feat: integrate lazy Cloudflare product loading and recovery"`。
+- [x] **Step 5：提交。** `git commit -m "feat: integrate lazy Cloudflare product loading and recovery"`。
 
 ## P1 出口与并行边界
 
@@ -306,3 +308,5 @@ P1新增真实请求范围：`GET /accounts`、`GET /user/tokens/verify`、`GET 
 - 验收需确认原11项、演示、账号草稿、凭据持久化、应用更新与签名规则不回归；本计划不发布版本。
 
 **执行状态（2026-10-15）：**Task1–9 均有实现；主线 Task1–5，隔离分支 Task6–9 与迁移测试修正尚未提交合并。Task5 按用户选择完成当前会话本地有限复核；Task9 完成生产装配及本地复核修复，最终 core 285／平台 82／原生 49 项、Debug 应用／测试 APK 与 lint 通过，审计 333／CI 10 项通过。P1 本地工程出口通过，真实账号验收保持 0；P2 十项尚未实现。提交步骤因未获明确提交／合并／推送授权保持未勾选，不将未合并成果写成主线已交付。
+
+T6–9 提交步骤由本次 `f8840c2` 集中完成，未按示例拆成四个提交；后续集成状态以本页开头的 2026-10-16 记录为准。

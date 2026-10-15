@@ -1,5 +1,7 @@
 # Cloudflare P0：覆盖台账与范围门禁 Implementation Plan
 
+**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](../../cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将一次性盘点转为可重复生成、可评审、没有遗漏归属且不会自动开放云写入的覆盖台账。

@@ -1,11 +1,10 @@
 # FlareGo 开发进度与证据
 
-核对日期：2026-10-15。源码基线：`98cc0c9059dc3c2a55a4a3cbf2473cd29c0ec9ad`；本批次 Task 6–9 实现及设备测试修正在隔离分支，尚未提交或合并。
-本文汇总当前实现、历史验收记录与本次实际验证；各实施计划保留接口、任务边界和验收要求。
+核对日期：2026-10-16。P1 源码提交：`f8840c22b4ecdde0858b7f7ae5c7af64dd2db01a`，已合入 `main`；本次用户授权推送 GitHub。集成与恢复证据见 [主线集成验收](cloudflare-audit/p1-integration-verification-2026-10-16.md)。
 
 ## 当前结论
 
-基础 Android 客户端、签名构建和应用内更新已有实现及历史验证。Cloudflare 扩展的 P0 工程台账已交付；P1 Task 1–5 有实现。本轮补齐 Gradle 构建、平台单测与 Task 4 设备迁移验证；Task 5 原证明缺口经当前会话复核已有对应测试，本轮按用户选择采用当前会话的本地有限复核。Task 6–9 已在隔离分支实现并完成本地验证。**P1 本地工程出口已通过，尚未提交合并或完成真实云验收；P2 十项尚未开始，Cloudflare 全覆盖仍处于基础建设阶段。**
+基础 Android 客户端、签名构建和应用内更新已有实现及历史验证。Cloudflare 扩展的 P0 工程台账已交付；P1 Task 1–5 有实现。本轮补齐 Gradle 构建、平台单测与 Task 4 设备迁移验证；Task 5 原证明缺口经当前会话复核已有对应测试，本轮按用户选择采用当前会话的本地有限复核。Task 6–9 已提交并合入主线，恢复源码重新通过全部本地验证。**P1 本地工程出口及主线集成已完成，真实云验收未完成；P2 十项尚未开始，Cloudflare 全覆盖仍处于基础建设阶段。**
 
 不能把“文件存在”“单测通过”“工程复审通过”“Android 已接线”和“真实云账号可用”合并成一个完成状态，也不按提交数量计算百分比。
 
@@ -14,20 +13,22 @@
 | [原生首版](superpowers/plans/2026-10-07-native-app.md) | 四个模块、Cloudflare 连接、目录、基础 DNS、用户账单、平台存储和 Compose 界面已有实现 | 本轮 Debug 构建、lint、23 项设备测试通过；真实云验收未执行 |
 | [构建与应用更新](superpowers/plans/2026-10-07-release-updater.md) | 签名 artifact、显式发布门禁、更新通道、下载校验和系统安装已有实现 | [历史签名升级验证](release-verification.md)；本次 10 项发布契约测试通过，无发布操作 |
 | [P0：覆盖台账](superpowers/plans/2026-10-07-cloudflare-p0-coverage-ledger.md) | 4 项任务均已实现 | 历史工程验收通过；本次 333 项审计测试及台账校验通过；真实资格仍未验收 |
-| [P1：公共基础](superpowers/plans/2026-10-07-cloudflare-p1-foundation.md) | Task 1–5 在主线；Task 6–9 隔离分支已实现，尚未提交合并 | Task 4 的 9 项设备测试已通过；Task 5 本轮本地有限复核通过；Task 9 已接线，285 core／82 平台／49 原生项通过，真实云未验收 |
+| [P1：公共基础](superpowers/plans/2026-10-07-cloudflare-p1-foundation.md) | Task 1–9 已实现并合入主线 | Task 4 的 9 项设备测试已通过；Task 5 本轮本地有限复核通过；Task 9 已接线，285 core／82 平台／49 原生项通过，真实云未验收 |
 | [P2：Zone／完整 DNS](superpowers/plans/2026-10-07-cloudflare-p2-zones-dns.md) | 10 项均未开始产品实现，54 项候选端点仍为目标 | 未验收；现有基础 DNS 不能算 P2 完成 |
 | P3–P9 后续产品 | 仅有覆盖路线和归属，尚无对应产品实施交付 | 未验收 |
 
 ## 主线 App 现在实际提供什么
 
 - 首次启动进入添加服务与密钥配置引导；不再默认创建演示账号。已保存连接可在重启后恢复，移除最后一个连接回到引导。演示适配器保留在原型和隔离测试中。
-- Cloudflare 手动填写 Account ID 与 Token、验证访问、多账号切换与断开；Keystore 加密凭据，本机保存连接元数据和操作记录。
-- 当前账号的 Zone 列表；Workers 旧 scripts 目录、R2 桶、D1 数据库、KV 命名空间目录。资源详情来自目录元数据，并非独立详情接口。
+- Cloudflare 手工填写或显式发现 Account ID、Token 类型验证、验证账号访问、多账号切换与异步断开；Keystore 加密凭据，本机保存连接元数据和操作记录。
+- 当前账号的 Zone 列表；Workers 现代目录及显式旧 scripts 目录、R2 桶、D1 数据库、KV 命名空间目录。资源详情来自目录元数据，并非独立详情接口。
 - 基础 DNS 列表及 A／AAAA／CNAME／TXT／MX 五类记录的新增、局部编辑、删除与界面确认。
-- 用户级历史账单与官方控制台入口；主线尚未接入账号级账单，隔离分支已在 T8／T9 实现并装配。
+- 默认当前账号历史账单、显式用户旧账单及官方控制台入口；两种来源分开标注，不自动回退。
 - 正式／测试更新通道、下载完整性检查、安装前校验和 Android 系统安装确认。
 
 真实域名购买、资源创建、Workers 部署、R2 对象读写、完整 DNS 管理、其他云厂商仍不属于已实现产品能力。没有新增真实云账号端到端验收证据。
+
+按页面加载产品并提供续页；总览只展示已知加载数量。DNS 使用安全任务持久化、启动恢复及只读核对，不重放不确定写入。当前调用清单为 [16 项 L1 记录](cloudflare-audit/p1-runtime-support-2026-10-16.json)，真实云资格仍为 0。
 
 ## P1 逐任务核对
 
@@ -38,14 +39,14 @@
 | T3 策略、解码、分页、只读限流 | `cloudflare/protocol/`、`CloudflareHttpDates.kt`，旧 `CloudflareSession` 已使用 gateway；`6870298`→`2257a30` | 旧调度记录为有限 JVM 工程通过；本次 gateway 测试 48 项通过；16 个策略登记不等于 16 个产品调用已接入 |
 | T4 任务存储与数据库升级 | `OperationTask*.kt`、`OperationStore.kt`、`Tasks.sq`、`1.sqm`、`LocalDatabase.kt`、`AndroidOperationStore.kt`、`OperationMigrationTest.kt`；`be0e391`→`c98bc39` | 模型 21 项通过；本轮 API 36 上 9 项迁移／事务／所有权测试通过。初次运行有 3 项失败，修正过时预期和跨账号路径夹具后通过；仅测试改动，尚未合并 |
 | T5 预览、确认、执行、恢复 | `ChangePlans.kt`、`CanonicalJson.kt`、`OperationCoordinator.kt`、`DnsOperationLifecycle.kt`、`AndroidFingerprint.kt`、`AppController` 可选入口；`ed5d8cf` 起，测试更新至 `4542b55` | 本轮 Gradle coordinator 54／controller 41 项通过；当前会话逐项复核旧证明缺口，后续测试已覆盖。独立子 Agent 复审未执行，不覆盖旧 NOT APPROVED 历史结论；[复核明细](cloudflare-audit/p1-foundation-verification-2026-10-13.md) |
-| T6 账号发现、Token 类型、能力探测 | 隔离分支新增 `IdentityPort`／`CapabilityPort`、identity／capability client、原生发现和 Token 选择，以及 `AccountDiscoveryTest` | 已实现并本地验证：19 项新 core／7 项新设备测试通过；全套 core 221／平台 82／设备 30 项通过。尚未提交或合并，真实云账号未验收；[验证记录](cloudflare-audit/p1-task6-verification-2026-10-13.md) |
+| T6 账号发现、Token 类型、能力探测 | 隔离分支新增 `IdentityPort`／`CapabilityPort`、identity／capability client、原生发现和 Token 选择，以及 `AccountDiscoveryTest` | 已实现并本地验证：19 项新 core／7 项新设备测试通过；全套 core 221／平台 82／设备 30 项通过。已于 2026-10-16 提交合入主线，真实云账号未验收；[验证记录](cloudflare-audit/p1-task6-verification-2026-10-13.md) |
 | T7 新 Workers 及产品目录端口 | 隔离分支新增 `ProductDirectoryPort`／`CloudflareDirectoryClient`／`DemoDirectory`，资源保留来源、legacy 和完整引用 | 已实现并本地验证，新增 22 项目录测试通过；全套 core 243／平台 82 项、Debug 构建与 lint 通过。Task 9 已在隔离分支完成生产装配和显式旧目录选择；[验证记录](cloudflare-audit/p1-task7-verification-2026-10-14.md) |
 | T8 账号账单 | 隔离分支新增 `ScopedBillingPort`／`CloudflareBillingClient`／`BillingEntry` 及 scoped 界面组件 | 已实现并本地验证：新增 core 17／原生 7 项 RED→GREEN，全套 core 260／平台 82／设备 37 项通过，Debug 构建与 lint 通过。Task 9 已在隔离分支完成默认账号账单与显式用户旧入口；[验证记录](cloudflare-audit/p1-task8-verification-2026-10-15.md) |
-| T9 按产品加载及应用集成 | `ProductLoader`／`ProductSessionFactory`／`AppOperationRuntime`，生产 VM 与原生界面接线，`ProductLoaderTest`／`AppOperationRuntimeTest`／`ProductLoadingTest` | 隔离分支实现及本地复核完成：新增 core 25／原生 12 项，全套 285／82／49 通过，Debug 构建及 lint 通过；未提交合并、真实云未验收；[验证记录](cloudflare-audit/p1-task9-verification-2026-10-15.md) |
+| T9 按产品加载及应用集成 | `ProductLoader`／`ProductSessionFactory`／`AppOperationRuntime`，生产 VM 与原生界面接线，`ProductLoaderTest`／`AppOperationRuntimeTest`／`ProductLoadingTest` | 实现及本地复核、主线集成完成：新增 core 25／原生 12 项，全套 285／82／49 通过，Debug 构建及 lint 通过；已提交合入主线、真实云未验收；[验证记录](cloudflare-audit/p1-task9-verification-2026-10-15.md) |
 
 ### Task 9 后的集成边界
 
-主线 `98cc0c9` 的可选 `dnsOperations` 仍未启用；本批次隔离分支生产 ViewModel 已组装 coordinator／lifecycle、真实 task store 与启动恢复，接入凭据版本、异步断开、原生任务状态及只读核对。按页面加载产品、显式现代／旧 Workers 和两种账单入口已装配。全套真实 ViewModel／数据库原生测试通过；这些改动尚未进入主线。
+旧基线 `98cc0c9` 未启用可选任务流程；当前主线生产 ViewModel 已组装 coordinator／lifecycle、真实 task store 与启动恢复，接入凭据版本、异步断开、原生任务状态及只读核对。按页面加载产品、显式现代／旧 Workers 和两种账单入口已装配。全套真实 ViewModel／数据库原生测试通过；这些改动已通过本次提交进入主线。
 
 生产 gateway 已注入实时时钟和 HTTP-date 解析器。旧 Unit DNS receipt 保持 UNKNOWN；PATCH 重新读取的完整目标哈希一致时可确认完成，创建缺少 provider receipt ID、删除缺少完整缺席证据，仍需用户检查 DNS／官方控制台。启动恢复不重发，列表刷新错误不改写权威任务结果，完整 receipt-aware DNS 产品适配仍归 P2。
 
@@ -145,8 +146,6 @@ Task 8 当时尚未生产装配；现已在 Task 9 的隔离分支完成，真�
 
 ## 后续推进顺序与验收出口
 
-1. P1 九项已有实现；Task 6–9 与迁移测试修正在隔离工作区，完整本地工程回归与当前会话复核已通过，保留成果等待授权提交及主线集成。
-2. 集成时核对实际分支及 GitHub 目标，更新源码基线和对应 L1 台账；没有合并／推送授权时不自行执行，工作区不归档。
-3. P2 十项产品任务尚未开始；以当前已验证的 P1 契约推进 21 类 DNS、专用分页／详情／receipt、Zone、批量／文件、DNSSEC 和设置产品闭环。
-4. 真实 Cloudflare 账号与逐动作授权单列验收；缺少真实环境不影响继续开发，也不能把未实现产品称为外部阻塞。
-5. 后续 P3–P9 按产品细化，不给缺乏证据的全量完成百分比或日期。
+1. P1 九项已实现，恢复源码全套测试与当前会话复核通过，已提交并本地合入主线；本轮按用户授权推送 GitHub，远端状态由原会话核对交付。
+2. 当前 16 项调用的 L1 证据单独记录，固定 P0 历史快照保留；真实云资格仍为 0，不将工程验收称为真实云验收。
+3. P2 十项产品任务尚未开始，继续按既定计划推进；后续 P3–P9 按产品细化。

@@ -1,5 +1,7 @@
 # Cloudflare P2：Zone 与完整 DNS 管理 Implementation Plan
 
+**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](../../cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 交付 Zone 基础生命周期、21 类 DNS 记录完整写模型、批量／文件／扫描／DNSSEC，以及审核过的 Zone 设置与基础缓存／SSL 管理闭环。
@@ -10,7 +12,7 @@
 
 **Spec:** `docs/cloudflare-coverage-audit.md` §2、§3.1、§5–§9；依赖 `2026-10-07-cloudflare-p1-foundation.md` 的共同契约。本计划已随 P0–P2 总览获批推进，P0 已完成工程风险审核；54 项仍是候选接入范围，不是已实现或已验收结果。
 
-## 当前状态（2026-10-15）
+## 集成前状态（2026-10-15）
 
 核对基线 `98cc0c9`：本计划 Task1–10 均尚未开始产品实现。已有旧 DNS 列表／五类 CRUD 属首版；P1 的流式传输、gateway 和 DNS 状态机包装属于公共基础，不能计为 P2 的 21 类模型、批量、文件、Zone 或 DNSSEC 产品完成。
 

@@ -1,5 +1,7 @@
 # GitHub 发布与应用更新实施计划
 
+**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](../../cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+
 > 历史计划：Task1–4 的首版交付及签名升级记录见 [发布验证](../../release-verification.md)。当前发布门禁以 [发布说明](../../releases.md) 和 workflow 为准；2026-10-12 重新运行 10 项发布契约测试通过。本次进度整理没有创建 Tag／Release，历史发布验收不证明最新源码已发布或完整构建通过，详见 [开发进度](../../development-progress.md)。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.

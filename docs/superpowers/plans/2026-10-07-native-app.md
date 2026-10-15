@@ -1,5 +1,7 @@
 # FlareGo 原生应用实施计划
 
+**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](../../cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+
 > 历史计划：首版任务已完成并有历史验证。2026-10-11 的 `98cc0c9` 已将默认演示账号改为添加服务／密钥引导；下面的原始设计约束和勾选保留为首版记录，当前行为以 [原生实现规格](../../native-spec.md) 为准，最新实现及验证状态见 [开发进度](../../development-progress.md)。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.

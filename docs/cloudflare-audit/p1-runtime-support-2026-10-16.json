@@ -1,0 +1,209 @@
+{
+  "source_commit": "f8840c22b4ecdde0858b7f7ae5c7af64dd2db01a",
+  "date": "2026-10-16",
+  "review": "current_session_local_review",
+  "note": "Current P1 runtime implementation evidence. The original P0 implemented.json/endpoints/review remain a frozen historical snapshot of 11 calls; this record describes the integrated 16-call subset without widening the handwritten policy or claiming live authorization.",
+  "schema_sha256": "06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461",
+  "tests": {
+    "core": 285,
+    "platform": 82,
+    "android_api_36": 49,
+    "audit": 333,
+    "ci": 10
+  },
+  "verified_authenticated_cloud_actions": 0,
+  "source_sha256": {
+    "app/src/main/kotlin/com/flarego/FlareGoViewModel.kt": "9a880fb3b57bcf2ccb53310e1da8f13c6419062691caf6f9d012899e96540d40",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/application/AppController.kt": "f3cd9a9769b562079e124808a24796e3ec9cf62033acd71d4be3c358b80318bc",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/application/inventory/ProductLoader.kt": "8b33af79e7556856b89c32f47b7c141b56b841f87743b91a1b65550558a899e5",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/application/operations/AppOperationRuntime.kt": "8ca76ccb687fda5ca2a5db0bcbc6c7379b8c1ac9edb25c2ffc3bae88990c4400",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt": "ddc77092c4d09d365197675ee272280d9e7f4ed60fd3d575a06ba64b7953c006",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/billing/CloudflareBillingClient.kt": "6a4b2f43db0528d27f39196503996d83184a646c6dea3ff6a247a7177cfedd42",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt": "72707fc251bd1af894ac667dfdee58f2aabdc4d1eb03f00045789695e646b9cd",
+    "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt": "d2eee31c12a59fb14326b4aa822e8298af70882f144d6d535b191f3a1d2cc312"
+  },
+  "operations": {
+    "accounts-account-details": {
+      "method": "GET",
+      "path": "/accounts/{account_id}",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt",
+      "scope": "验证指定账号可读，不推断其他权限",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "d1-list-databases": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/d1/database",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "按产品目录与分页；旧 Workers 必须显式选择；不包含部署、对象或用量产品",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "r2-list-buckets": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/r2/buckets",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "按产品目录与分页；旧 Workers 必须显式选择；不包含部署、对象或用量产品",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "workers-kv-namespace-list-namespaces": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/storage/kv/namespaces",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "按产品目录与分页；旧 Workers 必须显式选择；不包含部署、对象或用量产品",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "worker-script-list-workers": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/workers/scripts",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "显式旧 Workers scripts 目录，无分页；保留旧接口来源，不包含详情或部署",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "user-billing-history-(-deprecated)-billing-history-details": {
+      "method": "GET",
+      "path": "/user/billing/history",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+      "scope": "billing；用户级账单历史；显式弃用；不能作为当前账号费用",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "zones-get": {
+      "method": "GET",
+      "path": "/zones",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "按产品目录与分页；旧 Workers 必须显式选择；不包含部署、对象或用量产品",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "dns-records-for-a-zone-list-dns-records": {
+      "method": "GET",
+      "path": "/zones/{zone_id}/dns_records",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+      "scope": "records；仅基础字段；结构化 data/comment/tags/settings 等未建模",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "dns-records-for-a-zone-create-dns-record": {
+      "method": "POST",
+      "path": "/zones/{zone_id}/dns_records",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+      "scope": "save；UI 校验仅允许 A/AAAA/CNAME/TXT/MX，支持部分字段",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "supporting_files": [
+        "shared-core/src/commonMain/kotlin/com/flarego/core/application/DnsValidation.kt"
+      ],
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "dns-records-for-a-zone-delete-dns-record": {
+      "method": "DELETE",
+      "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+      "scope": "delete；基础删除路径与确认流程；仅隔离测试，无真实账号验收",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "dns-records-for-a-zone-patch-dns-record": {
+      "method": "PATCH",
+      "path": "/zones/{zone_id}/dns_records/{dns_record_id}",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
+      "scope": "save；UI 校验仅允许 A/AAAA/CNAME/TXT/MX，支持部分字段",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "supporting_files": [
+        "shared-core/src/commonMain/kotlin/com/flarego/core/application/DnsValidation.kt"
+      ],
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "accounts-list-accounts": {
+      "method": "GET",
+      "path": "/accounts",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt",
+      "scope": "显式发现账号与分页选择，不推断全部权限",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "user-api-tokens-verify-token": {
+      "method": "GET",
+      "path": "/user/tokens/verify",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt",
+      "scope": "仅显式用户 Token 类型状态验证，不发现用户身份或权限清单",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "account-api-tokens-verify-token": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/tokens/verify",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareIdentityClient.kt",
+      "scope": "仅显式账号 Token 类型状态验证",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "listWorkers": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/workers/workers",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/inventory/CloudflareDirectoryClient.kt",
+      "scope": "现代 Workers 目录，保留不可变 ID／名称与分页，不包含部署",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    },
+    "account-billing-history-get-billing-history": {
+      "method": "GET",
+      "path": "/accounts/{account_id}/billing/history",
+      "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/billing/CloudflareBillingClient.kt",
+      "scope": "当前账号历史；金额原文或未知，不提供费用预估、不自动回退用户范围",
+      "test_evidence": "isolated_tests_only",
+      "acceptance": "unverified_authenticated_cloud_account",
+      "implementation_level": "PROTOCOL",
+      "evidence_level": "L1_isolated_and_emulator",
+      "authenticated_cloud_accepted": false
+    }
+  }
+}
