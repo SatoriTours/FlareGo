@@ -149,9 +149,16 @@ sealed interface R2ObjectWrite {
         val source: suspend () -> ByteSource,
         val length: Long,
         val contentType: String?,
+        /**
+         * SHA-256 of the exact bytes the platform staged. It is part of the request
+         * fingerprint, so a file that changed between preview and confirmation cannot
+         * be uploaded under an earlier approval. The stream itself is never hashed twice.
+         */
+        val contentFingerprint: String,
     ) : R2ObjectWrite
 
-    data class Delete(override val scope: AccountScope, override val bucket: String, val key: String) : R2ObjectWrite
+    /** [typedKey] must equal [key]: deleting one object is irreversible and destroys its content. */
+    data class Delete(override val scope: AccountScope, override val bucket: String, val key: String, val typedKey: String) : R2ObjectWrite
 
     data class BulkDelete(override val scope: AccountScope, override val bucket: String, val keys: List<String>) : R2ObjectWrite
 }

@@ -32,7 +32,7 @@ import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.ByteSource
 import com.flarego.core.ports.FingerprintPort
 import com.flarego.core.ports.OperationStore
-import com.flarego.core.ports.R2ManagementSession
+import com.flarego.core.ports.R2Session
 import java.security.MessageDigest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -65,9 +65,10 @@ class R2ControllerTest {
             put("creation_date", "2026-01-01T00:00:00Z")
         }
 
-    /** Only the two members the controller uses are real; the rest would be a test bug. */
-    private inner class Session : R2ManagementSession {
+    /** Only the members the controller uses are real; the rest would be a test bug. */
+    private inner class Session : R2Session {
         val buckets = mutableMapOf<String, JsonObject>()
+        val objects = mutableListOf<String>()
         var gets = 0
         var sends = 0
 
@@ -75,6 +76,20 @@ class R2ControllerTest {
             gets++
             val raw = buckets[name] ?: throw CloudFailure(CloudFailureCode.NOT_FOUND, "未找到请求的资源，请刷新后重试")
             return R2BucketDocument(name, account, raw)
+        }
+
+        override suspend fun listObjects(
+            account: AccountScope,
+            bucket: String,
+            filter: R2ObjectFilter,
+            page: PageRequest,
+        ): CloudPage<R2ObjectEntry> {
+            val prefix = filter.prefix ?: ""
+            val items =
+                objects.filter { it.startsWith(prefix) }.map {
+                    R2ObjectEntry(it, 1, "etag", null, buildJsonObject { put("key", it) })
+                }
+            return CloudPage(items, null, items.size.toLong())
         }
 
         override suspend fun write(write: R2BucketWrite, beforeSend: (R2BucketDocument?) -> Unit): ExecutionReceipt {
@@ -97,11 +112,23 @@ class R2ControllerTest {
         override suspend fun createBucketByName(account: AccountScope, name: String, storageClass: String?): R2BucketDocument = TODO()
         override suspend fun patchBucketStorageClass(account: AccountScope, name: String, storageClass: String): R2BucketDocument = TODO()
         override suspend fun deleteBucket(account: AccountScope, name: String) = TODO()
-        override suspend fun listObjects(account: AccountScope, bucket: String, filter: R2ObjectFilter, page: PageRequest): CloudPage<R2ObjectEntry> = TODO()
         override suspend fun downloadObject(target: R2ObjectTarget, sink: ByteSink): R2ObjectHead = TODO()
-        override suspend fun uploadObject(target: R2ObjectTarget, source: ByteSource, length: Long, contentType: String?): R2ObjectEntry = TODO()
+        override suspend fun uploadObject(
+            target: R2ObjectTarget,
+            source: ByteSource,
+            length: Long,
+            contentType: String?,
+            contentFingerprint: String,
+        ): R2ObjectEntry = TODO()
+
         override suspend fun deleteObject(target: R2ObjectTarget) = TODO()
         override suspend fun deleteObjects(account: AccountScope, bucket: String, keys: List<String>): R2BulkDeleteOutcome = TODO()
+
+        override suspend fun writeObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ExecutionReceipt {
+            beforeSend(null)
+            sends++
+            return ExecutionReceipt.Completed()
+        }
     }
 
     private class Resolver : OperationContextResolver {
@@ -144,6 +171,29 @@ class R2ControllerTest {
 
         fun confirm(plan: com.flarego.core.application.operations.ChangePlan) =
             plans.confirm(plan.id, plan.scope, plan.credentialRevision, plan.requestFingerprint, now)
+
+        fun selectObject(write: R2ObjectWrite, revision: Long = 1) {
+            resolver.live = LiveOperationContext(connection, write.scope, revision, controller.requestObjectFingerprint(write))
+        }
+
+        suspend fun prepareObject(write: R2ObjectWrite): com.flarego.core.application.operations.ChangePlan {
+            selectObject(write)
+            return controller.prepareObject(write)
+        }
+
+        fun confirmObject(plan: com.flarego.core.application.operations.ChangePlan, write: R2ObjectWrite) =
+            plans.confirm(plan.id, plan.scope, plan.credentialRevision, controller.requestObjectFingerprint(write), now)
+    }
+
+    private val uploadFingerprint = "c".repeat(64)
+
+    private fun upload(key: String, fingerprint: String = uploadFingerprint, length: Long = 3) =
+        R2ObjectWrite.Upload(account, "my-bucket", key, { throw IllegalStateException("no source is opened in these tests") }, length, null, fingerprint)
+
+    private fun readyHarness(scope: TestScope): Harness {
+        val harness = Harness(scope)
+        harness.session.buckets["my-bucket"] = bucketRow("my-bucket")
+        return harness
     }
 
     @Test
@@ -264,6 +314,104 @@ class R2ControllerTest {
 
         harness.session.buckets.remove("my-bucket")
         assertEquals(TaskState.SUCCEEDED, harness.controller.reconcile(task.id).state)
+    }
+
+    @Test
+    fun anObjectDeleteNeedsTheTypedKeyBeforeAnythingIsRead() = runTest {
+        val harness = readyHarness(this)
+        val wrong = R2ObjectWrite.Delete(account, "my-bucket", "dir/a.txt", "dir/b.txt")
+        harness.selectObject(wrong)
+        val failure = assertFailsWith<CloudFailure> { harness.controller.prepareObject(wrong) }
+        assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+        assertEquals(0, harness.session.gets)
+    }
+
+    @Test
+    fun aBulkDeleteWithDuplicateKeysIsRefused() = runTest {
+        val harness = readyHarness(this)
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt", "a.txt"))
+        harness.selectObject(write)
+        val failure = assertFailsWith<CloudFailure> { harness.controller.prepareObject(write) }
+        assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+        assertEquals(0, harness.session.sends)
+    }
+
+    @Test
+    fun anUploadWhoseContentChangedCannotBeConfirmed() = runTest {
+        val harness = readyHarness(this)
+        val before = upload("dir/a.txt", fingerprint = "c".repeat(64))
+        val plan = harness.prepareObject(before)
+        // The user picked a different (or modified) file after the preview.
+        val after = upload("dir/a.txt", fingerprint = "d".repeat(64))
+        harness.selectObject(after)
+        assertFailsWith<CloudFailure> { harness.confirmObject(plan, after) }
+        assertEquals(0, harness.session.sends)
+    }
+
+    @Test
+    fun anUploadInvalidatesThePlanWhenTheStagedBytesChange() = runTest {
+        val harness = readyHarness(this)
+        val planned = upload("dir/a.txt")
+        val confirmed = harness.confirmObject(harness.prepareObject(planned), planned)
+        // Same target, different content fingerprint: the frozen plan no longer matches.
+        val changed = upload("dir/a.txt", fingerprint = "e".repeat(64))
+        assertFailsWith<CloudFailure> { harness.controller.submitObject(changed, confirmed) }
+        assertEquals(0, harness.session.sends)
+    }
+
+    @Test
+    fun reconcileMatchesAnUploadOnlyWhenTheKeyIsReallyListed() = runTest {
+        val harness = readyHarness(this)
+        val write = upload("dir/a.txt")
+        val task = harness.controller.submitObject(write, harness.confirmObject(harness.prepareObject(write), write))
+        assertEquals(TaskState.SUCCEEDED, task.state)
+
+        // Not listed yet: the read proves nothing, so the task returns to UNKNOWN.
+        assertEquals(TaskState.UNKNOWN, harness.controller.reconcileObject(task.id).state)
+
+        harness.session.objects += "dir/a.txt"
+        assertEquals(TaskState.SUCCEEDED, harness.controller.reconcileObject(task.id).state)
+    }
+
+    @Test
+    fun aBulkDeleteReconciliationAsksForAVerificationInsteadOfPretending() = runTest {
+        val harness = readyHarness(this)
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt", "b.txt"))
+        val task = harness.controller.submitObject(write, harness.confirmObject(harness.prepareObject(write), write))
+        assertEquals(TaskState.SUCCEEDED, task.state)
+
+        // Proving a thousand keys are gone needs a per-key readback the app cannot do
+        // cheaply, so the outcome asks the user to verify instead of claiming success.
+        assertEquals(TaskState.ACTION_REQUIRED, harness.controller.reconcileObject(task.id).state)
+    }
+
+    @Test
+    fun anUnsettledObjectWriteBlocksABucketChangeForTheSameBucket() = runTest {
+        val harness = readyHarness(this)
+        harness.store.rows["prior-object"] = OperationTask(
+            id = "prior-object",
+            connectionId = connection.id,
+            scope = account,
+            actionKey = "r2-delete-object",
+            resourceRef = ResourceRef(account, "r2_object", "my-bucket/dir/a.txt"),
+            requestFingerprint = "a".repeat(64),
+            desiredHash = "b".repeat(64),
+            state = TaskState.UNKNOWN,
+            safeDetail = "未结算",
+            providerRequestId = null,
+            pollPath = null,
+            createdAtMs = 1L,
+            updatedAtMs = 1L,
+        )
+        val failure = assertFailsWith<CloudFailure> {
+            harness.prepare(R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess"))
+        }
+        assertEquals(CloudFailureCode.UNKNOWN_RESULT, failure.code)
+
+        // The same object write also blocks a sibling object write in that bucket.
+        val objectWrite = upload("dir/other.txt")
+        harness.selectObject(objectWrite)
+        assertFailsWith<CloudFailure> { harness.controller.prepareObject(objectWrite) }
     }
 
     @Test

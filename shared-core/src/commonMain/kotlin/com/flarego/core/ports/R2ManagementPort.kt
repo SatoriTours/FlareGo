@@ -57,7 +57,13 @@ interface R2ManagementPort {
      * every outcome, including cancellation, and this call never opens it when validation
      * or the policy check fails.
      */
-    suspend fun uploadObject(target: R2ObjectTarget, source: ByteSource, length: Long, contentType: String?): R2ObjectEntry
+    suspend fun uploadObject(
+        target: R2ObjectTarget,
+        source: ByteSource,
+        length: Long,
+        contentType: String?,
+        contentFingerprint: String,
+    ): R2ObjectEntry
 
     suspend fun deleteObject(target: R2ObjectTarget)
 
@@ -76,6 +82,12 @@ interface R2ManagementPort {
 interface R2ObjectSession : R2ManagementPort {
     suspend fun writeObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ExecutionReceipt
 }
+
+/**
+ * The full R2 product session: bucket lifecycle plus object writes. One interface keeps a
+ * single credential-bound object usable by the controller instead of two parallel handles.
+ */
+interface R2Session : R2ManagementSession, R2ObjectSession
 
 /**
  * Credential-bound typed adapter. The observed document is read before [beforeSend] and

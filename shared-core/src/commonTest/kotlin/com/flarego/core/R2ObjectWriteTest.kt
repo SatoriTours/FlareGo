@@ -62,6 +62,8 @@ class R2ObjectWriteTest {
         }
     }
 
+    private val contentFingerprint = "c".repeat(64)
+
     private val noTransfers = object : TransferPort {
         override suspend fun download(request: HttpRequest, sink: ByteSink): HttpResponseHead =
             throw IllegalStateException("object writes must not use the transfer sink")
@@ -100,7 +102,7 @@ class R2ObjectWriteTest {
     fun anUploadStreamsTheSourceOnceAndVerifiesTheEchoedKey() = runTest {
         respond = { objectResponse(it) }
         val source = Source(byteArrayOf(1, 2, 3))
-        val entry = client().uploadObject(R2ObjectTarget(account, bucket, "dir/a.txt"), source, 3, "text/plain")
+        val entry = client().uploadObject(R2ObjectTarget(account, bucket, "dir/a.txt"), source, 3, "text/plain", contentFingerprint)
 
         assertEquals("dir/a.txt", entry.key)
         assertEquals(3L, entry.size)
@@ -117,7 +119,7 @@ class R2ObjectWriteTest {
     @Test
     fun theDefaultContentTypeIsOctetStream() = runTest {
         respond = { objectResponse(it) }
-        client().uploadObject(R2ObjectTarget(account, bucket, "dir/a.txt"), Source(ByteArray(0)), 0, null)
+        client().uploadObject(R2ObjectTarget(account, bucket, "dir/a.txt"), Source(ByteArray(0)), 0, null, contentFingerprint)
         assertEquals("application/octet-stream", (requests.last().payload as HttpBody.Stream).contentType)
     }
 
@@ -130,6 +132,7 @@ class R2ObjectWriteTest {
                 Source(byteArrayOf(1)),
                 1,
                 null,
+                contentFingerprint,
             ).also { opened++ }
         }
         assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
@@ -140,7 +143,13 @@ class R2ObjectWriteTest {
     @Test
     fun anObjectBeyondTheSingleRequestLimitIsRefusedWithAClearMessage() = runTest {
         val failure = assertFailsWith<CloudFailure> {
-            client().uploadObject(R2ObjectTarget(account, bucket, "huge.bin"), Source(ByteArray(0)), 5L * 1024 * 1024 * 1024 + 1, null)
+            client().uploadObject(
+                R2ObjectTarget(account, bucket, "huge.bin"),
+                Source(ByteArray(0)),
+                5L * 1024 * 1024 * 1024 + 1,
+                null,
+                contentFingerprint,
+            )
         }
         assertEquals(CloudFailureCode.UNSUPPORTED_CAPABILITY, failure.code)
         assertFalse(requests.any { it.method == "PUT" })
@@ -223,7 +232,7 @@ class R2ObjectWriteTest {
             }
         }
         val receipt = client().writeObject(
-            R2ObjectWrite.Upload(account, bucket, "a.txt", { Source(byteArrayOf(1)) }, 1, null),
+            R2ObjectWrite.Upload(account, bucket, "a.txt", { Source(byteArrayOf(1)) }, 1, null, contentFingerprint),
         ) {}
         assertEquals(ExecutionReceipt.Unknown(), receipt)
         assertEquals(1, puts)

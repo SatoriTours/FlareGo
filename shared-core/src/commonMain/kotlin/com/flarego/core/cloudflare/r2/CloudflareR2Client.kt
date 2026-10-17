@@ -47,6 +47,7 @@ import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.ByteSource
 import com.flarego.core.ports.R2ManagementSession
 import com.flarego.core.ports.R2ObjectSession
+import com.flarego.core.ports.R2Session
 import com.flarego.core.ports.TransferPort
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
@@ -70,7 +71,7 @@ class CloudflareR2Client(
     private val connection: Connection,
     private val gateway: CloudflareGateway,
     private val transfers: TransferPort,
-) : R2ManagementSession, R2ObjectSession {
+) : R2Session {
 
     override suspend fun listBuckets(account: AccountScope, page: PageRequest): CloudPage<R2BucketDocument> {
         ScopeGuard.requireOwned(account, connection)
@@ -178,12 +179,21 @@ class CloudflareR2Client(
         source: ByteSource,
         length: Long,
         contentType: String?,
+        contentFingerprint: String,
     ): R2ObjectEntry {
         var handedToTransport = false
         try {
             val result =
                 performObject(
-                    R2ObjectWrite.Upload(target.scope, target.bucket, target.key, { source }, length, contentType),
+                    R2ObjectWrite.Upload(
+                        target.scope,
+                        target.bucket,
+                        target.key,
+                        { source },
+                        length,
+                        contentType,
+                        contentFingerprint,
+                    ),
                 ) { handedToTransport = true }
             return result.details ?: throw unknownResult()
         } finally {
@@ -194,7 +204,9 @@ class CloudflareR2Client(
     }
 
     override suspend fun deleteObject(target: R2ObjectTarget) {
-        val receipt = performObject(R2ObjectWrite.Delete(target.scope, target.bucket, target.key)) {}.receipt
+        // The typed transport port carries key == typedKey; the destructive product
+        // confirmation (the user's typed key) is enforced by R2Controller.
+        val receipt = performObject(R2ObjectWrite.Delete(target.scope, target.bucket, target.key, target.key)) {}.receipt
         if (receipt !is ExecutionReceipt.Completed) throw unknownResult()
     }
 
@@ -235,6 +247,10 @@ class CloudflareR2Client(
             }
             else -> emptyList()
         }
+        if (write is R2ObjectWrite.Delete && (write.typedKey.isBlank() || write.typedKey != write.key)) {
+            throw invalidInputFailure()
+        }
+        if (write is R2ObjectWrite.Upload && !write.contentFingerprint.matches(SHA256)) throw invalidInputFailure()
         if (write is R2ObjectWrite.Upload && (write.length < 0 || write.length > R2_MAX_SINGLE_OBJECT_BYTES)) {
             throw CloudFailure(
                 CloudFailureCode.UNSUPPORTED_CAPABILITY,
@@ -444,6 +460,7 @@ class CloudflareR2Client(
     }
 
     private companion object {
+        val SHA256 = Regex("^[0-9a-f]{64}$")
         const val MAX_PAGE_SIZE = 1000
         const val STORAGE_CLASS_HEADER = "cf-r2-storage-class"
         const val STATUS_ACCEPTED = 202
