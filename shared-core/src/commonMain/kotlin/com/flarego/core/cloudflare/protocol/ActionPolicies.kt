@@ -82,12 +82,24 @@ data class ActionRegistration(
     val method: String,
     val pathTemplate: String,
     val scope: ActionScope,
+    /**
+     * True only for reviewed actions whose final placeholder owns an opaque value that
+     * may itself contain `/` (R2 object keys, which the provider requires to be sent
+     * literally). Every such registration still forbids an encoded separator.
+     */
+    val trailingPlaceholderSpansSegments: Boolean = false,
 ) {
     init {
         if (method !in ALLOWED_METHODS) throw invalidInputFailure()
         if (!templateMatchesScope()) throw invalidInputFailure()
         if (pathTemplate.isBlank() || !pathTemplate.startsWith("/") || pathTemplate.length > MAX_MATCH_LENGTH) {
             throw invalidInputFailure()
+        }
+        if (trailingPlaceholderSpansSegments) {
+            val lastSegment = pathTemplate.split('/').drop(1).lastOrNull()
+            if (lastSegment == null || !lastSegment.startsWith("{") || !lastSegment.endsWith("}")) {
+                throw invalidInputFailure()
+            }
         }
     }
 
@@ -111,7 +123,32 @@ data class ActionRegistration(
         val rawPath = path.substringBefore('?')
         val templateSegments = pathTemplate.split('/').drop(1)
         val rawSegments = rawPath.split('/').drop(1)
-        if (templateSegments.size != rawSegments.size) return false
+        // A reviewed trailing placeholder may own the whole remainder, so a value that
+        // legitimately contains `/` still stays one placeholder. Separators may still
+        // appear only literally: the provider decodes the received path once, so a single
+        // `%2F` must be refused while `%252F` (a key that really contains `%2F`) stays whole.
+        if (!trailingPlaceholderSpansSegments) {
+            if (templateSegments.size == rawSegments.size) {
+                if (!segmentsMatch(templateSegments, rawSegments)) return false
+                val decodedPath = decodedStages(rawPath)?.lastOrNull() ?: rawPath
+                return decodedPath.split('/').drop(1).size == templateSegments.size
+            }
+            return false
+        }
+        if (rawSegments.size < templateSegments.size) return false
+        val prefixTemplates = templateSegments.dropLast(1)
+        if (!segmentsMatch(prefixTemplates, rawSegments)) return false
+        val trailing = rawSegments.drop(prefixTemplates.size).joinToString("/")
+        if (trailing.isEmpty() || trailing.contains('{') || trailing.contains('}')) return false
+        // `decodedStages` returns an empty list when nothing decoded and null when a decoded
+        // stage is not valid UTF-8; both fall back to the literal text.
+        val singleDecoded = decodedStages(trailing).orEmpty().firstOrNull() ?: trailing
+        if (singleDecoded.count { it == '/' } != trailing.count { it == '/' }) return false
+        return singleDecoded.isNotEmpty()
+    }
+
+    /** Every template segment matches its actual segment; placeholders stay one opaque value. */
+    private fun segmentsMatch(templateSegments: List<String>, rawSegments: List<String>): Boolean {
         for ((template, actual) in templateSegments.zip(rawSegments)) {
             if (template.startsWith("{") && template.endsWith("}")) {
                 if (actual.isEmpty() || actual.contains('{') || actual.contains('}')) return false
@@ -119,10 +156,6 @@ data class ActionRegistration(
                 return false
             }
         }
-        // `requestShapeIsSafe` already rejected invalid UTF-8, so no decoded stage
-        // simply means the raw path is its own fully decoded form.
-        val decodedPath = decodedStages(rawPath)?.lastOrNull() ?: rawPath
-        if (decodedPath.split('/').drop(1).size != templateSegments.size) return false
         return true
     }
 
