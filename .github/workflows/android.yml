@@ -39,6 +39,19 @@ jobs:
         with:
           cmdline-tools-version: '13114758'
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+      - name: Load pinned Cloudflare schema for core tests
+        env:
+          SCHEMA_COMMIT: 6b00f157496cd6a1792a613dc94654c51273aeb9
+          SCHEMA_SHA256: 06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461
+          SCHEMA_URL: https://raw.githubusercontent.com/cloudflare/api-schemas/6b00f157496cd6a1792a613dc94654c51273aeb9/openapi.json
+        run: |
+          set -euo pipefail
+          cache_dir="$RUNNER_TEMP/cf-schema-cache/$SCHEMA_COMMIT-$SCHEMA_SHA256"
+          mkdir -p "$cache_dir"
+          schema_file="$cache_dir/openapi.json"
+          curl --fail --silent --show-error --location --connect-timeout 15 --max-time 90 "$SCHEMA_URL" --output "$schema_file"
+          printf '%s  %s\n' "$SCHEMA_SHA256" "$schema_file" | sha256sum --check --strict -
+          echo "SCHEMA_FILE=$schema_file" >> "$GITHUB_ENV"
       - name: CI contract tests
         run: python3 -m unittest discover -s tools/ci/tests -v
       - name: Prepare signing
