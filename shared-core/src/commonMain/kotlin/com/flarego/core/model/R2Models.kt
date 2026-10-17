@@ -60,3 +60,36 @@ data class R2BulkDeleteOutcome(
 
 /** Official `r2-delete-objects` bound: 1 to 1000 keys in one request. */
 const val R2_MAX_BULK_DELETE: Int = 1000
+
+/**
+ * One bucket write. The pinned schema has no body for the `PUT`/`PATCH` variants: the
+ * optional default storage class travels in the `cf-r2-storage-class` header, and only
+ * the `POST` variant carries a JSON body.
+ */
+sealed interface R2BucketWrite {
+    val scope: AccountScope
+
+    data class Create(override val scope: AccountScope, val input: R2BucketCreateInput) : R2BucketWrite
+
+    data class CreateByName(override val scope: AccountScope, val name: String, val storageClass: String?) : R2BucketWrite
+
+    /** The only mutable bucket property: the default storage class for newly uploaded objects. */
+    data class PatchStorageClass(override val scope: AccountScope, val name: String, val storageClass: String) : R2BucketWrite
+
+    data class Delete(override val scope: AccountScope, val name: String) : R2BucketWrite
+}
+
+/** Snapshot of a write, so a later mutation of the caller's draft cannot change what is sent. */
+internal fun freezeR2BucketWrite(write: R2BucketWrite): R2BucketWrite = when (write) {
+    is R2BucketWrite.Create -> write.copy(input = write.input.copy())
+    is R2BucketWrite.CreateByName -> write.copy()
+    is R2BucketWrite.PatchStorageClass -> write.copy()
+    is R2BucketWrite.Delete -> write.copy()
+}
+
+internal fun r2BucketWriteKey(write: R2BucketWrite): String = when (write) {
+    is R2BucketWrite.Create -> "r2-create-bucket"
+    is R2BucketWrite.CreateByName -> "r2-create-bucket-by-name"
+    is R2BucketWrite.PatchStorageClass -> "r2-patch-bucket"
+    is R2BucketWrite.Delete -> "r2-delete-bucket"
+}

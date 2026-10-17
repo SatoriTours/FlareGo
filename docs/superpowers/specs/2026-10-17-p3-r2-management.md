@@ -43,6 +43,8 @@
 
 **D10 真实云资格保持 0。** 本批实现止于 mock 契约／平台／原生三层；不做真实云写入、不申请付费资格、不改环境登记。
 
+**D11 平台业务头白名单只加 `cf-r2-storage-class`。** 桶的 PUT／PATCH 变体没有请求体，storage class 只能走这个头；平台层原本只允许 content-type／条件头／range（`CloudflareClient.ALLOWED_BUSINESS_HEADERS`），必须显式扩一条。`cf-r2-jurisdiction` 留到 R2-B，不在本批扩白名单。
+
 ## 4. 分批与顺序
 
 | 批次 | 内容 | 操作数 | 顺序依据 |
@@ -69,8 +71,12 @@ data class R2ObjectHead(val status: Int, val transferredBytes: Long, val etag: S
 interface R2ManagementPort {
     suspend fun listBuckets(account: AccountScope, page: PageRequest): CloudPage<R2BucketDocument>
     suspend fun getBucket(account: AccountScope, name: String): R2BucketDocument
+    /** POST 变体：JSON 体携带可选 locationHint 与 storageClass。 */
     suspend fun createBucket(account: AccountScope, input: R2BucketCreateInput): R2BucketDocument
-    suspend fun patchBucket(account: AccountScope, name: String, fields: JsonObject): R2BucketDocument
+    /** PUT 变体：**无请求体**，桶名在路径，可选 storageClass 走已审核头。 */
+    suspend fun createBucketByName(account: AccountScope, name: String, storageClass: String?): R2BucketDocument
+    /** PATCH 变体：**无请求体**，必填 storageClass 走已审核头。这是桶唯一可变属性。 */
+    suspend fun patchBucketStorageClass(account: AccountScope, name: String, storageClass: String): R2BucketDocument
     suspend fun deleteBucket(account: AccountScope, name: String)
     suspend fun listObjects(target: R2ObjectTarget, prefix: String?, delimiter: String?, page: PageRequest): CloudPage<R2ObjectEntry>
     suspend fun downloadObject(target: R2ObjectTarget, sink: ByteSink): R2ObjectHead
@@ -79,6 +85,8 @@ interface R2ManagementPort {
     suspend fun deleteObjects(target: R2ObjectTarget, keys: List<String>): R2BulkDeleteOutcome
 }
 ```
+
+**桶列表的响应形状与 Zone 不同：**`r2-list-buckets` 的结果在 `result.buckets`（对象里的数组），不是 `result` 顶层数组，且用 cursor 分页。这一点必须按 pinned schema 实现，不能照搬 Zone 客户端。
 
 `R2ManagementSession` 沿用 P2 的 `ExecutionReceipt` + `beforeSend` 守卫形状；`write`／`writeBulkDelete` 是唯一发送点。
 

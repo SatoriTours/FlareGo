@@ -223,6 +223,21 @@ class CloudflareClientTest {
     }
 
     @Test
+    fun onlyReviewedBusinessHeadersReachTheWire() {
+        // The R2 storage-class header is the one reviewed addition for batch A.
+        val accepted = cloudflareRequest("fixture",
+            HttpRequest("PATCH", "/accounts/a/r2/buckets/b", headers = mapOf("cf-r2-storage-class" to "Standard")))
+        assertEquals("Standard", accepted.header("cf-r2-storage-class"))
+        for (name in listOf("x-custom", "cf-r2-jurisdiction", "host", "authorization")) {
+            val failure = assertFailsWith<CloudFailure>(name) {
+                cloudflareRequest("fixture",
+                    HttpRequest("PATCH", "/accounts/a/r2/buckets/b", headers = mapOf(name to "1")))
+            }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, name)
+        }
+    }
+
+    @Test
     fun emptyPostIsStillSentAsAOneShotRequestBody(): Unit = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))

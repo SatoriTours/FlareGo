@@ -52,6 +52,9 @@ private val ALLOWED_BUSINESS_HEADERS =
         "if-modified-since",
         "if-unmodified-since",
         "range",
+        // R2 bucket writes carry the default storage class here: the pinned
+        // `r2-patch-bucket` and `r2-create-bucket-by-name` have no request body at all.
+        "cf-r2-storage-class",
     )
 
 internal fun invalidInput(): CloudFailure =
