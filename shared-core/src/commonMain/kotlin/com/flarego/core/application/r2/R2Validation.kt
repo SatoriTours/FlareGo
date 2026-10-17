@@ -48,6 +48,30 @@ fun validateR2ObjectKey(key: String): String {
     return key
 }
 
+/**
+ * Validates a listing prefix or continuation key.
+ *
+ * An empty value means "no prefix" and is legal; anything else must have the shape of
+ * an object key, because it is sent into the same path/query position.
+ */
+fun validateR2ObjectKeyPrefix(prefix: String): String {
+    if (prefix.isEmpty()) return prefix
+    if (prefix.encodeToByteArray().size > MAX_OBJECT_KEY_BYTES) throw invalidInputFailure()
+    for (character in prefix) {
+        val code = character.code
+        if (character == '\\' || code <= 0x1F || code in 0x7F..0x9F) throw invalidInputFailure()
+    }
+    return prefix
+}
+
+/** The official grouping delimiter is exactly one character. */
+fun validateR2Delimiter(delimiter: String): String {
+    if (delimiter.length != 1) throw invalidInputFailure()
+    val code = delimiter[0].code
+    if (code <= 0x1F || code in 0x7F..0x9F) throw invalidInputFailure()
+    return delimiter
+}
+
 /** Validates creation input against the official enums; an unknown value never reaches a write. */
 fun validateR2CreateInput(input: R2BucketCreateInput): R2BucketCreateInput {
     val name = validateR2BucketName(input.name)

@@ -15,6 +15,9 @@ import com.flarego.core.model.PageRequest
 import com.flarego.core.model.PageToken
 import com.flarego.core.model.R2BucketCreateInput
 import com.flarego.core.model.R2BucketWrite
+import com.flarego.core.ports.ByteSink
+import com.flarego.core.ports.HttpResponseHead
+import com.flarego.core.ports.TransferPort
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -43,10 +46,16 @@ class R2BucketManagementTest {
     private fun bucketRow(name: String = "my-bucket", extra: String = """""") =
         """{"name":"$name","creation_date":"2026-01-01T00:00:00Z","location":"weur","storage_class":"Standard"$extra}"""
 
+    /** The bucket control plane never streams; a call here is a test bug, not a silent success. */
+    private val noTransfers = object : TransferPort {
+        override suspend fun download(request: HttpRequest, sink: ByteSink): HttpResponseHead =
+            throw IllegalStateException("the bucket control plane must not stream")
+    }
+
     private fun client() = CloudflareR2Client(connection, CloudflareGateway(HttpTransport { request ->
         requests += request
         respond(request)
-    }))
+    }), noTransfers)
 
     private fun List<HttpRequest>.ofMethod(method: String) = filter { it.method == method }
 

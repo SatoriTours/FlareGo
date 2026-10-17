@@ -7,6 +7,11 @@ import com.flarego.core.model.PageRequest
 import com.flarego.core.model.R2BucketCreateInput
 import com.flarego.core.model.R2BucketDocument
 import com.flarego.core.model.R2BucketWrite
+import com.flarego.core.model.R2ObjectEntry
+import com.flarego.core.model.R2ObjectFilter
+import com.flarego.core.model.R2ObjectHead
+import com.flarego.core.model.R2ObjectTarget
+import com.flarego.core.ports.ByteSink
 
 /**
  * Typed port for the reviewed R2 bucket control plane.
@@ -30,6 +35,19 @@ interface R2ManagementPort {
     suspend fun patchBucketStorageClass(account: AccountScope, name: String, storageClass: String): R2BucketDocument
 
     suspend fun deleteBucket(account: AccountScope, name: String)
+
+    suspend fun listObjects(
+        account: AccountScope,
+        bucket: String,
+        filter: R2ObjectFilter = R2ObjectFilter(),
+        page: PageRequest,
+    ): CloudPage<R2ObjectEntry>
+
+    /**
+     * Streams one object into [sink]. The body never enters memory; on any failure the
+     * caller discards its temporary target instead of publishing a partial file.
+     */
+    suspend fun downloadObject(target: R2ObjectTarget, sink: ByteSink): R2ObjectHead
 }
 
 /**

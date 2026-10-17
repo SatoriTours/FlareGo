@@ -21,6 +21,16 @@ data class R2BucketCreateInput(
     val storageClass: String? = null,
 )
 
+/**
+ * Listing filter for one bucket. A single-character [delimiter] groups keys into
+ * common prefixes instead of listing every key below them.
+ */
+data class R2ObjectFilter(
+    val prefix: String? = null,
+    val delimiter: String? = null,
+    val startAfter: String? = null,
+)
+
 /** One object listing entry: provider metadata only, never object content. */
 data class R2ObjectEntry(
     val key: String,
