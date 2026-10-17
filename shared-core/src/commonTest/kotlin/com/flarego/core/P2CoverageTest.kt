@@ -75,10 +75,18 @@ class P2CoverageTest {
         assertTrue((auxiliary.keys intersect (p1+ids)).isEmpty())
         return p1+ids+auxiliary.keys
     }
+    /**
+     * Reviewed keys from later batches. The gate keeps forbidding unreviewed actions:
+     * every new batch must add its own handwritten registration function here, and
+     * no assertion is relaxed to a subset or an "at least" count.
+     */
+    private fun reviewedLaterBatchIds():Set<String> = r2Registrations().map { it.policy.key }.toSet()
+
     private fun checkRegistry(actual:JsonObject,rows:List<Map<String,String>>,manifest:JsonObject) {
         denominator(rows)
-        assertEquals(expectedIds(rows),actual.keys,"Missing route or unreviewed extra action (including writes)")
-        assertEquals(69,actual.size)
+        val reviewed=expectedIds(rows)+reviewedLaterBatchIds()
+        assertEquals(reviewed,actual.keys,"Missing route or unreviewed extra action (including writes)")
+        assertEquals(reviewed.size,actual.size)
         val p1=json("docs/cloudflare-audit/p1-runtime-support-2026-10-16.json").getValue("operations").jsonObject
         val candidateIds=rows.map { it.getValue("operation_id") }.toSet()
         for((id,value) in p1.filterKeys { it !in candidateIds }) {

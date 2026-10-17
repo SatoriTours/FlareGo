@@ -189,7 +189,8 @@ class ActionRegistry internal constructor(internal val registrations: Map<String
 /**
  * The release-time handwritten policy registry.
  *
- * The original P1 actions plus the reviewed P2 Zone lifecycle operations.
+ * The original P1 actions plus the reviewed P2 Zone lifecycle operations and the
+ * reviewed P3 R2 batch A operations.
  * Every entry is written by hand here — nothing is loaded
  * from a schema, a remote document or the UI. Read-only actions enable the bounded
  * 429 retry; write actions never retry.
@@ -247,6 +248,7 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
         *dnsFilesRegistrations(),
         *dnsScanRegistrations(),
         *tokenAuthorityRegistrations(),
+        *r2Registrations(),
     )
 }
 
