@@ -36,7 +36,7 @@ class R2ValidationTest {
     @Test
     fun keepsSlashesLiteralAndRejectsControlBytesInObjectKeys() {
         assertEquals("dir/sub/file.txt", validateR2ObjectKey("dir/sub/file.txt"))
-        for (bad in listOf("", ".", "..", "/leading", "back\\slash", "nul\u0000", "a".repeat(1025))) {
+        for (bad in listOf("", ".", "..", "/leading", "back\\slash", "nul\u0000", "a".repeat(1025), "a/./b", "a/../b", "../escape.txt")) {
             assertFailsWith<CloudFailure> { validateR2ObjectKey(bad) }
         }
     }
@@ -63,9 +63,11 @@ class R2ValidationTest {
         assertFailsWith<CloudFailure> { validateR2CreateInput(R2BucketCreateInput("abc", null, "Glacier")) }
 
         for (bad in listOf(0, 1001)) {
-            assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(bad, null, false) }
+            assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(bad, null, null, false) }
         }
-        assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(3, 4, false) }
-        assertEquals(R2BulkDeleteOutcome(3, 3, false), R2BulkDeleteOutcome(3, 3, false))
+        assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(3, 4, null, false) }
+        assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(3, null, 4, false) }
+        assertFailsWith<IllegalArgumentException> { R2BulkDeleteOutcome(3, 2, 2, false) }
+        assertEquals(R2BulkDeleteOutcome(3, 3, 0, false), R2BulkDeleteOutcome(3, 3, 0, false))
     }
 }

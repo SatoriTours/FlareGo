@@ -7,11 +7,14 @@ import com.flarego.core.model.PageRequest
 import com.flarego.core.model.R2BucketCreateInput
 import com.flarego.core.model.R2BucketDocument
 import com.flarego.core.model.R2BucketWrite
+import com.flarego.core.model.R2BulkDeleteOutcome
 import com.flarego.core.model.R2ObjectEntry
 import com.flarego.core.model.R2ObjectFilter
 import com.flarego.core.model.R2ObjectHead
 import com.flarego.core.model.R2ObjectTarget
+import com.flarego.core.model.R2ObjectWrite
 import com.flarego.core.ports.ByteSink
+import com.flarego.core.ports.ByteSource
 
 /**
  * Typed port for the reviewed R2 bucket control plane.
@@ -48,6 +51,30 @@ interface R2ManagementPort {
      * caller discards its temporary target instead of publishing a partial file.
      */
     suspend fun downloadObject(target: R2ObjectTarget, sink: ByteSink): R2ObjectHead
+
+    /**
+     * Streams one object from [source]. Ownership of [source] passes to the transport on
+     * every outcome, including cancellation, and this call never opens it when validation
+     * or the policy check fails.
+     */
+    suspend fun uploadObject(target: R2ObjectTarget, source: ByteSource, length: Long, contentType: String?): R2ObjectEntry
+
+    suspend fun deleteObject(target: R2ObjectTarget)
+
+    /**
+     * Deletes 1 to 1000 keys in one request. The provider's own result is **not atomic**:
+     * a partial outcome is reported as such and is never replayed.
+     */
+    suspend fun deleteObjects(account: AccountScope, bucket: String, keys: List<String>): R2BulkDeleteOutcome
+}
+
+/**
+ * Credential-bound typed adapter for object writes. [beforeSend] is the last non-suspending
+ * check: everything fallible, including the independent bucket ownership read and the
+ * policy match, precedes it, and the single send follows immediately.
+ */
+interface R2ObjectSession : R2ManagementPort {
+    suspend fun writeObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ExecutionReceipt
 }
 
 /**

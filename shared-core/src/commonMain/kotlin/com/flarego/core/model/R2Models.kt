@@ -1,5 +1,6 @@
 package com.flarego.core.model
 
+import com.flarego.core.ports.ByteSource
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -54,22 +55,35 @@ data class R2ObjectHead(
 /**
  * Result of one bulk delete.
  *
- * The provider either applies the whole request or the outcome is unknown
- * ([uncertain]); a partially applied batch is never reported as complete.
+ * The pinned schema states that this endpoint is **not** atomic: when any key fails,
+ * `success` is false and `errors` carries one entry per failed key, while the other keys
+ * are still deleted. A partial result is therefore never reported as complete, and its
+ * true set is only known after a read-back — never by replaying the request.
+ *
+ * [confirmedDeleted] is what the provider echoed back as deleted; [failedCount] is the
+ * number of keys it reported as failed.
  */
 data class R2BulkDeleteOutcome(
     val requestedCount: Int,
     val confirmedDeleted: Int?,
+    val failedCount: Int?,
     val uncertain: Boolean,
 ) {
     init {
         require(requestedCount in 1..R2_MAX_BULK_DELETE) { "批量删除数量超出允许范围" }
         require(confirmedDeleted == null || confirmedDeleted in 0..requestedCount) { "确认删除数不得超过请求数" }
+        require(failedCount == null || failedCount in 0..requestedCount) { "失败数不得超过请求数" }
+        require(confirmedDeleted == null || failedCount == null || confirmedDeleted + failedCount <= requestedCount) {
+            "确认删除数与失败数之和不得超过请求数"
+        }
     }
 }
 
 /** Official `r2-delete-objects` bound: 1 to 1000 keys in one request. */
 const val R2_MAX_BULK_DELETE: Int = 1000
+
+/** A single REST upload is never a multipart upload; larger objects belong to the S3 P5 batch. */
+const val R2_MAX_SINGLE_OBJECT_BYTES: Long = 5L * 1024 * 1024 * 1024
 
 /**
  * One bucket write. The pinned schema has no body for the `PUT`/`PATCH` variants: the
@@ -102,4 +116,36 @@ internal fun r2BucketWriteKey(write: R2BucketWrite): String = when (write) {
     is R2BucketWrite.CreateByName -> "r2-create-bucket-by-name"
     is R2BucketWrite.PatchStorageClass -> "r2-patch-bucket"
     is R2BucketWrite.Delete -> "r2-delete-bucket"
+}
+
+/**
+ * One object write.
+ *
+ * [Upload] holds a **source factory** rather than a stream: the factory is invoked only at
+ * the single send, so a prepared-but-unconfirmed change never opens a file. The stream is
+ * one-shot — the transport takes ownership of whatever the factory returns and closes it
+ * on every outcome, so an upload can never be replayed.
+ */
+sealed interface R2ObjectWrite {
+    val scope: AccountScope
+    val bucket: String
+
+    data class Upload(
+        override val scope: AccountScope,
+        override val bucket: String,
+        val key: String,
+        val source: suspend () -> ByteSource,
+        val length: Long,
+        val contentType: String?,
+    ) : R2ObjectWrite
+
+    data class Delete(override val scope: AccountScope, override val bucket: String, val key: String) : R2ObjectWrite
+
+    data class BulkDelete(override val scope: AccountScope, override val bucket: String, val keys: List<String>) : R2ObjectWrite
+}
+
+internal fun r2ObjectWriteKey(write: R2ObjectWrite): String = when (write) {
+    is R2ObjectWrite.Upload -> "r2-put-object"
+    is R2ObjectWrite.Delete -> "r2-delete-object"
+    is R2ObjectWrite.BulkDelete -> "r2-delete-objects"
 }

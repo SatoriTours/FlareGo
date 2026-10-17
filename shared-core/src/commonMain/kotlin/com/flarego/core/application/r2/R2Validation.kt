@@ -45,6 +45,11 @@ fun validateR2ObjectKey(key: String): String {
         val code = character.code
         if (character == '\\' || code <= 0x1F || code in 0x7F..0x9F) throw invalidInputFailure()
     }
+    // A `.`/`..` segment is refused even though it is a legal-looking key text. A path-addressed
+    // request would rely on the provider not normalizing `objects/../x` into a different
+    // resource, and a body-addressed bulk delete never passes through the path matcher at all,
+    // so the rule belongs here to stay consistent for both.
+    if (key.split('/').any { it == "." || it == ".." }) throw invalidInputFailure()
     return key
 }
 

@@ -8,6 +8,7 @@ import com.flarego.core.application.r2.validateR2CreateInput
 import com.flarego.core.application.r2.validateR2Delimiter
 import com.flarego.core.application.r2.validateR2ObjectKey
 import com.flarego.core.application.r2.validateR2ObjectKeyPrefix
+import com.flarego.core.cloudflare.HttpBody
 import com.flarego.core.cloudflare.HttpRequest
 import com.flarego.core.cloudflare.HttpResponse
 import com.flarego.core.cloudflare.encodePath
@@ -28,17 +29,24 @@ import com.flarego.core.model.PageToken
 import com.flarego.core.model.R2BucketCreateInput
 import com.flarego.core.model.R2BucketDocument
 import com.flarego.core.model.R2BucketWrite
+import com.flarego.core.model.R2BulkDeleteOutcome
+import com.flarego.core.model.R2_MAX_BULK_DELETE
+import com.flarego.core.model.R2_MAX_SINGLE_OBJECT_BYTES
 import com.flarego.core.model.R2ObjectEntry
 import com.flarego.core.model.R2ObjectFilter
 import com.flarego.core.model.R2ObjectHead
 import com.flarego.core.model.R2ObjectTarget
+import com.flarego.core.model.R2ObjectWrite
 import com.flarego.core.model.ScopeGuard
 import com.flarego.core.model.freezeR2BucketWrite
 import com.flarego.core.model.invalidInputFailure
 import com.flarego.core.model.r2BucketWriteKey
+import com.flarego.core.model.r2ObjectWriteKey
 import com.flarego.core.model.scopeMismatchFailure
 import com.flarego.core.ports.ByteSink
+import com.flarego.core.ports.ByteSource
 import com.flarego.core.ports.R2ManagementSession
+import com.flarego.core.ports.R2ObjectSession
 import com.flarego.core.ports.TransferPort
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
@@ -62,7 +70,7 @@ class CloudflareR2Client(
     private val connection: Connection,
     private val gateway: CloudflareGateway,
     private val transfers: TransferPort,
-) : R2ManagementSession {
+) : R2ManagementSession, R2ObjectSession {
 
     override suspend fun listBuckets(account: AccountScope, page: PageRequest): CloudPage<R2BucketDocument> {
         ScopeGuard.requireOwned(account, connection)
@@ -160,6 +168,146 @@ class CloudflareR2Client(
             transferredBytes = head.transferredBytes,
             etag = headerValue(head.headers, "ETag"),
             contentType = headerValue(head.headers, "Content-Type"),
+        )
+    }
+
+    override suspend fun uploadObject(
+        target: R2ObjectTarget,
+        source: ByteSource,
+        length: Long,
+        contentType: String?,
+    ): R2ObjectEntry {
+        var handedToTransport = false
+        try {
+            val result =
+                performObject(
+                    R2ObjectWrite.Upload(target.scope, target.bucket, target.key, { source }, length, contentType),
+                ) { handedToTransport = true }
+            return result.details ?: throw unknownResult()
+        } finally {
+            // The transport owns the source once the request is really sent; before that,
+            // the caller's caller still owns it and a validation failure must not leak it.
+            if (!handedToTransport) runCatching { source.close() }
+        }
+    }
+
+    override suspend fun deleteObject(target: R2ObjectTarget) {
+        val receipt = performObject(R2ObjectWrite.Delete(target.scope, target.bucket, target.key)) {}.receipt
+        if (receipt !is ExecutionReceipt.Completed) throw unknownResult()
+    }
+
+    override suspend fun deleteObjects(account: AccountScope, bucket: String, keys: List<String>): R2BulkDeleteOutcome {
+        val result = performObject(R2ObjectWrite.BulkDelete(account, bucket, keys)) {}
+        return result.outcome ?: throw unknownResult()
+    }
+
+    override suspend fun writeObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ExecutionReceipt =
+        try {
+            performObject(write, beforeSend).receipt
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: CloudFailure) {
+            if (failure.uncertain) ExecutionReceipt.Unknown() else throw failure
+        }
+
+    private data class ObjectResult(
+        val details: R2ObjectEntry?,
+        val receipt: ExecutionReceipt,
+        val outcome: R2BulkDeleteOutcome? = null,
+    )
+
+    private suspend fun performObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ObjectResult {
+        ScopeGuard.requireOwned(write.scope, connection)
+        val bucket = validateR2BucketName(write.bucket)
+        // Independent ownership proof of the bucket before any object request.
+        getBucket(write.scope, bucket)
+        val key = when (write) {
+            is R2ObjectWrite.Upload -> validateR2ObjectKey(write.key)
+            is R2ObjectWrite.Delete -> validateR2ObjectKey(write.key)
+            is R2ObjectWrite.BulkDelete -> null
+        }
+        val keys = when (write) {
+            is R2ObjectWrite.BulkDelete -> {
+                if (write.keys.size !in 1..R2_MAX_BULK_DELETE) throw invalidInputFailure()
+                write.keys.map { validateR2ObjectKey(it) }
+            }
+            else -> emptyList()
+        }
+        if (write is R2ObjectWrite.Upload && (write.length < 0 || write.length > R2_MAX_SINGLE_OBJECT_BYTES)) {
+            throw CloudFailure(
+                CloudFailureCode.UNSUPPORTED_CAPABILITY,
+                "单个对象超过 REST 直传上限，分片上传属于后续批次",
+            )
+        }
+        // The shape (method and path) is validated and policy-matched *before* an upload
+        // source is ever opened, so a rejected request cannot leak a stream.
+        val shape =
+            when (write) {
+                is R2ObjectWrite.Upload -> HttpRequest("PUT", "${locator(write.scope, bucket)}/objects/${encodeR2ObjectKeyPath(key!!)}")
+                is R2ObjectWrite.Delete -> HttpRequest("DELETE", "${locator(write.scope, bucket)}/objects/${encodeR2ObjectKeyPath(key!!)}")
+                is R2ObjectWrite.BulkDelete -> HttpRequest("DELETE", "${locator(write.scope, bucket)}/objects")
+            }
+        val operation = r2ObjectWriteKey(write)
+        requireRegistered(operation, shape)
+        val request =
+            when (write) {
+                is R2ObjectWrite.Upload ->
+                    shape.copy(payload = HttpBody.Stream(write.source(), write.length, write.contentType ?: DEFAULT_OBJECT_CONTENT_TYPE))
+                is R2ObjectWrite.BulkDelete ->
+                    shape.copy(payload = HttpBody.Text(JsonArray(keys.map(::JsonPrimitive)).toString(), "application/json; charset=utf-8"))
+                is R2ObjectWrite.Delete -> shape
+            }
+        beforeSend(null)
+        val response = send(operation, request)
+        return when (write) {
+            is R2ObjectWrite.Upload -> {
+                val root = envelope(response)
+                val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
+                val entry = decodeUploadedObject(row)
+                if (entry.key != key) throw invalidResponse(true)
+                ObjectResult(entry, ExecutionReceipt.Completed())
+            }
+            is R2ObjectWrite.Delete -> {
+                val root = envelope(response)
+                val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
+                // The provider echoes the key it deleted; a mismatch is not this request's result.
+                if (row.optionalText("key") != key) throw invalidResponse(true)
+                ObjectResult(null, ExecutionReceipt.Completed())
+            }
+            is R2ObjectWrite.BulkDelete -> bulkDeleteResult(response, keys.size)
+        }
+    }
+
+    /**
+     * The bulk delete response is a real provider result even when `success` is false:
+     * the keys the provider did not report as failed were still deleted, and the true set
+     * needs a read-back.
+     */
+    private fun bulkDeleteResult(response: HttpResponse, requested: Int): ObjectResult {
+        val root = ResponseDecoders.envelope(response, writing = true)
+        val success = (root["success"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: throw invalidResponse(true)
+        val errors = root["errors"] as? JsonArray ?: throw invalidResponse(true)
+        val echoed = root["result"] as? JsonArray
+        val confirmed = echoed?.let { rows ->
+            rows.map { row -> (row as? JsonObject) ?: throw invalidResponse(true) }
+                .map { row -> row.optionalText("key") ?: throw invalidResponse(true) }
+                .size
+        }
+        if (success) {
+            // Every requested key must be echoed back, or this is not a complete success.
+            if (confirmed != requested) throw invalidResponse(true)
+            return ObjectResult(
+                details = null,
+                receipt = ExecutionReceipt.Completed(),
+                outcome = R2BulkDeleteOutcome(requested, confirmed, 0, uncertain = false),
+            )
+        }
+        val failed = errors.size
+        val receipt = if (failed in 1 until requested) ExecutionReceipt.Partial("部分对象未被删除，请核对后再操作") else ExecutionReceipt.Unknown()
+        return ObjectResult(
+            details = null,
+            receipt = receipt,
+            outcome = R2BulkDeleteOutcome(requested, confirmed, failed, uncertain = true),
         )
     }
 
@@ -267,6 +415,20 @@ class CloudflareR2Client(
         return R2ObjectEntry(row.text("key", writing), size, row.optionalText("etag"), row.optionalText("last_modified"), row)
     }
 
+    /**
+     * The upload response uses `r2_r2_put_object_result`, whose `size` is a **string** and
+     * whose timestamp field is `uploaded` rather than `last_modified`.
+     */
+    private fun decodeUploadedObject(row: JsonObject): R2ObjectEntry {
+        val size = row["size"]?.let { element ->
+            val primitive = element as? JsonPrimitive ?: throw invalidResponse(true)
+            if (primitive.isString) primitive.content.toLongOrNull() ?: throw invalidResponse(true)
+            else primitive.longOrNull ?: throw invalidResponse(true)
+        }
+        if (size != null && size < 0) throw invalidResponse(true)
+        return R2ObjectEntry(row.text("key", true), size, row.optionalText("etag"), row.optionalText("uploaded"), row)
+    }
+
     private fun requireRegistered(key: String, request: HttpRequest) {
         val entry = ActionPolicies.registry.registration(key) ?: throw invalidInputFailure()
         if (!entry.matches(request.method, request.path)) throw invalidInputFailure()
@@ -280,6 +442,7 @@ class CloudflareR2Client(
         const val MAX_PAGE_SIZE = 1000
         const val STORAGE_CLASS_HEADER = "cf-r2-storage-class"
         const val STATUS_ACCEPTED = 202
+        const val DEFAULT_OBJECT_CONTENT_TYPE = "application/octet-stream"
     }
 }
 
