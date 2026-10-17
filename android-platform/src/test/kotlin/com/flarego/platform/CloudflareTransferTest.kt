@@ -450,4 +450,32 @@ class CloudflareTransferTest {
             assertEquals(0, server.requestCount)
         }
     }
+
+    @Test
+    fun fileDownloadUsesFixedWildcardAcceptForOfficialTextPlainExport(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/plain").setBody("$" + "ORIGIN example.com.\n"))
+            server.start()
+            val sink = RecordingSink()
+            val head = testTransfers(server).download(HttpRequest("GET", "/zones/z/dns_records/export"), sink)
+            assertEquals(200, head.status)
+            assertEquals("*/*", server.takeRequest().getHeader("Accept"))
+            assertEquals(1, sink.closed.get())
+        }
+    }
+
+    @Test
+    fun fileAcceptAndAuthorizationCannotBeOverriddenByBusinessHeaders(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            for (name in listOf("Accept", "accept", "Authorization")) {
+                val sink = RecordingSink()
+                assertFailsWith<CloudFailure> {
+                    testTransfers(server).download(HttpRequest("GET", "/zones/z/dns_records/export", HttpBody.Empty, mapOf(name to "text/plain")), sink)
+                }
+                assertEquals(1, sink.closed.get())
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
 }

@@ -101,9 +101,13 @@ internal fun cloudflareFileClient(rewrite: (Request) -> Request): OkHttpClient =
  * allowlisted set of business headers and a one-shot body. [isActive] lets the
  * streaming body stop as soon as the calling coroutine is no longer active.
  */
+/** Internal response negotiation only; business headers cannot override it. */
+internal enum class CloudflareAccept(val header: String) { JSON("application/json"), FILE("*/*") }
+
 internal fun cloudflareRequest(
     token: String,
     request: HttpRequest,
+    accept: CloudflareAccept = CloudflareAccept.JSON,
     isActive: () -> Boolean = { true },
 ): Request {
     val method = requireHttpMethod(request.method)
@@ -116,7 +120,7 @@ internal fun cloudflareRequest(
         Request.Builder()
             .url(requireCloudflareUrl(path))
             .header("Authorization", "Bearer $token")
-            .header("Accept", "application/json")
+            .header("Accept", accept.header)
     for ((name, value) in headers) builder.header(name, value)
     return builder.method(method, body).build()
 }

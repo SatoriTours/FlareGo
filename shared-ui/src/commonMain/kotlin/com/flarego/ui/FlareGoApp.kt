@@ -14,20 +14,27 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import com.flarego.ui.management.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.AppController
 import com.flarego.core.application.inventory.*
+import com.flarego.core.application.dns.*
+import com.flarego.core.application.zones.*
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import com.flarego.core.updates.UpdateController
+import com.flarego.ui.dns.DnsPage
+import com.flarego.ui.zones.ZonePage
 import kotlinx.coroutines.launch
 
 private sealed interface DialogState {
@@ -68,8 +75,41 @@ fun FlareGoApp(
     discoverAccounts: (suspend (String, PageRequest) -> CloudPage<AccountSummary>)? = null,
     verifyToken: (suspend (String, TokenKind, String?) -> TokenVerification)? = null,
     reconcileTask: (suspend (String) -> Unit)? = null,
+    management: com.flarego.core.application.management.CloudflareManagement? = null,
+    panelPorts: com.flarego.ui.management.ManagementPanelPorts? = null,
+    panelContext: com.flarego.ui.management.ManagementPanelContext? = null,
 ) {
     val state by controller.state.collectAsState()
+    val account = state.selected?.let { AccountScope(it.id, it.accountId) }
+    val managementZones = management?.zones?.state?.collectAsState()?.value
+    // A late publisher from another account must not expose its content or error.
+    val zonePageState = managementZones?.takeIf { it.account == account }
+        ?: ZonePageState(account = account)
+    val managementZone = if (management != null && state.page in setOf(Page.DOMAINS, Page.DNS)) zonePageState.selected else null
+    val actualPanelContext = panelContext?.takeIf {
+        account!=null && managementZone?.ref==it.scope && it.scope.account==account &&
+            it.currentEpoch==controller.operationEpoch
+    }
+    // Save only navigation choices and an independent live selection stamp, never leases, drafts or plans.
+    val routeStamp=actualPanelContext?.let { listOf(it.scope.connectionId,it.scope.account.accountId,it.scope.zoneId,it.currentEpoch.toString(),state.page.name) }
+    var savedPanelRoute by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
+    val panelModule=savedPanelRoute?.takeIf { it.size==6 && it.take(5)==routeStamp }?.last()?.let { name -> ManagementPanelModule.entries.firstOrNull { it.name==name } }
+    var panelLease by remember(account,managementZone?.ref,state.page,panelContext) { mutableStateOf<ManagementPanelLease?>(null) }
+    var zoneTab by rememberSaveable(account,managementZone?.ref) { mutableStateOf(ZoneManagementTab.DETAILS) }
+    val activeModule=panelModule?.takeIf { actualPanelContext!=null && panelPorts!=null }
+    LaunchedEffect(routeStamp) {
+        if(savedPanelRoute!=null && savedPanelRoute!!.take(5)!=routeStamp) savedPanelRoute=null
+    }
+    val focusManager=LocalFocusManager.current
+    fun clearPanel() {
+        val module=panelModule;val lease=panelLease
+        if(module!=null && lease!=null && panelPorts!=null) {
+            panelPorts.onRouteExit(lease)
+            releasePanel(panelPorts,module,lease)
+        }
+        panelLease=null;savedPanelRoute=null
+        focusManager.clearFocus()
+    }
     val updateState = updater?.state?.collectAsState()?.value
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
@@ -85,6 +125,22 @@ fun FlareGoApp(
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     LaunchedEffect(controller) { controller.start() }
+    LaunchedEffect(management, account, state.page) {
+        // Same independently stamped route after configuration recreation is still the owned selection.
+        // All actual account/Zone/epoch/page changes fail the saved stamp and take the normal clearing path.
+        if(activeModule!=null && actualPanelContext!=null) return@LaunchedEffect
+        management?.let { pages ->
+            pages.dns.onIntent(DnsIntent.Clear)
+            pages.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
+            pages.zones.onIntent(ZoneIntent.Clear)
+            if (account != null && state.page in setOf(Page.DOMAINS, Page.DNS)) {
+                pages.zones.onIntent(ZoneIntent.Load(account))
+                if (state.page == Page.DNS) state.domain?.takeIf { it.connectionId == account.connectionId }?.let {
+                    pages.zones.onIntent(ZoneIntent.Open(ZoneScope(account, it.id)))
+                }
+            }
+        }
+    }
     LaunchedEffect(searchOpen) { if (searchOpen) focus.requestFocus() }
     DisposableEffect(dialog is DialogState.Connect) {
         sensitiveScreen(dialog is DialogState.Connect)
@@ -98,9 +154,9 @@ fun FlareGoApp(
             Page.JOBS -> Page.OVERVIEW
             else -> state.page
         }
-    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS)
+    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null
     val searchEnabled =
-        state.selected != null &&
+        activeModule == null && state.selected != null &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
     val dismiss = {
         if (dialog is DialogState.Connect) connectionDraft.clear()
@@ -149,7 +205,10 @@ fun FlareGoApp(
                                     Modifier.fillMaxWidth().clickable {
                                         keyboard?.hide()
                                         dismiss()
-                                        controller.selectConnection(connection)
+                                        management?.dns?.onIntent(DnsIntent.Clear)
+                                        management?.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
+                                        management?.zones?.onIntent(ZoneIntent.Clear)
+                                        clearPanel(); controller.selectConnection(connection)
                                         scope.launch { drawer.close() }
                                     },
                             ) {
@@ -220,7 +279,13 @@ fun FlareGoApp(
                                 IconButton(
                                     onClick = {
                                         keyboard?.hide()
-                                        controller.back()
+                                        if (activeModule != null) clearPanel()
+                                        else if (managementZone != null && account != null && management != null) {
+                                            management.dns.onIntent(DnsIntent.Clear)
+                                            management.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
+                                            management.zones.onIntent(ZoneIntent.Clear)
+                                            management.zones.onIntent(ZoneIntent.Load(account))
+                                        } else controller.back()
                                     },
                                     modifier = Modifier.size(40.dp),
                                 ) {
@@ -247,6 +312,7 @@ fun FlareGoApp(
                                 Text(
                                     when (state.page) {
                                         Page.DNS -> state.domain?.name ?: state.page.title
+                                        Page.DOMAINS -> managementZone?.name ?: state.page.title
                                         Page.RESOURCE -> state.resource?.name ?: state.page.title
                                         else -> state.page.title
                                     },
@@ -254,7 +320,7 @@ fun FlareGoApp(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(
+                                if(activeModule==null) Text(
                                     state.selected?.let { "Cloudflare · ${it.name}" } ?: "添加服务 · 绑定密钥",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -297,10 +363,13 @@ fun FlareGoApp(
                                 IconButton(onClick = openConnection) {
                                     Icon(Icons.Default.Add, "连接账号")
                                 }
-                            } else when (state.page) {
+                            } else if(activeModule==null) when (state.page) {
                                 Page.DOMAINS ->
-                                    IconButton(onClick = { controller.navigate(Page.BUY) }) {
-                                        Icon(Icons.Default.Add, "购买域名")
+                                    IconButton(onClick = {
+                                        if (management != null) management.zones.onIntent(ZoneIntent.BeginCreate)
+                                        else controller.navigate(Page.BUY)
+                                    }) {
+                                        Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
                                     }
                                 Page.RESOURCES ->
                                     IconButton(onClick = { dialog = DialogState.Create }) {
@@ -309,12 +378,11 @@ fun FlareGoApp(
                                 Page.DNS ->
                                     IconButton(
                                         onClick = {
-                                            state.domain?.let {
-                                                dialog = DialogState.Edit(it, null)
-                                            }
+                                            if (management != null) managementZone?.let { management.zones.onIntent(ZoneIntent.Open(it.ref)) }
+                                            else state.domain?.let { dialog = DialogState.Edit(it, null) }
                                         }
                                     ) {
-                                        Icon(Icons.Default.Add, "新增 DNS 记录")
+                                        Icon(Icons.Default.Add, if (management != null) "刷新 Zone 详情" else "新增 DNS 记录")
                                     }
                                 Page.ACCOUNTS ->
                                     IconButton(onClick = openConnection) {
@@ -330,7 +398,7 @@ fun FlareGoApp(
                                     }
                             }
                         }
-                        if (searchOpen)
+                        if (searchOpen && activeModule==null)
                             OutlinedTextField(
                                 query,
                                 { query = it },
@@ -374,7 +442,7 @@ fun FlareGoApp(
                                     }
                                 },
                             )
-                        if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        if (state.loading && activeModule==null) LinearProgressIndicator(Modifier.fillMaxWidth())
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 },
@@ -396,6 +464,13 @@ fun FlareGoApp(
                                     selected = navPage == page,
                                     onClick = {
                                         keyboard?.hide()
+                                        clearPanel()
+                                        management?.let { pages ->
+                                            pages.dns.onIntent(DnsIntent.Clear)
+                                            pages.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
+                                            pages.zones.onIntent(ZoneIntent.Clear)
+                                            if (page == state.page && page == Page.DOMAINS && account != null) pages.zones.onIntent(ZoneIntent.Load(account))
+                                        }
                                         controller.navigate(page)
                                     },
                                     icon = { Icon(icon, null, modifier = Modifier.size(21.dp)) },
@@ -418,13 +493,18 @@ fun FlareGoApp(
             ) { padding ->
                 Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
                     state.error?.let { error ->
-                        Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        if(activeModule!=null) Text("账号提示：$error",Modifier.padding(horizontal=16.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                        else Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             Notice(error, controller::refresh)
                         }
                     }
                     Box(Modifier.weight(1f)) {
                         if (state.selected == null && state.page != Page.ACCOUNTS) {
                             ServiceSetupScreen(openConnection)
+                        } else if(activeModule!=null && actualPanelContext!=null && panelPorts!=null) {
+                            ManagementPanelHost(actualPanelContext,activeModule,panelPorts,
+                                onBack={keyboard?.hide();clearPanel()},
+                                modifier=Modifier.consumeWindowInsets(padding),onBound={panelLease=it})
                         } else when (state.page) {
                             Page.OVERVIEW ->
                                 OverviewScreen(
@@ -433,14 +513,49 @@ fun FlareGoApp(
                                     { dialog = DialogState.Create },
                                     controller::refreshAllProducts,
                                 )
-                            Page.DOMAINS -> Column {
+                            Page.DOMAINS -> if (management != null) {
+                                val openPanel:(ManagementPanelModule)->Unit = { module ->
+                                    if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {
+                                        keyboard?.hide();clearPanel();savedPanelRoute=ArrayList(routeStamp.orEmpty()+module.name)
+                                    }
+                                }
+                                val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
+                                    val dnsState by management.dns.state.collectAsState()
+                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Load(zone.ref)) }
+                                    if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
+                                        managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                    else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
+                                }
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),dnsContent)
+                                else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
+                                    settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),dnsContent)
+                            } else Column {
                                 if (state.productLoading) ProductStatus(state.products[ProductKey.ZONES],controller::refresh,{controller.loadMore(ProductKey.ZONES)})
                                 DomainsScreen(state, query, controller::openDomain)
                             }
                             Page.RESOURCES ->
                                 ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode)
-                            Page.DNS ->
-                                DnsScreen(state, query) {
+                            Page.DNS -> if (management != null) {
+                                val openPanel:(ManagementPanelModule)->Unit = { module ->
+                                    if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {
+                                        keyboard?.hide();clearPanel();savedPanelRoute=ArrayList(routeStamp.orEmpty()+module.name)
+                                    }
+                                }
+                                val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
+                                    val dnsState by management.dns.state.collectAsState()
+                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Load(zone.ref)) }
+                                    if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
+                                        managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                    else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
+                                }
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),dnsContent)
+                                else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
+                                    settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),dnsContent)
+                            } else DnsScreen(state, query) {
                                     state.domain?.let { domain ->
                                         dialog = DialogState.Edit(domain, it)
                                     }
@@ -526,5 +641,35 @@ fun FlareGoApp(
                 }
             null -> Unit
         }
+    }
+}
+
+
+private fun ManagementPanelPorts.available(module:ManagementPanelModule):Boolean = when(module) {
+    ManagementPanelModule.FILES -> files!=null
+    ManagementPanelModule.SCAN -> scan!=null
+    ManagementPanelModule.DNS_SETTINGS -> dnsSettings!=null
+    ManagementPanelModule.DNSSEC -> dnssec!=null
+    ManagementPanelModule.ZONE_SETTINGS -> zoneSettings!=null
+}
+
+private fun releasePanel(ports:ManagementPanelPorts,module:ManagementPanelModule,lease:ManagementPanelLease) {
+    when(module) {
+        ManagementPanelModule.FILES -> ports.files?.clear(lease)
+        ManagementPanelModule.SCAN -> ports.scan?.clear(lease)
+        ManagementPanelModule.DNS_SETTINGS -> ports.dnsSettings?.clear(lease)
+        ManagementPanelModule.DNSSEC -> ports.dnssec?.clear(lease)
+        ManagementPanelModule.ZONE_SETTINGS -> ports.zoneSettings?.clear(lease)
+    }
+}
+
+@Composable
+private fun PanelEntries(modules:List<ManagementPanelModule>,ports:ManagementPanelPorts,contextReady:Boolean,onOpen:(ManagementPanelModule)->Unit) {
+    modules.forEach { module ->
+        val available=ports.available(module)
+        OutlinedButton(onClick={onOpen(module)},enabled=contextReady && available,
+            modifier=Modifier.fillMaxWidth().testTag("management-open-${module.name}")) { Text(module.title) }
+        if(!available) Text("${module.title}尚待接入当前账号。")
+        else if(!contextReady) Text("请等待当前账号与域名的读取，再进入此功能。")
     }
 }

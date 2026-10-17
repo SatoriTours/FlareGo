@@ -1038,4 +1038,18 @@ class CloudflareProtocolTest {
         assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, label)
         assertFalse(failure.uncertain, label)
     }
+
+    @Test
+    fun ordinaryApiKeepsJsonAcceptAndRejectsCallerAcceptOverride(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("{}")); server.start()
+            val transport = testTransport(server)
+            assertEquals(200, transport.execute(HttpRequest("GET", "/zones/z/dns_records")).status)
+            assertEquals("application/json", server.takeRequest().getHeader("Accept"))
+            for (name in listOf("Accept", "Authorization")) {
+                assertFailsWith<CloudFailure> { transport.execute(HttpRequest("GET", "/zones/z/dns_records", HttpBody.Empty, mapOf(name to "text/plain"))) }
+            }
+            assertEquals(1, server.requestCount)
+        }
+    }
 }

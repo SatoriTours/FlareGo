@@ -1,12 +1,23 @@
 # FlareGo 原生实现规格
 
-**主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+> 2026-10-17 恢复批次：P2 已恢复到独立未提交分支并完成本地验证。706 core、91 平台项通过；354 个设备方法分轮均有 PASS，原 330 项轮次的 4 个失败及后续复验原样保留。真实云与付费资格未验收，主线尚未合入。见 [恢复验收报告](cloudflare-audit/p2-recovery-verification-2026-10-17.md)。
+
+
+**历史主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](cloudflare-audit/p1-integration-verification-2026-10-16.md)。
+**当前 P2 工作区（2026-10-17，未提交）：**54 候选端点已有 typed 产品 handler、独立预览确认与恢复路径，并通过五 typed ports 接入原唯一 AppOperationRuntime。P1 union 为65；独立 authority aux4 后实际 registry 为69（39 READ／30 WRITE），由运行中的 registry 核对，不以源码行数统计。当前覆盖证据见 [P2 验证](cloudflare-audit/p2-verification.md) 与 [机器映射](cloudflare-audit/p2-runtime-support-2026-10-17.json)。恢复批次 core 706／平台 91、Debug、lint、Python 349＋10 已通过；354 设备方法分轮通过。源码尚未提交，真实云与付费未验收。下方有明确日期的 P1／首版结论保留其历史含义。
+
 
 首版基线：2026-10-15，源码 `98cc0c9`；当前 P1 集成状态以上方 2026-10-16 记录为准。本文描述当前 Android 入口；首版及后续扩展的实现／验收证据见 [开发进度](development-progress.md)。长期设计和模拟流程不自动计为已实现产品。
 
 沿用 dreamtools 的语言与工程技术：Kotlin 2.3.20、Compose Multiplatform 1.10.1、AGP 9.0.1、Gradle 9.1.0、SQLDelight 2.3.2。只参考技术栈，不修改或复制 dreamtools 的业务代码。Android 8.0 / API 26 起，compile / target SDK 36，JDK 17。
 
-## 当前实现范围
+## P2 当前功能分支（2026-10-17）
+
+当前未提交的功能分支已接入 Zone 生命周期、21 类 DNS 表单与差量写入、批量操作、BIND 导入导出、扫描审核与 DNS Settings、DNSSEC、20 项受控站点设置、Universal SSL 和基础清缓存。54 项候选端点均保留在覆盖分母中；生产手写注册表含与 P1 合集的 65 项及独立 4 项权限自省读取。详情见 [P2 验证记录](cloudflare-audit/p2-verification.md)。
+
+真实权限只使用当前凭据与供应商信息验证；未知权限或资格保持只读。演示功能使用同一任务流程并隔离真实凭据和云请求。导入结果未知时禁止重发；扫描与缓存请求受理不表示全球完成。DNSSEC 注册商 DS 配置与付费资格未做真实云验收。当前 Debug 构建与 lint 通过，706 core／91 平台项通过；354 个设备方法分轮均有 PASS，不能称单轮全绿。下文带日期的 P0/P1 状态为历史记录，主线未因本批次自动更新。
+
+## 首版与 P1 已有范围（历史，见日期）
 
 - 原生 Android APK；共享业务模块同时有 JVM 测试目标。
 - 58dp 标题栏：Logo 打开左侧云账号抽屉，页面名称取代固定品牌名，右侧搜索按需展开。
@@ -40,3 +51,16 @@ Task 8 分支新增账号账单、显式用户旧范围、金额原文保留，�
 ## 验证边界
 
 本轮正式 Gradle core 202 项、Android 平台 82 项、API 36 全套设备 23 项通过，后者包含 9 项数据库迁移／事务／所有权测试；Debug 构建与 lint 通过，lint 有 7 项 warning。设备测试的过时预期及跨账号路径夹具已在隔离分支修正，未合并；没有真实云验收。详见开发进度与本轮验证记录。
+
+## P2 当前工作区的原生契约
+
+- Zone 是供应商 Zone，并非 Registrar。创建绑定所选账号，删除需要 fresh owned provider fullname 的精确输入；activation pending 和 nameservers 不宣称注册或传播完成。
+- DNS21类型采用固定 Schema 局部定义；raw 未知字段保留展示，PATCH 仅明确差量，PUT 独立完整替换与确认，嵌套未知语义不能证明时拒绝。IPv6 等价仅本地128位规范化，无网络解析。
+- Batch 同一数据库事务按 deletes→patches→puts→posts；传播非原子。未知套餐保守200，不静默拆批；3500仅可信 scope/credential/时效证据接口，生产付费资格未验。安全 per-item manifest 与 task/summary 同事务持久化，不保存正文；新 runtime 只读证明当前状态，不归因历史执行者。
+- BIND 导入上限262144 bytes、全 Application/连接共享滚动60秒三次；实际系统 Open/Create flags/persisted grant，job claim独立于 presentation clear/recreate，真实 route exit 撤旧 picker。只读导出不依赖 import 写权限或 records list 成功，保原字节；Partial/UNKNOWN 不从记录总数推成功或自动重导。
+- Scan触发仅受理；空候选不证明完成，审核明确接受／拒绝；DNS Settings 权限与字段资格分开，false/omitted保留区别。DNSSEC风险按实际操作确认，DS/Registrar及外部预签名责任不代办；NSEC3/paid未知不开放。
+- Zone settings只固定审核目标与同次prepare snapshot；editable/字段资格未知则只读。SSL降级、关闭Universal SSL、清全站缓存独立风险确认；purge受理不等于全网缓存已清空。
+- Authority稳定issuer属于credential generation，跨短gateway/session重建保留catalog ID binding/tombstone；只内部identity proof可消费，公开三态不是授权。资源wildcard/deny/expiry等按已审子集求值，IP/未知conditions保持unknown；不读取deprecated Zone.plan猜套餐。
+- App adapter 的===lease、actual fullscope/epoch/credential/revision与原子IO只读guard独立于plan。真实输入变化撤旧确认；handoff后appjob保实际能力，结束finally撤本draft guard。新VM恢复metadata但不恢复file/body/confirm/风险receipt；import显示仅真实typed outcome，export只显示同context/route/target实际commit结果。Demo明确本机示例，零生产acquisition/task写，与真实云验收分开。
+
+恢复批次已核对 24 classes／354 methods：330 项轮次原为 326 PASS／4 FAIL；后续 9 项定向通过包含全部原失败，另 24 项真实 VM/SAF/DB 集成在 system font2 通过。旧失败不倒写为通过；各轮源码快照和条件见恢复报告。Zone invalidName 的一次失败原因未确定，不宣称已修复稳定性。

@@ -478,8 +478,8 @@ fun AccountsScreen(
     updates: @Composable () -> Unit = {},
 ) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Notice("账号仅保存于本机。API Token 使用 Android Keystore 加密保存。") }
         if (state.connections.isEmpty()) item { ServiceSetupCard(connect) }
+        item { Notice("账号仅保存于本机。API Token 使用 Android Keystore 加密保存。") }
         item { updates() }
         items(state.connections, key = { it.id }) { connection ->
             SectionCard {

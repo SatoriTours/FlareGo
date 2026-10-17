@@ -25,6 +25,9 @@ class AppController(
             AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = productFactory != null)
         )
     val state: StateFlow<AppState> = mutable.asStateFlow()
+    private var management: com.flarego.core.application.management.CloudflareManagement? = null
+    /** Attach the app-lifetime page ports; they never own another execution runtime. */
+    fun bindManagement(pages: com.flarego.core.application.management.CloudflareManagement) { management = pages }
     private val sessions = mutableMapOf<String, CloudSession>()
     private val sessionVersions = mutableMapOf<String, Int>()
     private var uiEpoch = 0
@@ -350,12 +353,15 @@ class AppController(
      */
     private fun bumpUiEpoch() {
         uiEpoch += 1
+        management?.dns?.onIntent(com.flarego.core.application.dns.DnsIntent.Clear)
+        management?.zones?.onIntent(com.flarego.core.application.zones.ZoneIntent.Clear)
+        management?.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
     }
 
     private fun requireConnection(): Connection =
         state.value.selected ?: throw CloudException("请先添加服务并绑定 API Token")
 
-    private fun operationsActive(): Boolean = state.value.selected?.demo == false
+    private fun operationsActive(): Boolean = state.value.selected?.let { !it.demo || management != null } == true
 
     private fun recordedFailure(
         connection: Connection,

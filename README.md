@@ -1,4 +1,7 @@
 <p align="center">
+
+> 2026-10-17 恢复批次：P2 已恢复到独立未提交分支并完成本地验证。706 core、91 平台项通过；354 个设备方法分轮均有 PASS，原 330 项轮次的 4 个失败及后续复验原样保留。真实云与付费资格未验收，主线尚未合入。见 [恢复验收报告](docs/cloudflare-audit/p2-recovery-verification-2026-10-17.md)。
+
   <img src="docs/brand/flarego-icon.svg" width="88" height="88" alt="FlareGo 图标" />
 </p>
 
@@ -10,6 +13,12 @@
   <a href="https://github.com/SatoriTours/FlareGo/releases/latest">下载 APK</a> ·
   <a href="https://github.com/SatoriTours/FlareGo/releases">版本列表</a>
 </p>
+
+## P2 当前功能分支（2026-10-17）
+
+当前未提交的功能分支已接入 Zone 生命周期、21 类 DNS 表单与差量写入、批量操作、BIND 导入导出、扫描审核与 DNS Settings、DNSSEC、20 项受控站点设置、Universal SSL 和基础清缓存。54 项候选端点均保留在覆盖分母中；生产手写注册表含与 P1 合集的 65 项及独立 4 项权限自省读取。详情见 [P2 验证记录](docs/cloudflare-audit/p2-verification.md)。
+
+真实权限只使用当前凭据与供应商信息验证；未知权限或资格保持只读。演示功能使用同一任务流程并隔离真实凭据和云请求。导入结果未知时禁止重发；扫描与缓存请求受理不表示全球完成。DNSSEC 注册商 DS 配置与付费资格未做真实云验收。当前 Debug 构建与 lint 通过，706 core／91 平台项通过；354 个设备方法分轮均有 PASS，不能称单轮全绿。下文带日期的 P0/P1 状态为历史记录，主线未因本批次自动更新。
 
 ## 界面预览
 
@@ -56,24 +65,26 @@
 
 Account ID 是 32 位十六进制字符串。建议从读取权限开始：账号访问可使用 `Account Settings Read`，域名列表需要 Zone 读取权限；修改 DNS 时再添加 DNS 写权限。Workers、R2、D1、KV 按需授予对应读取权限。权限名称和范围以 [Cloudflare 权限文档](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) 及 [账号接口要求](https://developers.cloudflare.com/api/resources/accounts/methods/get/) 为准。
 
-每项资源独立处理权限不足，不会因为某个产品不可访问而隐藏其他已授权资源。账单读取使用用户级历史接口，取决于 Token 和用户权限；无法读取时提供官方控制台入口。
+每项资源独立处理权限不足。账单默认使用账号历史，用户级旧历史需显式选择。P2 扩展写操作还需当前凭据的 verify／Token details／完整 permission-group catalog 与实际 Zone owner 证据；只有成功读取或本机风险确认不足以授予云写权限。aux 读取本身缺权限或条件无法解释时保持 unknown／只读，不自动增加 Token 权限。
 
 ## 功能范围
 
-开发状态见 [开发进度](docs/development-progress.md)（2026-10-16）：P1 九项已有实现并合入主线，源码提交 `f8840c2`；本地 core 285／平台 82／原生 49 项通过，真实云未验收，P2 尚未开始。下表列当前 App 产品能力。
+开发状态见 [开发进度](docs/development-progress.md)。2026-10-16 的 P1 主线交付与验证记录保留；2026-10-17 当前未提交 P2 工作区已实现 Zone／21 类型 DNS、批量、文件、扫描、DNSSEC 与设置管理，并接到同一原生 runtime。54 候选端点均有 typed handler 与具体隔离测试映射，另有独立 4 项只读 Token authority 辅助接口。**本地恢复验证已完成，设备证据分轮记录；真实云与付费资格未验收。** 见 [P2 验证边界与逐端点证据](docs/cloudflare-audit/p2-verification.md)。下表描述当前工作区能力，不代表已发布版本。
 
 | 功能 | 当前实现 |
 | --- | --- |
 | 云账号 | 显式发现、Token 类型验证、连接、切换、断开多个 Cloudflare 账号；本机加密保存 Token |
-| 域名 | 查询当前账号的 Zone 列表，支持分页和搜索 |
-| DNS | 查询、新增、编辑、删除解析记录；确认后提交；展示代理状态与 TTL |
+| 域名 | Zone 列表／详情／创建／单字段编辑／完整名称确认删除／activation；显示 nameservers 与 pending，区别于域名注册 |
+| DNS | 21 类型领域表单、列表／详情／过滤／分页；差量 PATCH、独立 PUT、批量预览确认与只读核对；未知 raw 保留只读 |
+| DNS 文件与扫描 | 系统文档授权的 BIND 导入／原字节导出、扫描触发／候选审核／usage／DNS Settings；导入未知或部分结果不重放 |
+| DNSSEC 与 Zone 设置 | 状态／ZSK 读取、独立风险确认、固定设置目标／Universal SSL／基础清缓存；按实际权限、editable 和已证资格拒绝不支持的写入 |
 | 边缘计算 | 按页读取现代 Workers 目录；显式旧目录入口和资源详情元数据 |
 | 存储与数据库 | 查询 R2 桶、D1 数据库、KV 命名空间目录与详情元数据 |
 | 账单 | 默认账号历史账单；显式用户旧账单，分开来源且不自动回退 |
 | 操作记录 | 安全任务持久化、启动恢复及只读核对；不重放不确定写入 |
 | 应用更新 | 正式／测试通道、自动／手动检查、下载校验、系统安装确认 |
 
-主线已接入账号发现与 Token 类型验证、按产品加载和分页、现代／显式旧 Workers、默认账号／显式用户旧账单、任务启动恢复与只读核对。旧 DNS receipt 仍保持待核对，不自动重发；PATCH 可通过读回哈希一致确认。详见 [Task 9 验证](docs/cloudflare-audit/p1-task9-verification-2026-10-15.md)。
+P1 主线的账号发现、现代／显式旧 Workers、两种账单来源与历史验证见 [P1 Task 9](docs/cloudflare-audit/p1-task9-verification-2026-10-15.md)。P2 每个 App runtime 内共享 plans／coordinator／写锁／metadata latch，产品写入先预览、再由真实当前输入独立确认；未知结果只读核对，进程重建不恢复 payload／风险确认。旧 DNS Unit receipt 的历史保守语义保留。
 
 真实域名注册、资源创建、Worker 部署以及 R2 对象读写目前通过官方控制台完成。域名搜索和购买确认只在设计原型及隔离演示测试中提供模拟流程，当前 Android 不预置演示账号。其他云厂商尚未接入。
 

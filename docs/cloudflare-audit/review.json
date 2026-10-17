@@ -128699,7 +128699,13 @@
         "blockers": [],
         "source_scope": "inventory；按 account.id 过滤并分页；仅展示 id/name/status；搜索为本地列表搜索",
         "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
-        "test_evidence": "isolated_tests_only"
+        "test_evidence": "isolated_tests_only",
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zones-get",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zones-post": {
@@ -128742,7 +128748,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zones-post",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-analytics-(-deprecated)-get-analytics-by-co-locations": {
@@ -128874,7 +128886,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zones-0-delete",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zones-0-get": {
@@ -128914,7 +128932,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zones-0-get",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zones-0-patch": {
@@ -128958,7 +128982,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zones-0-patch",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-level-access-applications-list-access-applications": {
@@ -131265,7 +131295,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/put-zones-zone_id-activation_check",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dls-zone-regional-hostnames-list": {
@@ -137828,7 +137864,13 @@
         "blockers": [],
         "source_scope": "records；仅基础字段；结构化 data/comment/tags/settings 等未建模",
         "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
-        "test_evidence": "isolated_tests_only"
+        "test_evidence": "isolated_tests_only",
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-list-dns-records",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-create-dns-record": {
@@ -137876,7 +137918,13 @@
         ],
         "source_scope": "save；UI 校验仅允许 A/AAAA/CNAME/TXT/MX，支持部分字段",
         "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
-        "test_evidence": "isolated_tests_only"
+        "test_evidence": "isolated_tests_only",
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-create-dns-record",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-batch-dns-records": {
@@ -137920,7 +137968,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-batch-dns-records",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-export-dns-records": {
@@ -137960,7 +138014,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-export-dns-records",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-import-dns-records": {
@@ -138004,7 +138064,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-import-dns-records",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-scan-dns-records": {
@@ -138091,7 +138157,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-review-dns-scan",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-apply-dns-scan-results": {
@@ -138135,7 +138207,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-apply-dns-scan-results",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-trigger-dns-scan": {
@@ -138179,7 +138257,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-trigger-dns-scan",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-get-usage": {
@@ -138219,7 +138303,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-get-usage",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-delete-dns-record": {
@@ -138267,7 +138357,13 @@
         ],
         "source_scope": "delete；基础删除路径与确认流程；仅隔离测试，无真实账号验收",
         "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
-        "test_evidence": "isolated_tests_only"
+        "test_evidence": "isolated_tests_only",
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-delete-dns-record",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-dns-record-details": {
@@ -138307,7 +138403,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-dns-record-details",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-patch-dns-record": {
@@ -138355,7 +138457,13 @@
         ],
         "source_scope": "save；UI 校验仅允许 A/AAAA/CNAME/TXT/MX，支持部分字段",
         "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/CloudflareSession.kt",
-        "test_evidence": "isolated_tests_only"
+        "test_evidence": "isolated_tests_only",
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-patch-dns-record",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-records-for-a-zone-update-dns-record": {
@@ -138399,7 +138507,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-records-for-a-zone-update-dns-record",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-settings-for-a-zone-list-dns-settings": {
@@ -138439,7 +138553,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-settings-for-a-zone-list-dns-settings",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dns-settings-for-a-zone-update-dns-settings": {
@@ -138483,7 +138603,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dns-settings-for-a-zone-update-dns-settings",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dnssec-delete-dnssec-records": {
@@ -138527,7 +138653,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dnssec-delete-dnssec-records",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dnssec-dnssec-details": {
@@ -138567,7 +138699,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dnssec-dnssec-details",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dnssec-edit-dnssec-status": {
@@ -138611,7 +138749,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dnssec-edit-dnssec-status",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "dnssec-list-dnssec-zsks": {
@@ -138651,7 +138795,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/dnssec-list-dnssec-zsks",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "get_dmarc_reports_status": {
@@ -149054,7 +149204,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-purge",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "rate-limit-analytics-get-zone-analytics": {
@@ -152007,7 +152163,13 @@
         "fern_ignore": null,
         "blockers": [
           "forge_hidden_flag_requires_review"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-get-aegis-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-cache-settings-change-aegis-setting": {
@@ -152052,7 +152214,13 @@
         "blockers": [
           "forge_hidden_flag_requires_review",
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-change-aegis-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "ssl-detector-auto-origin-tls-kex-get-enrollment": {
@@ -152183,7 +152351,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-automatic-platform-optimization-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-automatic-platform-optimization-setting": {
@@ -152227,7 +152401,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-automatic-platform-optimization-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-get-binary-ast-setting": {
@@ -152267,7 +152447,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-binary-ast-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-binary-ast-setting": {
@@ -152311,7 +152497,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-binary-ast-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "csam-scanner-get-setting": {
@@ -152438,7 +152630,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-fonts-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-fonts-setting": {
@@ -152482,7 +152680,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-fonts-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-get-google-tag-gateway-config": {
@@ -152609,7 +152813,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-h2-prioritization-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-h2-prioritization-setting": {
@@ -152653,7 +152863,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-h2-prioritization-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-get-image-resizing-setting": {
@@ -152693,7 +152909,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-image-resizing-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-image-resizing-setting": {
@@ -152737,7 +152959,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-image-resizing-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "nel-settings-get": {
@@ -152863,7 +153091,13 @@
         "fern_ignore": null,
         "blockers": [
           "forge_hidden_flag_requires_review"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-get-origin-h2-max-streams-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-cache-settings-change-origin-h2-max-streams-setting": {
@@ -152908,7 +153142,13 @@
         "blockers": [
           "forge_hidden_flag_requires_review",
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-change-origin-h2-max-streams-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-cache-settings-get-origin-max-http-version-setting": {
@@ -152950,7 +153190,13 @@
         "fern_ignore": null,
         "blockers": [
           "forge_hidden_flag_requires_review"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-get-origin-max-http-version-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-cache-settings-change-origin-max-http-version-setting": {
@@ -152995,7 +153241,13 @@
         "blockers": [
           "forge_hidden_flag_requires_review",
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-cache-settings-change-origin-max-http-version-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-cache-settings-delete-origin-tls-compliance-modes-setting": {
@@ -153304,7 +153556,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-speed-brain-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-speed-brain-setting": {
@@ -153348,7 +153606,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-speed-brain-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "ssl-detector-automatic-mode-get-enrollment": {
@@ -153475,7 +153739,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-transformations-allowed-origins-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-transformations-allowed-origins-setting": {
@@ -153519,7 +153789,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-transformations-allowed-origins-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-get-transformations-c2pa-setting": {
@@ -153559,7 +153835,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-transformations-c2pa-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-transformations-c2pa-setting": {
@@ -153603,7 +153885,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-transformations-c2pa-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-get-transformations-config": {
@@ -153643,7 +153931,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-transformations-config",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-change-transformations-config": {
@@ -153687,7 +153981,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-change-transformations-config",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "get-zones-zone_identifier-zaraz-config": {
@@ -154159,7 +154459,13 @@
         "deprecation_signals": [],
         "forge_hidden": null,
         "fern_ignore": null,
-        "blockers": []
+        "blockers": [],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-get-single-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "zone-settings-edit-single-setting": {
@@ -154203,7 +154509,13 @@
         "fern_ignore": null,
         "blockers": [
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/zone-settings-edit-single-setting",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "smart-shield-get-settings": {
@@ -156173,7 +156485,13 @@
         "fern_ignore": null,
         "blockers": [
           "forge_hidden_flag_requires_review"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/universal-ssl-settings-for-a-zone-universal-ssl-settings-details",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "universal-ssl-settings-for-a-zone-edit-universal-ssl-settings": {
@@ -156218,7 +156536,13 @@
         "blockers": [
           "forge_hidden_flag_requires_review",
           "manual_risk_review_required"
-        ]
+        ],
+        "p2_runtime_support_2026_10_17": {
+          "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json#operations/universal-ssl-settings-for-a-zone-edit-universal-ssl-settings",
+          "technical_support": "TYPED_HANDLER",
+          "authenticated_cloud_accepted": false,
+          "overall_regression": "pending_root_post_document_freeze"
+        }
       }
     },
     "ssl-verification-ssl-verification-details": {
@@ -159342,6 +159666,16 @@
           "manual_risk_review_required"
         ]
       }
+    }
+  },
+  "runtime_support_updates": {
+    "2026-10-17": {
+      "reference": "docs/cloudflare-audit/p2-runtime-support-2026-10-17.json",
+      "candidate_count": 54,
+      "auxiliary_count_separate": 4,
+      "technical_support": "TYPED_HANDLER_LOCAL_TEST_EVIDENCE",
+      "authenticated_cloud_accepted": false,
+      "note": "Existing source_support/availability/approvals remain the dated P0/P1 proposal; this additive observation does not approve execution, alter the historical implemented snapshot, reduce denominators or assert L2/L3 acceptance."
     }
   }
 }

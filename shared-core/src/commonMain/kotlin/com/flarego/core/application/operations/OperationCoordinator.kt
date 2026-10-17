@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.withLock
  * lost (for example a legacy Unit API); it is never completion.
  */
 sealed interface ExecutionReceipt {
+    /** Complete, trusted provider refusal evidence; never inferred from a timeout/status alone. */
+    data class Rejected(val providerRequestId: String? = null) : ExecutionReceipt
     data class Completed(val providerRequestId: String? = null) : ExecutionReceipt
 
     data class Accepted(val pollPath: String? = null, val providerRequestId: String? = null) : ExecutionReceipt
@@ -376,6 +378,7 @@ class OperationCoordinator(
     private fun settle(plan: ChangePlan, running: OperationTask, receipt: ExecutionReceipt): OperationTask {
         val state =
             when (receipt) {
+                is ExecutionReceipt.Rejected -> TaskState.FAILED
                 is ExecutionReceipt.Completed -> TaskState.SUCCEEDED
                 is ExecutionReceipt.Accepted -> TaskState.ACCEPTED
                 is ExecutionReceipt.Partial -> TaskState.PARTIAL
@@ -392,6 +395,7 @@ class OperationCoordinator(
     private fun receiptProviderId(receipt: ExecutionReceipt): String? {
         val raw =
             when (receipt) {
+                is ExecutionReceipt.Rejected -> receipt.providerRequestId
                 is ExecutionReceipt.Completed -> receipt.providerRequestId
                 is ExecutionReceipt.Accepted -> receipt.providerRequestId
                 is ExecutionReceipt.Partial -> receipt.providerRequestId

@@ -90,6 +90,19 @@ class OperationCoordinatorTest {
     private val liveConnection = Connection("connection-1", "Live", "account-1")
 
     @Test
+    fun trustedRejectedReceiptSettlesFailedThroughCanonicalMetadata() = runTest {
+        val resolver=Resolver(live(),listOf(liveConnection));val store=TestStore()
+        val plans=scopedIssuer(resolver,idsOf("rejected-plan","rejected-confirm"))
+        val coordinator=engine(plans,resolver,store,backgroundScope)
+        val confirmation=confirmOne(plans)
+        val task=coordinator.execute(confirmation) { ExecutionReceipt.Rejected("provider-refusal") }
+        assertEquals(TaskState.FAILED,task.state)
+        assertEquals(task,store.tasks[task.id]);assertEquals("provider-refusal",task.providerRequestId)
+        assertEquals(OperationTaskPersistence.summaryFor(task),store.summaries.last())
+        assertEquals(3,store.putCount)
+    }
+
+    @Test
     fun coordinatorFailuresFromOwnerCreationThroughResultAssertionsCompleteAllResources() = runTest {
         for (failedStage in 0..5) {
             val owner = ManagedResources()

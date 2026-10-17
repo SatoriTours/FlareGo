@@ -31,6 +31,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    // Fixed unconditional registration order; the original APK launcher keeps its position.
+    private val importDocument=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onDocumentResult(DnsDocumentKind.IMPORT,it.resultCode,it.data)
+    }
+    private val exportDocument=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onDocumentResult(DnsDocumentKind.EXPORT,it.resultCode,it.data)
+    }
+    override fun onResume() { super.onResume();model.onManagementResume() }
+
     private suspend fun installOrAuthorize(current: FlareGoViewModel) {
         val request = current.pendingInstall ?: return
         try {
@@ -68,6 +77,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             val current = model
             val state by current.controller.state.collectAsState()
+            val panelContext by current.panelContexts.collectAsState()
+            LaunchedEffect(current) {
+                current.documentLaunches.collect { event ->
+                    if(event==null) return@collect
+                    val launch=current.takeDocumentLaunch(event.requestId) ?: return@collect
+                    when(launch.kind) {
+                        DnsDocumentKind.IMPORT -> importDocument.launch(launch.intent)
+                        DnsDocumentKind.EXPORT -> exportDocument.launch(launch.intent)
+                    }
+                }
+            }
             LaunchedEffect(current) {
                 if (current.pendingInstall != null && !current.permissionRequestPending)
                     installOrAuthorize(current)
@@ -112,6 +132,9 @@ class MainActivity : ComponentActivity() {
                 discoverAccounts = current::discoverAccounts,
                 verifyToken = current::verifyDraftToken,
                 reconcileTask = current::reconcileTask,
+                management = current.management,
+                panelPorts = current.panelPorts,
+                panelContext = panelContext,
             )
         }
     }

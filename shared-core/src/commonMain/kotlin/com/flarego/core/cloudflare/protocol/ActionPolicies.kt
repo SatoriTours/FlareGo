@@ -129,7 +129,12 @@ data class ActionRegistration(
     private fun templateMatchesScope(): Boolean =
         when (scope) {
             ActionScope.ACCOUNT ->
-                pathTemplate == "/accounts/{account_id}" || pathTemplate.startsWith("/accounts/{account_id}/")
+                pathTemplate == "/accounts/{account_id}" || pathTemplate.startsWith("/accounts/{account_id}/") ||
+                    // Zone creation carries the selected account in its typed body.
+                    // Admit only this reviewed write, never arbitrary user-path actions.
+                    (policy.key == "zones-post" && method == "POST" && pathTemplate == "/zones" &&
+                        policy.semantics == ActionSemantics.WRITE && policy.responseKind == ResponseKind.ENVELOPE_JSON &&
+                        policy.risk == RiskLevel.CHANGE)
             ActionScope.ZONE -> pathTemplate.startsWith("/zones/{zone_id}")
             ActionScope.USER ->
                 pathTemplate.startsWith("/user/") || pathTemplate == "/accounts" || pathTemplate == "/zones"
@@ -151,8 +156,8 @@ class ActionRegistry internal constructor(internal val registrations: Map<String
 /**
  * The release-time handwritten policy registry.
  *
- * Sixteen actions: the eleven operations this app already calls plus the five P1
- * read-only operations. Every entry is written by hand here — nothing is loaded
+ * The original P1 actions plus the reviewed P2 Zone lifecycle operations.
+ * Every entry is written by hand here — nothing is loaded
  * from a schema, a remote document or the UI. Read-only actions enable the bounded
  * 429 retry; write actions never retry.
  */
@@ -188,14 +193,27 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
         read("user-billing-history-(-deprecated)-billing-history-details", "/user/billing/history", ActionScope.USER),
         read("zones-get", "/zones", ActionScope.USER),
         read("dns-records-for-a-zone-list-dns-records", "/zones/{zone_id}/dns_records", ActionScope.ZONE),
+        read("dns-records-for-a-zone-dns-record-details", "/zones/{zone_id}/dns_records/{dns_record_id}", ActionScope.ZONE),
         write("dns-records-for-a-zone-create-dns-record", "POST", "/zones/{zone_id}/dns_records", RiskLevel.CHANGE),
         write("dns-records-for-a-zone-delete-dns-record", "DELETE", "/zones/{zone_id}/dns_records/{dns_record_id}", RiskLevel.DESTRUCTIVE),
         write("dns-records-for-a-zone-patch-dns-record", "PATCH", "/zones/{zone_id}/dns_records/{dns_record_id}", RiskLevel.CHANGE),
+        write("dns-records-for-a-zone-update-dns-record", "PUT", "/zones/{zone_id}/dns_records/{dns_record_id}", RiskLevel.CHANGE),
         read("accounts-list-accounts", "/accounts", ActionScope.USER),
         read("user-api-tokens-verify-token", "/user/tokens/verify", ActionScope.USER),
         read("account-api-tokens-verify-token", "/accounts/{account_id}/tokens/verify", ActionScope.ACCOUNT),
         read("listWorkers", "/accounts/{account_id}/workers/workers", ActionScope.ACCOUNT),
         read("account-billing-history-get-billing-history", "/accounts/{account_id}/billing/history", ActionScope.ACCOUNT),
+        ActionRegistration(writePolicy("zones-post", RiskLevel.CHANGE), "POST", "/zones", ActionScope.ACCOUNT),
+        read("zones-0-get", "/zones/{zone_id}", ActionScope.ZONE),
+        write("zones-0-patch", "PATCH", "/zones/{zone_id}", RiskLevel.DESTRUCTIVE),
+        write("zones-0-delete", "DELETE", "/zones/{zone_id}", RiskLevel.DESTRUCTIVE),
+        write("put-zones-zone_id-activation_check", "PUT", "/zones/{zone_id}/activation_check", RiskLevel.CHANGE),
+        write("dns-records-for-a-zone-batch-dns-records", "POST", "/zones/{zone_id}/dns_records/batch", RiskLevel.DESTRUCTIVE),
+        *zoneSettingsRegistrations(),
+        *dnssecRegistrations(),
+        *dnsFilesRegistrations(),
+        *dnsScanRegistrations(),
+        *tokenAuthorityRegistrations(),
     )
 }
 

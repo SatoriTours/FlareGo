@@ -62,7 +62,8 @@ class ProductLoadingTest {
         install();compose.onAllNodesWithText("未加载").assertCountEquals(2)
         compose.onNodeWithText("0 个已激活").assertDoesNotExist()
         compose.runOnIdle {assertTrue(calls.isEmpty())}
-        compose.onNodeWithText("刷新全部产品").performScrollTo().performClick()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("刷新全部产品"))
+        compose.onNodeWithText("刷新全部产品").assertIsDisplayed().performClick()
         compose.runOnIdle {assertEquals(ProductKey.entries.toSet(),calls.toSet())}
     }
     @Test fun domainTabOnlyLoadsZonesAndShowsLoadedCount() {
@@ -179,6 +180,9 @@ class ProductLoadingTest {
     @Test fun productionDnsWritePersistsUnknownAndReadOnlyPatchCheckConfirmsWithoutReplay() {
         val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
         var writeDone=false
+        var reconcileStart=0
+        val providerOwner="""{"id":"zone","name":"zone.example","status":"active","account":{"id":"${connection.accountId}"},"paused":false,"type":"full","name_servers":[]}"""
+        val providerRecord="""{"id":"dns-record","type":"A","name":"www.zone.example","content":"192.0.2.1","ttl":1,"proxied":false}"""
         compose.runOnIdle {
             val app=InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
             val m=FlareGoViewModel(app) { HttpTransport { r ->
@@ -187,7 +191,9 @@ class ProductLoadingTest {
                     r.path=="/accounts/${connection.accountId}" -> """{"id":"${connection.accountId}","name":"Account"}"""
                     r.path.startsWith("/zones?") -> """[{"id":"zone","name":"zone.example","status":"active","account":{"id":"${connection.accountId}"}}]"""
                     r.method=="PATCH" && r.path=="/zones/zone/dns_records/dns-record" -> """{"id":"dns-record"}"""
-                    r.method=="GET" && r.path.startsWith("/zones/zone/dns_records?") -> """[{"id":"dns-record","type":"A","name":"www.zone.example","content":"192.0.2.1","ttl":1,"proxied":false}]"""
+                    r.method=="GET" && r.path=="/zones/zone" -> providerOwner
+                    r.method=="GET" && r.path=="/zones/zone/dns_records/dns-record" -> providerRecord
+                    r.method=="GET" && r.path.startsWith("/zones/zone/dns_records?") -> "[$providerRecord]"
                     else -> error("Unexpected DNS request")
                 }
                 HttpResponse(200,"""{"success":true,"result":$result,"result_info":{"page":1,"per_page":50,"total_count":1}}""")
@@ -206,10 +212,19 @@ class ProductLoadingTest {
             val m=model!!;val task=m.controller.state.value.tasks.single()
             assertEquals(TaskState.UNKNOWN,task.state)
             assertEquals(task,m.operationStore.get(task.id))
+            reconcileStart=requests.size
             m.viewModelScope.launch {m.reconcileTask(task.id)}
         }
         compose.waitUntil(10000) {model!!.controller.state.value.tasks.single().state==TaskState.SUCCEEDED}
-        compose.runOnIdle {assertEquals(1,requests.count {it.startsWith("PATCH ")})}
+        compose.runOnIdle {
+            val actual=synchronized(requests) { requests.toList() }
+            assertEquals(1,actual.count {it.startsWith("PATCH ")})
+            val readback=actual.drop(reconcileStart)
+            assertTrue("Reconciliation must only read",readback.isNotEmpty() && readback.all {it.startsWith("GET ")})
+            assertTrue("Provider owner must be freshly verified",readback.contains("GET /zones/zone"))
+            assertTrue("Provider detail must prove this exact persisted target",readback.contains("GET /zones/zone/dns_records/dns-record"))
+            assertEquals(TaskState.SUCCEEDED,model!!.operationStore.get(model!!.controller.state.value.tasks.single().id)!!.state)
+        }
     }
 
     @Test fun productionDisconnectDoesNotBlockUiOnMetadataIo() {

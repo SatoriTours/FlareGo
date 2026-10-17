@@ -31,7 +31,7 @@ class CloudflareTransfers internal constructor(
         var primary: Throwable? = null
         try {
             val job = currentCoroutineContext()[Job]
-            val call = client.newCall(cloudflareRequest(token, request) { job?.isActive != false })
+            val call = client.newCall(cloudflareRequest(token, request, CloudflareAccept.FILE) { job?.isActive != false })
             return runCloudflareCall(call, owned) { response -> stream(response, sink, job) }
         } catch (thrown: Throwable) {
             primary = thrown
