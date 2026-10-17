@@ -100,8 +100,20 @@ sealed interface R2BucketWrite {
     /** The only mutable bucket property: the default storage class for newly uploaded objects. */
     data class PatchStorageClass(override val scope: AccountScope, val name: String, val storageClass: String) : R2BucketWrite
 
-    data class Delete(override val scope: AccountScope, val name: String) : R2BucketWrite
+    /**
+     * [typedName] must equal [name]: deleting a bucket destroys every object and its
+     * configuration, so the caller has to carry the name the user actually typed.
+     */
+    data class Delete(override val scope: AccountScope, val name: String, val typedName: String) : R2BucketWrite
 }
+
+/** Display only: never a source of executable payload or ownership evidence. */
+data class R2ChangePreview(
+    val scope: AccountScope,
+    val bucket: String,
+    val impact: String,
+    val concurrencyWarning: String,
+)
 
 /** Snapshot of a write, so a later mutation of the caller's draft cannot change what is sent. */
 internal fun freezeR2BucketWrite(write: R2BucketWrite): R2BucketWrite = when (write) {

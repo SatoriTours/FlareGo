@@ -106,7 +106,9 @@ class CloudflareR2Client(
         perform(R2BucketWrite.PatchStorageClass(account, name, storageClass)) {}.details ?: throw unknownResult()
 
     override suspend fun deleteBucket(account: AccountScope, name: String) {
-        val receipt = perform(R2BucketWrite.Delete(account, name)) {}.receipt
+        // The typed transport port carries name == typedName; the destructive product
+        // confirmation (the user's typed name) is enforced by R2Controller.
+        val receipt = perform(R2BucketWrite.Delete(account, name, name)) {}.receipt
         if (receipt !is ExecutionReceipt.Completed) throw unknownResult()
     }
 
@@ -336,6 +338,9 @@ class CloudflareR2Client(
             is R2BucketWrite.CreateByName -> requireStorageClass(write.storageClass)
             is R2BucketWrite.PatchStorageClass -> requireStorageClass(write.storageClass)
             else -> Unit
+        }
+        if (write is R2BucketWrite.Delete && (write.typedName.isBlank() || write.typedName != write.name)) {
+            throw invalidInputFailure()
         }
         // Ownership and state evidence is read before the guard; a create has no bucket yet.
         val observed =
