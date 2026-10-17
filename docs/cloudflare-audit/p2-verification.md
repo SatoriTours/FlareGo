@@ -1,6 +1,6 @@
 # P2 Zone / DNS：技术支持与验证边界（2026-10-17）
 
-当前 `recovery/cloudflare-p2-zones-dns` 未提交分支已恢复并完成本地验证。旧执行工作区及原 XML 被用户归档移除，本次所有通过结论均来自新的实际运行；来源与完整限制见 [恢复验收报告](p2-recovery-verification-2026-10-17.md)。真实 Cloudflare 云／付费资格未执行。本文和 CSV 不是执行 allowlist、Token 写权限证明或发布记录；P0 implemented snapshot 与 P1 ledger 保持历史原值。
+P2 功能已恢复并提交，本地合入main；当前集成状态见[主线集成验证](p2-main-integration-verification-2026-10-17.md)。以下表格保留恢复阶段的分轮结果。旧执行工作区及原 XML 被用户归档移除，本次所有通过结论均来自新的实际运行；来源与完整限制见 [恢复验收报告](p2-recovery-verification-2026-10-17.md)。真实 Cloudflare 云／付费资格未执行。本文和 CSV 不是执行 allowlist、Token 写权限证明或发布记录；P0 implemented snapshot 与 P1 ledger 保持历史原值。
 
 ## 固定来源与分母
 

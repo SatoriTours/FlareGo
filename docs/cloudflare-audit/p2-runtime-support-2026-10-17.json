@@ -1,7 +1,7 @@
 {
   "format": "flarego.cloudflare-audit.p2-runtime-support/1",
   "as_of": "2026-10-17",
-  "scope": "current uncommitted P2 worktree; local technical evidence only",
+  "scope": "P2 source locally integrated on main; local technical evidence only",
   "schema_commit": "6b00f157496cd6a1792a613dc94654c51273aeb9",
   "schema_sha256": "06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461",
   "candidate_historical_eight_column_sha256": "3f20a3ea404a5692725c685eb664beab0a8e3ccb11ef1c4202e92fdeb1b534be",
@@ -2460,5 +2460,31 @@
     "shared-core/src/commonTest/kotlin/com/flarego/core/WriteAuthorityTest.kt": "3760e141bcab901c6192580ff57038031e3d2d3e5b7169212ed305925f97c196",
     "shared-core/src/commonTest/kotlin/com/flarego/core/ZoneManagementTest.kt": "9545de075b59864d674b04e6ccb35a87927e1a6f1ada244beb780352cba1055f",
     "shared-core/src/commonTest/kotlin/com/flarego/core/ZoneSettingsTest.kt": "dba21c3395bde26d0a401c5593f5f08c0ea1f8caa1cf72049515fc6ae10953bf"
+  },
+  "main_integration": {
+    "feature_commit": "fbbb954434191e19f8aaa5c94c9ce1ccbff18489",
+    "base": "8371605815e5a20c95089e0c4cfe0bf7c8b401ee",
+    "method": "fast-forward",
+    "target": "origin/main",
+    "local_main_core": 706,
+    "local_main_platform": 91,
+    "local_main_lint_errors": 0,
+    "app_lint_warnings": 3,
+    "platform_lint_warnings": 4,
+    "device354_reexecuted_this_integration": false,
+    "report": "docs/cloudflare-audit/p2-main-integration-verification-2026-10-17.md",
+    "cloud_accepted": false,
+    "remote_success_not_predeclared": true,
+    "ci_schema_loading_fix_commit": "927fdace0b1c3d4212b9ab4a7f225cc4d5be8eb3",
+    "final_coverage_tests": 6,
+    "python_audit_tests": 349,
+    "python_ci_contract_tests": 10,
+    "android_clean_schema_contract": {
+      "red_tests": 1,
+      "red_failed": 1,
+      "green_tests": 1,
+      "green_failed": 0,
+      "actual_public_download_sha_verified": true
+    }
   }
 }

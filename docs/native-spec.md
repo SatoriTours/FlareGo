@@ -1,21 +1,21 @@
 # FlareGo 原生实现规格
 
-> 2026-10-17 恢复批次：P2 已恢复到独立未提交分支并完成本地验证。706 core、91 平台项通过；354 个设备方法分轮均有 PASS，原 330 项轮次的 4 个失败及后续复验原样保留。真实云与付费资格未验收，主线尚未合入。见 [恢复验收报告](cloudflare-audit/p2-recovery-verification-2026-10-17.md)。
+> 2026-10-17 主线集成：P2 功能提交 `fbbb954` 已本地合入 `main`；合并后706 core、91平台项及Debug／lint通过。354个设备方法分轮证据与原失败记录保留，真实云和付费资格未验收。见[主线集成验证](cloudflare-audit/p2-main-integration-verification-2026-10-17.md)。
 
 
 **历史主线集成（2026-10-16）：**P1 九项已有实现，T6–9 集中提交 `f8840c2` 已本地合入 `main`，按用户授权推送 GitHub；恢复源码 core 285／平台 82／原生 49 项及 Debug／lint 通过。当前调用 16 项、真实云资格 0；P2 未开始。见 [主线集成验收](cloudflare-audit/p1-integration-verification-2026-10-16.md)。
-**当前 P2 工作区（2026-10-17，未提交）：**54 候选端点已有 typed 产品 handler、独立预览确认与恢复路径，并通过五 typed ports 接入原唯一 AppOperationRuntime。P1 union 为65；独立 authority aux4 后实际 registry 为69（39 READ／30 WRITE），由运行中的 registry 核对，不以源码行数统计。当前覆盖证据见 [P2 验证](cloudflare-audit/p2-verification.md) 与 [机器映射](cloudflare-audit/p2-runtime-support-2026-10-17.json)。恢复批次 core 706／平台 91、Debug、lint、Python 349＋10 已通过；354 设备方法分轮通过。源码尚未提交，真实云与付费未验收。下方有明确日期的 P1／首版结论保留其历史含义。
+**P2 主线集成（2026-10-17）：**54 候选端点已有 typed 产品 handler、独立预览确认与恢复路径，并通过五 typed ports 接入原唯一 AppOperationRuntime。P1 union 为65；独立 authority aux4 后实际 registry 为69（39 READ／30 WRITE），由运行中的 registry 核对，不以源码行数统计。当前覆盖证据见 [P2 验证](cloudflare-audit/p2-verification.md) 与 [机器映射](cloudflare-audit/p2-runtime-support-2026-10-17.json)。恢复批次 core 706／平台 91、Debug、lint、Python 349＋10 已通过；354 设备方法分轮通过。源码已提交并本地合入main，真实云与付费未验收。下方有明确日期的 P1／首版结论保留其历史含义。
 
 
 首版基线：2026-10-15，源码 `98cc0c9`；当前 P1 集成状态以上方 2026-10-16 记录为准。本文描述当前 Android 入口；首版及后续扩展的实现／验收证据见 [开发进度](development-progress.md)。长期设计和模拟流程不自动计为已实现产品。
 
 沿用 dreamtools 的语言与工程技术：Kotlin 2.3.20、Compose Multiplatform 1.10.1、AGP 9.0.1、Gradle 9.1.0、SQLDelight 2.3.2。只参考技术栈，不修改或复制 dreamtools 的业务代码。Android 8.0 / API 26 起，compile / target SDK 36，JDK 17。
 
-## P2 当前功能分支（2026-10-17）
+## P2 主线功能（2026-10-17）
 
-当前未提交的功能分支已接入 Zone 生命周期、21 类 DNS 表单与差量写入、批量操作、BIND 导入导出、扫描审核与 DNS Settings、DNSSEC、20 项受控站点设置、Universal SSL 和基础清缓存。54 项候选端点均保留在覆盖分母中；生产手写注册表含与 P1 合集的 65 项及独立 4 项权限自省读取。详情见 [P2 验证记录](cloudflare-audit/p2-verification.md)。
+主线现已接入 Zone 生命周期、21 类 DNS 表单与差量写入、批量操作、BIND 导入导出、扫描审核与 DNS Settings、DNSSEC、20 项受控站点设置、Universal SSL 和基础清缓存。54 项候选端点均保留在覆盖分母中；生产手写注册表含与 P1 合集的 65 项及独立 4 项权限自省读取。详情见 [P2 验证记录](cloudflare-audit/p2-verification.md)。
 
-真实权限只使用当前凭据与供应商信息验证；未知权限或资格保持只读。演示功能使用同一任务流程并隔离真实凭据和云请求。导入结果未知时禁止重发；扫描与缓存请求受理不表示全球完成。DNSSEC 注册商 DS 配置与付费资格未做真实云验收。当前 Debug 构建与 lint 通过，706 core／91 平台项通过；354 个设备方法分轮均有 PASS，不能称单轮全绿。下文带日期的 P0/P1 状态为历史记录，主线未因本批次自动更新。
+真实权限只使用当前凭据与供应商信息验证；未知权限或资格保持只读。演示功能使用同一任务流程并隔离真实凭据和云请求。导入结果未知时禁止重发；扫描与缓存请求受理不表示全球完成。DNSSEC 注册商 DS 配置与付费资格未做真实云验收。当前 Debug 构建与 lint 通过，706 core／91 平台项通过；354 个设备方法分轮均有 PASS，不能称单轮全绿。下文带日期的 P0/P1 状态为历史记录，本轮主线集成另按日期记录。
 
 ## 首版与 P1 已有范围（历史，见日期）
 

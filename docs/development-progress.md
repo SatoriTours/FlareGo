@@ -1,15 +1,19 @@
 # FlareGo 开发进度与证据
 
-> 2026-10-17 恢复批次：P2 已恢复到独立未提交分支并完成本地验证。706 core、91 平台项通过；354 个设备方法分轮均有 PASS，原 330 项轮次的 4 个失败及后续复验原样保留。真实云与付费资格未验收，主线尚未合入。见 [恢复验收报告](cloudflare-audit/p2-recovery-verification-2026-10-17.md)。
+> 2026-10-17 主线集成：P2 功能提交 `fbbb954` 已本地合入 `main`；合并后706 core、91平台项及Debug／lint通过。354个设备方法分轮证据与原失败记录保留，真实云和付费资格未验收。见[主线集成验证](cloudflare-audit/p2-main-integration-verification-2026-10-17.md)。
 
 
 核对日期：2026-10-16。P1 源码提交：`f8840c22b4ecdde0858b7f7ae5c7af64dd2db01a`，已合入 `main`；本次用户授权推送 GitHub。集成与恢复证据见 [主线集成验收](cloudflare-audit/p1-integration-verification-2026-10-16.md)。
 
-## 后续验收收尾（2026-10-17）
+## P2 主线集成（2026-10-17）
+
+用户授权提交、合并与推送；功能提交`fbbb954`已快进合入main。实际main完整core706／平台91及Debug／lint通过；远端以推送后回执为准，不创建Tag或Release。先前恢复阶段“未提交”记录仍保留历史含义。见[集成验证](cloudflare-audit/p2-main-integration-verification-2026-10-17.md)。
+
+## 集成前验收收尾（历史检查点，2026-10-17）
 
 恢复工作区移除后，已从独立备份逐文件恢复到`fix/cloudflare-p2-final-validation`。新跑完整core706／平台91及Debug／lint通过，原Zone13项和有界20次native交互诊断通过；一次历史缺节点原因仍未确定，不声明稳定性修复。没有产品或永久测试修改；源码未提交／合并／推送，主线未变化。见[本轮记录](cloudflare-audit/p2-final-followup-2026-10-17.md)。
 
-## 当前 P2 状态（2026-10-17，未提交恢复分支）
+## P2 恢复状态（集成前检查点，2026-10-17）
 
 当前分支尚未提交或合并。T1–T9 的 typed handler、表单、预览确认与唯一 runtime/平台接线已完成各阶段本地测试；T10 的本地覆盖核对、独立审查和恢复验证已完成。真实云资格、付费套餐与远端变更验收仍为 0，不从模拟权限或读能力推断写授权。
 
