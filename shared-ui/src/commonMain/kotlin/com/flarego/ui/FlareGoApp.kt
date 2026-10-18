@@ -78,6 +78,7 @@ fun FlareGoApp(
     management: com.flarego.core.application.management.CloudflareManagement? = null,
     panelPorts: com.flarego.ui.management.ManagementPanelPorts? = null,
     panelContext: com.flarego.ui.management.ManagementPanelContext? = null,
+    r2Browser: com.flarego.ui.r2.R2Browser? = null,
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
@@ -157,6 +158,7 @@ fun FlareGoApp(
     val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null
     val searchEnabled =
         activeModule == null && state.selected != null &&
+            !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
     val dismiss = {
         if (dialog is DialogState.Connect) connectionDraft.clear()
@@ -371,7 +373,7 @@ fun FlareGoApp(
                                     }) {
                                         Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
                                     }
-                                Page.RESOURCES ->
+                                Page.RESOURCES -> if (r2Browser == null || state.resourceKind != ResourceKind.R2)
                                     IconButton(onClick = { dialog = DialogState.Create }) {
                                         Icon(Icons.Default.Add, "创建资源")
                                     }
@@ -536,7 +538,8 @@ fun FlareGoApp(
                                 DomainsScreen(state, query, controller::openDomain)
                             }
                             Page.RESOURCES ->
-                                ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode)
+                                ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
+                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account) }) })
                             Page.DNS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->
                                     if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {

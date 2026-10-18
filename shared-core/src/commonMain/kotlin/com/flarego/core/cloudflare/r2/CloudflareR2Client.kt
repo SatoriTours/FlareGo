@@ -50,6 +50,8 @@ import com.flarego.core.ports.R2ObjectSession
 import com.flarego.core.ports.R2Session
 import com.flarego.core.ports.TransferPort
 import kotlinx.coroutines.CancellationException
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -71,6 +73,9 @@ class CloudflareR2Client(
     private val connection: Connection,
     private val gateway: CloudflareGateway,
     private val transfers: TransferPort,
+    // Trusted integration seam. AuthorizedR2Session installs a proof-bound final guard;
+    // raw fixture clients intentionally retain their typed-transport-only semantics.
+    private val beforeMutation: () -> Unit = {},
 ) : R2Session {
 
     override suspend fun listBuckets(account: AccountScope, page: PageRequest): CloudPage<R2BucketDocument> {
@@ -155,7 +160,9 @@ class CloudflareR2Client(
             } catch (_: Exception) {
                 throw objectIoFailure()
             }
-        if (head.status !in 200..299) {
+        // This path requests the complete object without Range. Accepted/no-content or
+        // partial-content responses must never publish an empty/truncated user file.
+        if (head.status != 200) {
             throw CloudFailure(
                 when (head.status) {
                     403 -> CloudFailureCode.PERMISSION_REQUIRED
@@ -181,7 +188,7 @@ class CloudflareR2Client(
         contentType: String?,
         contentFingerprint: String,
     ): R2ObjectEntry {
-        var handedToTransport = false
+        val owned = R2OwnedSource(source)
         try {
             val result =
                 performObject(
@@ -189,17 +196,16 @@ class CloudflareR2Client(
                         target.scope,
                         target.bucket,
                         target.key,
-                        { source },
+                        { owned },
                         length,
                         contentType,
                         contentFingerprint,
                     ),
-                ) { handedToTransport = true }
+                ) {}
             return result.details ?: throw unknownResult()
         } finally {
-            // The transport owns the source once the request is really sent; before that,
-            // the caller's caller still owns it and a validation failure must not leak it.
-            if (!handedToTransport) runCatching { source.close() }
+            // Idempotent wrapper: pre-send rejection and transport cleanup share one owner.
+            owned.close()
         }
     }
 
@@ -267,33 +273,41 @@ class CloudflareR2Client(
             }
         val operation = r2ObjectWriteKey(write)
         requireRegistered(operation, shape)
-        val request =
-            when (write) {
-                is R2ObjectWrite.Upload ->
-                    shape.copy(payload = HttpBody.Stream(write.source(), write.length, write.contentType ?: DEFAULT_OBJECT_CONTENT_TYPE))
-                is R2ObjectWrite.BulkDelete ->
-                    shape.copy(payload = HttpBody.Text(JsonArray(keys.map(::JsonPrimitive)).toString(), "application/json; charset=utf-8"))
-                is R2ObjectWrite.Delete -> shape
+        var owned: R2OwnedSource? = null
+        try {
+            val request =
+                when (write) {
+                    is R2ObjectWrite.Upload -> {
+                        val type = write.contentType ?: DEFAULT_OBJECT_CONTENT_TYPE
+                        HttpBody.Text("", type) // Validate media type before opening a file.
+                        val source = R2OwnedSource(write.source()).also { owned = it }
+                        shape.copy(payload = HttpBody.Stream(source, write.length, type))
+                    }
+                    is R2ObjectWrite.BulkDelete ->
+                        shape.copy(payload = HttpBody.Text(JsonArray(keys.map(::JsonPrimitive)).toString(), "application/json; charset=utf-8"))
+                    is R2ObjectWrite.Delete -> shape
+                }
+            beforeSend(null)
+            beforeMutation()
+            val response = send(operation, request)
+            return when (write) {
+                is R2ObjectWrite.Upload -> {
+                    val root = envelope(response)
+                    val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
+                    val entry = decodeUploadedObject(row)
+                    if (entry.key != key) throw invalidResponse(true)
+                    ObjectResult(entry, ExecutionReceipt.Completed())
+                }
+                is R2ObjectWrite.Delete -> {
+                    val root = envelope(response)
+                    val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
+                    // The provider echoes the key it deleted; a mismatch is not this request's result.
+                    if (row.optionalText("key") != key) throw invalidResponse(true)
+                    ObjectResult(null, ExecutionReceipt.Completed())
+                }
+                is R2ObjectWrite.BulkDelete -> bulkDeleteResult(response, keys)
             }
-        beforeSend(null)
-        val response = send(operation, request)
-        return when (write) {
-            is R2ObjectWrite.Upload -> {
-                val root = envelope(response)
-                val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
-                val entry = decodeUploadedObject(row)
-                if (entry.key != key) throw invalidResponse(true)
-                ObjectResult(entry, ExecutionReceipt.Completed())
-            }
-            is R2ObjectWrite.Delete -> {
-                val root = envelope(response)
-                val row = root["result"] as? JsonObject ?: throw invalidResponse(true)
-                // The provider echoes the key it deleted; a mismatch is not this request's result.
-                if (row.optionalText("key") != key) throw invalidResponse(true)
-                ObjectResult(null, ExecutionReceipt.Completed())
-            }
-            is R2ObjectWrite.BulkDelete -> bulkDeleteResult(response, keys.size)
-        }
+        } finally { owned?.close() }
     }
 
     /**
@@ -301,19 +315,21 @@ class CloudflareR2Client(
      * the keys the provider did not report as failed were still deleted, and the true set
      * needs a read-back.
      */
-    private fun bulkDeleteResult(response: HttpResponse, requested: Int): ObjectResult {
+    private fun bulkDeleteResult(response: HttpResponse, keys: List<String>): ObjectResult {
+        val requested = keys.size
         val root = ResponseDecoders.envelope(response, writing = true)
         val success = (root["success"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: throw invalidResponse(true)
         val errors = root["errors"] as? JsonArray ?: throw invalidResponse(true)
         val echoed = root["result"] as? JsonArray
-        val confirmed = echoed?.let { rows ->
+        val confirmedKeys = echoed?.let { rows ->
             rows.map { row -> (row as? JsonObject) ?: throw invalidResponse(true) }
                 .map { row -> row.optionalText("key") ?: throw invalidResponse(true) }
-                .size
         }
+        val confirmed = confirmedKeys?.size
+        if (confirmedKeys != null && (confirmedKeys.toSet().size != confirmedKeys.size || !keys.containsAll(confirmedKeys))) throw invalidResponse(true)
         if (success) {
             // Every requested key must be echoed back, or this is not a complete success.
-            if (confirmed != requested) throw invalidResponse(true)
+            if (confirmed != requested || confirmedKeys?.toSet() != keys.toSet() || errors.isNotEmpty()) throw invalidResponse(true)
             return ObjectResult(
                 details = null,
                 receipt = ExecutionReceipt.Completed(),
@@ -390,6 +406,7 @@ class CloudflareR2Client(
             }
         // Everything that can suspend is before this guard.
         beforeSend(observed)
+        beforeMutation()
         val response = send(r2BucketWriteKey(write), request)
         val root = envelope(response)
         if (response.status == STATUS_ACCEPTED) return Result(null, ExecutionReceipt.Accepted())
@@ -480,6 +497,16 @@ private fun JsonObject.optionalText(key: String): String? =
 
 private fun headerValue(headers: Map<String, List<String>>, name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.singleOrNull()
+
+/** One ownership latch across caller, final-guard rejection and real transport teardown. */
+@OptIn(ExperimentalAtomicApi::class)
+private class R2OwnedSource(source: ByteSource) : ByteSource {
+    private val current = AtomicReference<ByteSource?>(source)
+    override fun read(buffer: ByteArray) = (current.load() ?: throw objectIoFailure()).read(buffer)
+    override fun close() {
+        try { current.exchange(null)?.close() } catch (_: Exception) { throw objectIoFailure() }
+    }
+}
 
 private fun objectIoFailure() =
     CloudFailure(CloudFailureCode.UNAVAILABLE, "对象传输没有完成，请检查网络后重试；临时文件不会被当作结果")

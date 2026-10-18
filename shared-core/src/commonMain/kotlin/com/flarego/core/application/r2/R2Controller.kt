@@ -27,6 +27,7 @@ import com.flarego.core.model.ResourceRef
 import com.flarego.core.model.ScopeGuard
 import com.flarego.core.model.TaskState
 import com.flarego.core.model.invalidInputFailure
+import com.flarego.core.model.freezeR2ObjectWrite
 import com.flarego.core.model.r2BucketWriteKey
 import com.flarego.core.model.r2ObjectWriteKey
 import com.flarego.core.model.scopeMismatchFailure
@@ -67,6 +68,7 @@ class R2Controller(
     private val fingerprint: FingerprintPort,
     private val store: OperationStore,
     private val storeDispatcher: CoroutineDispatcher,
+    private val selectionEpoch: () -> Long = { 0L },
     private val session: suspend (AccountScope) -> R2Session,
 ) {
     private data class Prepared(
@@ -139,7 +141,7 @@ class R2Controller(
         requireNoUnsettled(p.write, p.plan.id)
         requireBound(p, write, confirmed)
         val guard = { requireBound(p, write, confirmed) }
-        return coordinator.executeGuarded(confirmed, guard) { composed ->
+        return coordinator.executeGrouped(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.name)) { composed ->
             // Session/credential acquisition can suspend; it must finish before final checks.
             val api = session(p.write.scope)
             guard()
@@ -194,7 +196,11 @@ class R2Controller(
                         }
                         else -> {
                             val actual = ownedSnapshot(api.getBucket(task.scope, reference.externalId), task.scope, reference.externalId)
-                            matchCandidate(task, observedState(actual))
+                            val observed = observedState(actual)
+                            val candidates = if (task.actionKey in setOf("r2-create-bucket", "r2-create-bucket-by-name"))
+                                listOf(observed, JsonObject(observed.filterKeys { it != "storageClass" })) else listOf(observed)
+                            candidates.map { matchCandidate(task, it) }.firstOrNull { it is Reconciliation.Matched }
+                                ?: Reconciliation.StillUnknown
                         }
                     }
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -221,7 +227,9 @@ class R2Controller(
      * a file that changed after the preview from riding an earlier approval. A single delete
      * additionally requires the user to type the exact key.
      */
-    suspend fun prepareObject(write: R2ObjectWrite): ChangePlan {
+    suspend fun prepareObject(write: R2ObjectWrite): ChangePlan = prepareFrozenObject(freezeR2ObjectWrite(write))
+
+    private suspend fun prepareFrozenObject(write: R2ObjectWrite): ChangePlan {
         validateObjectWrite(write)
         val live = requireCurrentObject(write)
         requireNoUnsettledObject(write)
@@ -260,7 +268,7 @@ class R2Controller(
         requireNoUnsettledObject(p.write, p.plan.id)
         requireBoundObject(p, write, confirmed)
         val guard = { requireBoundObject(p, write, confirmed) }
-        return coordinator.executeGuarded(confirmed, guard) { composed ->
+        return coordinator.executeGrouped(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.bucket)) { composed ->
             val api = session(p.write.scope)
             guard()
             requireNoUnsettledObject(p.write, p.plan.id)
@@ -308,16 +316,12 @@ class R2Controller(
                             if (objectPresent(api, task.scope, bucket, key)) {
                                 Reconciliation.StillUnknown
                             } else {
-                                matchCandidate(task, buildJsonObject { put("bucket", bucket); put("deleted", true) })
+                                matchCandidate(task, buildJsonObject { put("bucket", bucket); put("key", key); put("deleted", true) })
                             }
                         }
-                        "r2-put-object" -> {
-                            if (key != null && objectPresent(api, task.scope, bucket, key)) {
-                                matchCandidate(task, buildJsonObject { put("bucket", bucket); put("key", key) })
-                            } else {
-                                Reconciliation.StillUnknown
-                            }
-                        }
+                        // Presence alone could be an older object with the same key. There is
+                        // no trustworthy persisted content receipt after recovery; never claim it.
+                        "r2-put-object" -> Reconciliation.StillUnknown
                         else -> Reconciliation.StillUnknown
                     }
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -559,6 +563,7 @@ class R2Controller(
     private fun semantic(write: R2BucketWrite): JsonObject =
         buildJsonObject {
             put("action", r2BucketWriteKey(write))
+            put("selectionEpoch", selectionEpoch())
             put("scope", scopeFields(write.scope))
             when (write) {
                 is R2BucketWrite.Create -> {
@@ -588,7 +593,10 @@ class R2Controller(
         buildJsonObject {
             put("scope", scopeFields(write.scope))
             when (write) {
-                is R2BucketWrite.Create -> put("name", write.input.name)
+                is R2BucketWrite.Create -> {
+                    put("name", write.input.name)
+                    write.input.storageClass?.let { put("storageClass", it) }
+                }
                 is R2BucketWrite.CreateByName -> {
                     put("name", write.name)
                     write.storageClass?.let { put("storageClass", it) }
@@ -606,6 +614,7 @@ class R2Controller(
     private fun objectSemantic(write: R2ObjectWrite): JsonObject =
         buildJsonObject {
             put("action", r2ObjectWriteKey(write))
+            put("selectionEpoch", selectionEpoch())
             put("scope", scopeFields(write.scope))
             put("bucket", write.bucket)
             when (write) {
@@ -654,13 +663,13 @@ class R2Controller(
         val impact =
             when (write) {
                 is R2BucketWrite.Create, is R2BucketWrite.CreateByName ->
-                    "在所选账号创建 R2 桶；桶名全局唯一，创建后的位置与 jurisdiction 不可更改"
+                    "在所选账号创建 R2 桶；locationHint 只是位置提示，不保证精确数据中心"
 
                 is R2BucketWrite.PatchStorageClass ->
                     "变更该桶**新上传对象**的默认存储等级；已有对象的存储等级不变，单次上传仍可覆盖"
 
                 is R2BucketWrite.Delete ->
-                    "删除该桶及其全部对象与配置。供应商要求桶为空（无对象、无未完成的分片上传、无事件通知规则），否则会失败"
+                    "删除空桶及其配置；不会自动清空对象。供应商要求无对象、无未完成的分片上传、无事件通知规则，否则会失败"
             }
         return R2ChangePreview(
             write.scope,
@@ -717,6 +726,7 @@ class R2Controller(
                 TaskState.PARTIAL,
                 TaskState.RECONCILING,
                 TaskState.ACCEPTED,
+                TaskState.ACTION_REQUIRED,
             )
     }
 }

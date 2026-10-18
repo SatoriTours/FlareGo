@@ -259,6 +259,45 @@ class ExtendedManagementAppIntegrationTest {
         assertEquals(0,writes.get());assertNull(p.state.value.lease)
     }
 
+    @Test fun documentCancellationBetweenPresentationDisposeAndRebindIsNotLost() {
+        val (m,z)=create(true)
+        val app=InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        val owner=ManagementPlatformOwner.forApplication(app);val borrower=owner.borrow()
+        val connection=m.controller.state.value.selected!!
+        val actual=ExtendedAppContext(ManagementPanelContext(z,m.controller.operationEpoch),connection,
+            checkNotNull(owner.currentCredentialStamp(connection)))
+        var held:ExtendedManagementAppAdapter?=null
+        try {
+            compose.runOnIdle {
+                val adapter=ExtendedManagementAppAdapter(m.viewModelScope,m.extendedManagement,{actual},{owner},{borrower},{}).also { held=it }
+                val port=adapter.ports.files!!
+                for(kind in DnsDocumentKind.entries) for(cancelBeforeDispose in listOf(false,true)) {
+                    val old=checkNotNull(port.bind(actual.panel))
+                    port.onIntent(old,if(kind==DnsDocumentKind.IMPORT)DnsFilesPanelIntent.SelectImportFile(z)
+                        else DnsFilesPanelIntent.SelectExportTarget(z))
+                    val stamp=checkNotNull(adapter.documentRequestStamp())
+                    if(cancelBeforeDispose)adapter.documentCancelled(kind)
+                    port.clear(old) // Composition disposal while the OS picker is still in front.
+                    assertEquals(stamp,adapter.documentRequestStamp())
+                    if(!cancelBeforeDispose)adapter.documentCancelled(kind)
+                    val fresh=checkNotNull(port.bind(actual.panel))
+                    assertNotSame(old,fresh)
+                    if(kind==DnsDocumentKind.IMPORT)assertEquals(DnsFilesSelection.CANCELLED,port.state.value.state.selection)
+                    else assertEquals(DnsFilesExportStage.CANCELLED,port.state.value.state.exportStage)
+                    assertNull(port.state.value.state.prepared)
+                    adapter.ports.onRouteExit(fresh)
+                    val next=checkNotNull(port.bind(actual.panel))
+                    assertEquals(DnsFilesSelection.NONE,port.state.value.state.selection)
+                    assertEquals(DnsFilesExportStage.IDLE,port.state.value.state.exportStage)
+                    port.clear(next)
+                }
+            }
+        } finally {
+            compose.runOnIdle { held?.close() }
+            runBlocking { owner.releaseBorrower(borrower) }
+        }
+    }
+
     @Test fun offMainPickerCurrentPredicateIsPureAndMainOwnsWithdrawal() {
         val (m,z)=create(true)
         val app=InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application

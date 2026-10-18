@@ -8,8 +8,9 @@ internal class AuthorityDecodeFailure(val reason: WriteAuthorityReason) : Except
 internal data class AuthorityIdentity(val id: String, val status: String, val notBefore: Long?, val expires: Long?)
 internal data class AuthorityToken(val identity: AuthorityIdentity, val policies: List<AuthorityPolicy>)
 internal data class AuthorityPolicy(val deny: Boolean, val groups: Set<String>, val resources: List<AuthorityResource>)
-internal data class AuthorityResource(val zone: String? = null, val account: String? = null) {
-    fun matches(scope: ZoneScope) = (zone == null || zone == scope.zoneId) && (account == null || account == scope.account.accountId)
+internal data class AuthorityResource(val zone: String? = null, val account: String? = null,
+    val r2: Boolean = false, val bucket: String? = null, val jurisdiction: String? = null) {
+    fun matches(scope: ZoneScope) = !r2 && (zone == null || zone == scope.zoneId) && (account == null || account == scope.account.accountId)
 }
 internal data class AuthorityGroup(val id: String, val scopes: Set<String>)
 internal data class AuthorityCatalog(val groups: Map<String, AuthorityGroup>, val unsupportedScopes: Boolean = false)
@@ -65,7 +66,8 @@ internal object TokenPolicyEvaluation {
         if (row.keys.any { it !in setOf("id", "status", "not_before", "expires_on") }) fail()
         return identity(row)
     }
-    fun token(row: JsonObject, verified: AuthorityIdentity): AuthorityToken {
+    fun token(row: JsonObject, verified: AuthorityIdentity,
+              resourceParser: ((JsonObject) -> List<AuthorityResource>)? = null): AuthorityToken {
         val display = setOf("name", "creator_email_at_creation", "issued_on", "last_used_on", "modified_on", "provisioner_id", "provisioner_type")
         if (row.keys.any { it !in display + setOf("id", "status", "not_before", "expires_on", "condition", "policies") }) fail(WriteAuthorityReason.UNKNOWN_POLICY)
         for (name in display) if (row.containsKey(name)) {
@@ -110,7 +112,8 @@ internal object TokenPolicyEvaluation {
             val rawResources = policy["resources"] as? JsonObject ?: fail(WriteAuthorityReason.UNKNOWN_POLICY)
             resourceCount += rawResources.size
             if (resourceCount > 4096) fail(WriteAuthorityReason.UNKNOWN_POLICY)
-            val resources = rawResources.map { (key, entry) ->
+            // Product-specific parsing never weakens the default Zone resource grammar.
+            val resources = resourceParser?.invoke(rawResources) ?: rawResources.map { (key, entry) ->
                 when {
                     key == "$ZONE_SCOPE.*" && entry == JsonPrimitive("*") -> AuthorityResource()
                     key.startsWith("$ZONE_SCOPE.") && entry == JsonPrimitive("*") -> {
@@ -129,7 +132,7 @@ internal object TokenPolicyEvaluation {
             AuthorityPolicy(effect == "deny", ids.toSet(), resources)
         })
     }
-    fun catalog(root: JsonObject): AuthorityCatalog {
+    fun catalog(root: JsonObject, acceptedLabels: Set<String> = labels): AuthorityCatalog {
         val rows = root["result"] as? JsonArray ?: fail(WriteAuthorityReason.CATALOG_AMBIGUOUS)
         if (rows.size > 4096) fail(WriteAuthorityReason.CATALOG_AMBIGUOUS)
         root["result_info"]?.let { value ->
@@ -151,7 +154,7 @@ internal object TokenPolicyEvaluation {
             val scopeNames = scopes.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: fail(WriteAuthorityReason.CATALOG_AMBIGUOUS) }.toSet()
             if (scopeNames.size != scopes.size) fail(WriteAuthorityReason.CATALOG_AMBIGUOUS)
             if (scopeNames.any { it !in setOf("com.cloudflare.api.user", "com.cloudflare.api.account", ZONE_SCOPE, "com.cloudflare.edge.r2.bucket") }) unsupportedScopes = true
-            if (name in labels) {
+            if (name in acceptedLabels) {
                 bound[name] = AuthorityGroup(id, scopeNames)
             }
         }

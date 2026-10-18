@@ -167,6 +167,18 @@ class R2ObjectTest {
     }
 
     @Test
+    fun acceptedEmptyOrPartialDownloadsCannotClaimACompleteObject() = runTest {
+        envelope = { ok(bucketJson()) }
+        for (status in listOf(202, 204, 206)) {
+            transfer = { _, _ -> HttpResponseHead(status, emptyMap(), 0) }
+            val failure = assertFailsWith<CloudFailure> {
+                client().downloadObject(R2ObjectTarget(account, bucket, "a.txt"), Sink())
+            }
+            assertEquals(CloudFailureCode.INVALID_RESPONSE, failure.code)
+        }
+    }
+
+    @Test
     fun aFailedDownloadStatusNeverClaimsSuccess() = runTest {
         envelope = { ok(bucketJson()) }
         transfer = { _, _ -> HttpResponseHead(404, emptyMap(), 0) }

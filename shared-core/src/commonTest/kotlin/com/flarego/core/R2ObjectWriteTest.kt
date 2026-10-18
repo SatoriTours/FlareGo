@@ -239,6 +239,15 @@ class R2ObjectWriteTest {
     }
 
     @Test
+    fun aSameCountEchoOfDifferentOrDuplicateKeysIsNotOurSuccessfulBatch() = runTest {
+        for (echo in listOf("""[{"key":"other.txt"},{"key":"b.txt"}]""", """[{"key":"a.txt"},{"key":"a.txt"}]""")) {
+            respond = { request -> if (request.method == "GET") ok(bucketJson()) else ok(echo) }
+            val receipt = client().writeObject(R2ObjectWrite.BulkDelete(account, bucket, listOf("a.txt", "b.txt"))) {}
+            assertIs<ExecutionReceipt.Unknown>(receipt)
+        }
+    }
+
+    @Test
     fun aSuccessThatDoesNotEchoEveryKeyIsNotACompleteBulkDelete() = runTest {
         respond = { request ->
             if (request.method == "GET") ok(bucketJson()) else ok("""{"key":"a.txt"}""")

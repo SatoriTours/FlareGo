@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flarego.core.application.AppController
 import com.flarego.core.application.operations.*
+import com.flarego.core.application.r2.*
 import com.flarego.core.cloudflare.inventory.CloudflareDirectoryClient
 import com.flarego.core.cloudflare.billing.CloudflareBillingClient
 import com.flarego.core.cloudflare.identity.CloudflareCapabilityClient
@@ -107,6 +108,45 @@ class FlareGoViewModel constructor(
                 AuthorizedDnsFilesDependencies(bundle.transfers,managementPlatformOwner.importLimiter,operationDispatcher)).services()
         },managementPlatform=ManagementPlatformPorts(managementPlatformOwner.files,operationDispatcher))
     val management get()=operationRuntime.management
+    private fun actualR2Context(): com.flarego.ui.r2.R2BrowserContext? {
+        if (!::controllerRef.isInitialized) return null
+        val state = controllerRef.state.value
+        if (state.page != Page.RESOURCES || state.resourceKind != ResourceKind.R2) return null
+        val selected = state.selected?.takeIf { it in state.connections } ?: return null
+        val stamp = managementPlatformOwner.currentCredentialStamp(selected) ?: return null
+        return com.flarego.ui.r2.R2BrowserContext(selected, stamp.revision, controllerRef.operationEpoch)
+    }
+    private suspend fun r2SessionFor(connection: Connection, expectedRevision: Long? = null): R2Session {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 深度管理尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedR2Session(connection, bundle.gateway, bundle.transfers, bundle.r2Issuer)
+    }
+    private val r2Writes: R2WriteRuntime by lazy {
+        R2WriteRuntime(viewModelScope, operationStore, operationDispatcher, AndroidFingerprint(),
+            OperationClock(System::currentTimeMillis), OperationIds { UUID.randomUUID().toString() },
+            actual = { actualR2Context()?.let { R2LiveSelection(it.connection, it.credentialRevision,
+                r2Browser.confirmationEpoch, r2Browser.liveCommand()) } },
+            connections = { if (::controllerRef.isInitialized) controllerRef.state.value.connections else emptyList() },
+            revision = ::credentialRevision,
+            session = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2SessionFor(connection)
+            }, publish = { controllerRef.publishTasks(it) })
+    }
+    val r2Browser: com.flarego.ui.r2.R2Browser by lazy {
+        com.flarego.ui.r2.R2Browser(viewModelScope, ::actualR2Context, r2Writes) { context ->
+            r2SessionFor(context.connection, context.credentialRevision)
+        }
+    }
+    private val r2Documents by lazy { R2DocumentBridge(getApplication(), viewModelScope, r2Browser) }
+    fun takeR2DocumentLaunch(id: Long) = r2Documents.takeLaunch(id)
+    fun onR2DocumentLaunchFailed(kind: com.flarego.ui.r2.R2DocumentKind) = r2Documents.launchFailed(kind)
+    fun onR2DocumentResult(kind: com.flarego.ui.r2.R2DocumentKind, code: Int, data: android.content.Intent?) = r2Documents.result(kind, code, data)
     private fun actualManagementContext():ExtendedAppContext? {
         if(!::controllerRef.isInitialized)return null
         val state=controllerRef.state.value
@@ -209,10 +249,10 @@ class FlareGoViewModel constructor(
     ).also { controllerRef = it; it.bindManagement(operationRuntime.management) }
 
     init {
-        viewModelScope.launch { operationRuntime.recover() }
+        viewModelScope.launch { operationRuntime.recover(); r2Writes.refreshTasks() }
         viewModelScope.launch {
             combine(controller.state,management.zones.state) { _,_ -> Unit }
-                .collect { registerDemoSelection();extendedAdapter.refreshActual();panelContextState.value=actualManagementContext()?.panel }
+                .collect { registerDemoSelection();extendedAdapter.refreshActual();panelContextState.value=actualManagementContext()?.panel;r2Browser.refreshContext() }
         }
     }
     suspend fun reconcileTask(id: String) = operationRuntime.reconcile(id)
@@ -264,6 +304,8 @@ class FlareGoViewModel constructor(
 
     override fun onCleared() {
         extendedAdapter.close()
+        r2Browser.close()
+        r2Documents.close()
         connectionDraft.clear()
         // Application file service remains shared. Claimed jobs release their own capability in finally.
         CoroutineScope(SupervisorJob()+Dispatchers.IO).launch {

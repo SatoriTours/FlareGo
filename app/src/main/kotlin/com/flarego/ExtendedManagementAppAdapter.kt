@@ -43,6 +43,10 @@ class ExtendedManagementAppAdapter internal constructor(
     private var executing:Draft?=null
     private var importFile:ManagedDocumentLease?=null
     private var exportFile:ManagedDocumentLease?=null
+    private data class DocumentCancellation(val stamp:DnsDocumentRequestStamp,val kind:DnsDocumentKind)
+    // ActivityResult can arrive while the presentation is disposed. Retain only the
+    // non-executable result, scoped to the exact still-live route/document revision.
+    private var documentCancellation:DocumentCancellation?=null
     private data class ExportCompletion(val actual:ExtendedAppContext,val route:Long,val target:DnsExportTarget,val result:DnsExportResult)
     // App-job observation only: no executable input, grant, confirmation or persisted success inference.
     private var exportCompletion:ExportCompletion?=null
@@ -105,10 +109,20 @@ class ExtendedManagementAppAdapter internal constructor(
         val lease=Lease(context,now,module,routeNonce);active=lease;publishAdmission()
         withdraw()
         when(module) {
-            ManagementPanelModule.FILES -> put(lease,DnsFilesPanelState(scope=context.scope,epoch=context.currentEpoch,
-                file=importFile?.file,selection=if(importFile!=null)DnsFilesSelection.READY else DnsFilesSelection.NONE,
-                exportTarget=exportFile?.target,exportStage=if(exportFile!=null)DnsFilesExportStage.READY else DnsFilesExportStage.IDLE,
-                proxied=null,revision=revision,editorRevision=editorRevision))
+            ManagementPanelModule.FILES -> {
+                val cancelled=documentCancellation?.takeIf { it.stamp==documentRequestStamp() }?.kind
+                put(lease,DnsFilesPanelState(scope=context.scope,epoch=context.currentEpoch,
+                    file=importFile?.file,selection=when {
+                        cancelled==DnsDocumentKind.IMPORT -> DnsFilesSelection.CANCELLED
+                        importFile!=null -> DnsFilesSelection.READY
+                        else -> DnsFilesSelection.NONE
+                    },
+                    exportTarget=exportFile?.target,exportStage=when {
+                        cancelled==DnsDocumentKind.EXPORT -> DnsFilesExportStage.CANCELLED
+                        exportFile!=null -> DnsFilesExportStage.READY
+                        else -> DnsFilesExportStage.IDLE
+                    },proxied=null,revision=revision,editorRevision=editorRevision))
+            }
             ManagementPanelModule.SCAN -> put(lease,DnsScanPanelState(scope=context.scope,epoch=context.currentEpoch,revision=revision,editorRevision=editorRevision))
             ManagementPanelModule.DNS_SETTINGS -> put(lease,DnsZoneSettingsPanelState(scope=context.scope,epoch=context.currentEpoch,revision=revision,editorRevision=editorRevision))
             ManagementPanelModule.DNSSEC -> put(lease,DnssecPanelState(scope=context.scope,revision=revision,editorRevision=editorRevision))
@@ -140,6 +154,7 @@ class ExtendedManagementAppAdapter internal constructor(
     }
     private fun revokeRoute() {
         presentationJob?.cancel();invalidateDraft(true);active=null;withdraw()
+        documentCancellation=null
         routeContext=null;routeModule=null;routeNonce++;documentRevision++;publishAdmission();invalidateDocument()
         releaseLater(importFile);importFile=null;releaseLater(exportFile);exportFile=null;exportCompletion=null
     }
@@ -413,6 +428,7 @@ class ExtendedManagementAppAdapter internal constructor(
         is DnsFilesPanelIntent.Clear -> if(i.scope==l.context.scope)clearPresentation(l,l.module)
     } }
     private fun choose(l:Lease,kind:DnsDocumentKind) {
+        documentCancellation=null
         invalidateDraft();documentRevision++;publishAdmission()
         if(kind==DnsDocumentKind.IMPORT)put(l,files.value.state.copy(selection=DnsFilesSelection.SELECTING,errors=emptyList()))
         else { exportCompletion=null;put(l,files.value.state.copy(exportStage=DnsFilesExportStage.SELECTING,exportResult=null,errors=emptyList())) }
@@ -426,6 +442,7 @@ class ExtendedManagementAppAdapter internal constructor(
     }
     internal fun documentSelected(lease:ManagedDocumentLease,stamp:DnsDocumentRequestStamp) {
         if(documentRequestStamp()!=stamp) { releaseLater(lease);return }
+        documentCancellation=null
         if(lease.file!=null) { releaseLater(importFile);importFile=lease }
         else if(lease.target!=null) { releaseLater(exportFile);exportFile=lease }
         else { releaseLater(lease);return }
@@ -434,10 +451,14 @@ class ExtendedManagementAppAdapter internal constructor(
                 exportTarget=exportFile?.target,exportStage=if(exportFile!=null)DnsFilesExportStage.READY else files.value.state.exportStage))
         }
     }
-    internal fun documentCancelled(kind:DnsDocumentKind) { active?.takeIf { it.module==ManagementPanelModule.FILES && current(it) }?.let { l ->
-        if(kind==DnsDocumentKind.IMPORT)put(l,files.value.state.copy(selection=DnsFilesSelection.CANCELLED))
-        else put(l,files.value.state.copy(exportStage=DnsFilesExportStage.CANCELLED))
-    } }
+    internal fun documentCancelled(kind:DnsDocumentKind) {
+        val stamp=documentRequestStamp() ?: return
+        documentCancellation=DocumentCancellation(stamp,kind)
+        active?.takeIf { it.module==ManagementPanelModule.FILES && current(it) }?.let { l ->
+            if(kind==DnsDocumentKind.IMPORT)put(l,files.value.state.copy(selection=DnsFilesSelection.CANCELLED))
+            else put(l,files.value.state.copy(exportStage=DnsFilesExportStage.CANCELLED))
+        }
+    }
     internal fun documentFailed(kind:DnsDocumentKind,error:Exception) { active?.takeIf { current(it) }?.let { failure(it,error,kind==DnsDocumentKind.EXPORT) } }
     private fun export(l:Lease,target:DnsExportTarget) {
         if(executionJob?.isActive==true)return

@@ -77,6 +77,24 @@ class OperationCoordinator(
         plan: ConfirmedPlan,
         guard: () -> Unit,
         write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): OperationTask = executeAtResource(plan, guard, null, write)
+
+    /** Trusted product grouping; task locators remain unchanged for recovery. */
+    internal suspend fun executeGrouped(
+        plan: ConfirmedPlan,
+        guard: () -> Unit,
+        resourceGroup: ResourceRef,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): OperationTask {
+        if (resourceGroup.scope != plan.plan.scope) throw invalidInputFailure()
+        return executeAtResource(plan, guard, resourceGroup, write)
+    }
+
+    private suspend fun executeAtResource(
+        plan: ConfirmedPlan,
+        guard: () -> Unit,
+        resourceGroup: ResourceRef?,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
     ): OperationTask {
         val admitted = plans.admit(plan) ?: throw invalidInputFailure()
         if (admitted.owner) {
@@ -86,7 +104,7 @@ class OperationCoordinator(
                     // while the write is in flight, so parked waiters can never hang.
                     val result =
                         try {
-                            attempt(admitted.plan, guard, write)
+                            attempt(admitted.plan, guard, resourceGroup, write)
                         } catch (cancelled: CancellationException) {
                             Result.failure(cancelled)
                         } catch (failure: Throwable) {
@@ -109,10 +127,11 @@ class OperationCoordinator(
     private suspend fun attempt(
         plan: ChangePlan,
         guard: () -> Unit,
+        resourceGroup: ResourceRef?,
         write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
     ): Result<OperationTask> =
         try {
-            Result.success(runConfirmed(plan, guard, write))
+            Result.success(runConfirmed(plan, guard, resourceGroup, write))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -122,9 +141,10 @@ class OperationCoordinator(
     private suspend fun runConfirmed(
         confirmed: ChangePlan,
         guard: () -> Unit,
+        resourceGroup: ResourceRef?,
         write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
     ): OperationTask {
-        return resourceLock(confirmed).withLock {
+        return resourceLock(confirmed, resourceGroup).withLock {
             val generation = generationOf(connectionIdOf(confirmed.scope))
             requireAuthorized(confirmed, generation)
             if (storeOnIo { store.get(confirmed.id) } != null) throw invalidInputFailure()
@@ -274,9 +294,9 @@ class OperationCoordinator(
         }
     }
 
-    private fun resourceLock(plan: ChangePlan): Mutex {
+    private fun resourceLock(plan: ChangePlan, resourceGroup: ResourceRef? = null): Mutex {
         val key =
-            plan.resourceRef?.let { "${it.kind}:${it.externalId}:${plan.scope}" }
+            (resourceGroup ?: plan.resourceRef)?.let { "${it.kind}:${it.externalId}:${plan.scope}" }
                 ?: "${plan.actionKey}:${plan.scope}"
         return stableLock(key, metadata = false)
     }

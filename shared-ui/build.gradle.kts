@@ -17,6 +17,10 @@ kotlin {
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
     sourceSets {
         androidMain.dependencies { implementation("androidx.activity:activity-compose:1.13.0") }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+        }
         commonMain.dependencies {
             implementation(project(":shared-core"))
             implementation(compose.runtime)

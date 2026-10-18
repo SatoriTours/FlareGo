@@ -38,6 +38,13 @@ class MainActivity : ComponentActivity() {
     private val exportDocument=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         model.onDocumentResult(DnsDocumentKind.EXPORT,it.resultCode,it.data)
     }
+    // Append launchers to preserve the existing ActivityResult registration order.
+    private val r2Upload = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onR2DocumentResult(com.flarego.ui.r2.R2DocumentKind.UPLOAD, it.resultCode, it.data)
+    }
+    private val r2Download = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onR2DocumentResult(com.flarego.ui.r2.R2DocumentKind.DOWNLOAD, it.resultCode, it.data)
+    }
     override fun onResume() { super.onResume();model.onManagementResume() }
 
     private suspend fun installOrAuthorize(current: FlareGoViewModel) {
@@ -89,6 +96,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
             LaunchedEffect(current) {
+                current.r2Browser.documentRequests.collect { event ->
+                    if (event == null) return@collect
+                    val launch = current.takeR2DocumentLaunch(event.id) ?: return@collect
+                    try {
+                        when (launch.first) {
+                            com.flarego.ui.r2.R2DocumentKind.UPLOAD -> r2Upload.launch(launch.second)
+                            com.flarego.ui.r2.R2DocumentKind.DOWNLOAD -> r2Download.launch(launch.second)
+                        }
+                    } catch (_: Exception) { current.onR2DocumentLaunchFailed(launch.first) }
+                }
+            }
+            LaunchedEffect(current) {
                 if (current.pendingInstall != null && !current.permissionRequestPending)
                     installOrAuthorize(current)
                 // collect, rather than collectLatest/a state-keyed effect: consuming an event must
@@ -135,6 +154,7 @@ class MainActivity : ComponentActivity() {
                 management = current.management,
                 panelPorts = current.panelPorts,
                 panelContext = panelContext,
+                r2Browser = current.r2Browser,
             )
         }
     }

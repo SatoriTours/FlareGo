@@ -17,7 +17,9 @@ import kotlinx.coroutines.*
 /** SAF URIs stay in this app-owned instance. Core receives opaque local references only.
  * Picker/grants remain the caller's responsibility. close/release never deletes an import or committed export. */
 class DnsDocumentFiles(private val context: Context, private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val fingerprint: FingerprintPort = AndroidFingerprint()) : DnsFileStore, AutoCloseable {
+    private val fingerprint: FingerprintPort = AndroidFingerprint(),
+    private val exportMaxBytes: Long = 4L * 1024 * 1024) : DnsFileStore, AutoCloseable {
+    init { require(exportMaxBytes in 1..R2_MAX_SINGLE_OBJECT_BYTES) }
     private data class Selected(val uri: Uri, val ref: DnsFileRef)
     private data class Target(val uri: Uri, val ref: DnsExportTarget, val claimed: AtomicBoolean = AtomicBoolean(),
         val deleteOwned: AtomicBoolean = AtomicBoolean(true), val publicationStarted: AtomicBoolean = AtomicBoolean(), val cleanup: Any = Any())
@@ -214,7 +216,7 @@ class DnsDocumentFiles(private val context: Context, private val ioDispatcher: C
         private val state = AtomicReference("open")
         private val output = AtomicReference<DnsDocumentSink?>(null)
         private val cleanup = Any()
-        override val sink = DnsDocumentSink(FileOutputStream(temp), 4L * 1024 * 1024)
+        override val sink = DnsDocumentSink(FileOutputStream(temp), exportMaxBytes)
         override suspend fun commit(): DnsFileRef = io {
             if (!state.compareAndSet("open", "committing")) throw invalidFile()
             try {
@@ -242,8 +244,8 @@ class DnsDocumentFiles(private val context: Context, private val ioDispatcher: C
                     }
                 } finally { cancellation?.dispose(); destination.close(); output.set(null) }
                 currentCoroutineContext().ensureActive()
-                val local = boundedMetadata(DnsDocumentSource(FileInputStream(temp)), 4L * 1024 * 1024, fingerprint)
-                val actual = boundedMetadata(openSource(target.uri), 4L * 1024 * 1024, fingerprint)
+                val local = boundedMetadata(DnsDocumentSource(FileInputStream(temp)), exportMaxBytes, fingerprint)
+                val actual = boundedMetadata(openSource(target.uri), exportMaxBytes, fingerprint)
                 if (actual != local) throw fileIo()
                 val ref = DnsFileRef(UUID.randomUUID().toString(), target.ref.displayName, actual.first, actual.second)
                 synchronized(registry) {

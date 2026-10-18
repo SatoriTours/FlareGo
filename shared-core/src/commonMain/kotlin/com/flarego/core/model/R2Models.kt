@@ -163,6 +163,12 @@ sealed interface R2ObjectWrite {
     data class BulkDelete(override val scope: AccountScope, override val bucket: String, val keys: List<String>) : R2ObjectWrite
 }
 
+internal fun freezeR2ObjectWrite(write: R2ObjectWrite): R2ObjectWrite = when (write) {
+    is R2ObjectWrite.Upload -> write.copy()
+    is R2ObjectWrite.Delete -> write.copy()
+    is R2ObjectWrite.BulkDelete -> write.copy(keys = write.keys.toList())
+}
+
 internal fun r2ObjectWriteKey(write: R2ObjectWrite): String = when (write) {
     is R2ObjectWrite.Upload -> "r2-put-object"
     is R2ObjectWrite.Delete -> "r2-delete-object"

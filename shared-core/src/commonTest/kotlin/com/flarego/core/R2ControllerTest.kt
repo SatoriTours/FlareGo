@@ -317,6 +317,63 @@ class R2ControllerTest {
     }
 
     @Test
+    fun preexistingKeyNeverProvesUnknownUploadContentWasApplied() = runTest {
+        val h = readyHarness(this)
+        h.session.objects += "existing.txt"
+        val write = upload("existing.txt")
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        h.store.rows[task.id] = task.copy(state = TaskState.UNKNOWN)
+        assertEquals(TaskState.UNKNOWN, h.controller.reconcileObject(task.id).state)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun singleDeleteAbsenceMatchesTheCompleteFrozenTargetHash() = runTest {
+        val h = readyHarness(this)
+        val write = R2ObjectWrite.Delete(account, "my-bucket", "dir/a.txt", "dir/a.txt")
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        h.store.rows[task.id] = task.copy(state = TaskState.UNKNOWN)
+        assertEquals(TaskState.SUCCEEDED, h.controller.reconcileObject(task.id).state)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun callerOwnedBatchListCannotMutateThePreparedPayload() = runTest {
+        val h = readyHarness(this)
+        val keys = mutableListOf("a.txt")
+        val draft = R2ObjectWrite.BulkDelete(account, "my-bucket", keys)
+        val plan = h.prepareObject(draft)
+        keys += "unapproved.txt"
+        val actual = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt"))
+        val task = h.controller.submitObject(actual, h.confirmObject(plan, actual))
+        assertEquals(TaskState.SUCCEEDED, task.state)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun actionRequiredAfterPartialBatchStillBlocksNewWrites() = runTest {
+        val h = readyHarness(this)
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt", "b.txt"))
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        h.store.rows[task.id] = task.copy(state = TaskState.PARTIAL)
+        assertEquals(TaskState.ACTION_REQUIRED, h.controller.reconcileObject(task.id).state)
+        assertFailsWith<CloudFailure> { h.prepareObject(upload("other.txt")) }
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun createdBucketCanReconcileItsRequestedStorageClassWithoutInventingLocationGuarantees() = runTest {
+        val h = Harness(this)
+        val write = R2BucketWrite.Create(account, R2BucketCreateInput("my-bucket", "weur", "InfrequentAccess"))
+        val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+        h.store.rows[task.id] = task.copy(state = TaskState.UNKNOWN)
+        h.session.buckets["my-bucket"] = bucketRow("my-bucket", "Standard")
+        assertEquals(TaskState.UNKNOWN, h.controller.reconcile(task.id).state)
+        h.session.buckets["my-bucket"] = bucketRow("my-bucket", "InfrequentAccess")
+        assertEquals(TaskState.SUCCEEDED, h.controller.reconcile(task.id).state)
+    }
+
+    @Test
     fun anObjectDeleteNeedsTheTypedKeyBeforeAnythingIsRead() = runTest {
         val harness = readyHarness(this)
         val wrong = R2ObjectWrite.Delete(account, "my-bucket", "dir/a.txt", "dir/b.txt")
@@ -360,7 +417,7 @@ class R2ControllerTest {
     }
 
     @Test
-    fun reconcileMatchesAnUploadOnlyWhenTheKeyIsReallyListed() = runTest {
+    fun reconcileKeepsAnUploadUnknownEvenWhenTheKeyIsListed() = runTest {
         val harness = readyHarness(this)
         val write = upload("dir/a.txt")
         val task = harness.controller.submitObject(write, harness.confirmObject(harness.prepareObject(write), write))
@@ -370,7 +427,7 @@ class R2ControllerTest {
         assertEquals(TaskState.UNKNOWN, harness.controller.reconcileObject(task.id).state)
 
         harness.session.objects += "dir/a.txt"
-        assertEquals(TaskState.SUCCEEDED, harness.controller.reconcileObject(task.id).state)
+        assertEquals(TaskState.UNKNOWN, harness.controller.reconcileObject(task.id).state)
     }
 
     @Test

@@ -101,6 +101,47 @@ class DnsFileIntegrationTest {
             throw AssertionError("Expected a typed file failure")
         }
     }
+    @Test fun r2LargeExportUsesRealSafTransactionWithoutChangingDnsDefaultLimit() = runBlocking<Unit> {
+        val bytes = ByteArray(5 * 1024 * 1024) { (it % 251).toByte() }
+        val destination = document()
+        DnsDocumentFiles(context, exportMaxBytes = R2_MAX_SINGLE_OBJECT_BYTES).use { files ->
+            val target = files.resolveExportTarget(destination)
+            val tx = files.beginExport(target)
+            var offset = 0
+            while (offset < bytes.size) {
+                val n = minOf(8192, bytes.size - offset)
+                tx.sink.write(bytes, offset, n); offset += n
+            }
+            val result = tx.commit()
+            assertEquals(bytes.size.toLong(), result.length)
+            assertArrayEquals(bytes, contents(destination))
+            tx.abort() // Committed user output must survive cleanup.
+            assertTrue(exists(destination))
+        }
+        DnsDocumentFiles(context).use { dns ->
+            val target = dns.resolveExportTarget(document())
+            val tx = dns.beginExport(target)
+            try {
+                org.junit.Assert.assertThrows(CloudFailure::class.java) { tx.sink.write(bytes, 0, bytes.size) }
+            } finally { tx.abort() }
+        }
+    }
+
+    @Test fun r2StagingReadsRealSafInputOnceWithoutEditingOrDeletingTheSource() = runBlocking<Unit> {
+        val bytes = ByteArray(5 * 1024 * 1024) { (it % 251).toByte() }
+        val source = document(bytes)
+        val staged = com.flarego.platform.stageR2Upload(context.cacheDir, { resolver.openInputStream(source)!! })
+        try {
+            assertEquals(bytes.size.toLong(), staged.length)
+            assertEquals(AndroidFingerprint().sha256(bytes), staged.sha256)
+            val upload = staged.openSource()
+            staged.release() // Retires the snapshot, not the transport-owned descriptor.
+            assertArrayEquals(bytes, read(upload))
+            expectFailure { staged.openSource() }
+        } finally { staged.release() }
+        assertArrayEquals(bytes, contents(source))
+    }
+
     @Test fun opaqueImportRefUsesActualBytesAndReopensOriginalWithoutDeletingIt() = runBlocking<Unit> {
         val uri = document(original)
         DnsDocumentFiles(context).use { files ->

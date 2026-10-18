@@ -1,5 +1,9 @@
 # FlareGo 开发进度与证据
 
+## R2 扩展工作树进度（2026-10-18，未合入 main）
+
+`feature/cloudflare-p3-r2` 已挂载 R2 浏览器、SAF 暂存/下载事务、账号级证明发行器与凭据撤销。本轮接通创建桶 POST、删除桶、上传、单删/批量删除的“预览→显式确认→受控 Session”，并补同桶执行锁、单次私有上传 source 和保守只读恢复；不再统一只读。确认写入阶段自测 core807／UI13／platform97／设备定向51、审计349／CI10、Debug/lint通过（仍有既存 warnings）。后续已补真实 MainActivity/系统picker8项往返与重建，修复上传旧状态提示、目标预览可见性及DNS取消重绑竞态；最新core807/UI13/platform97、构建/lint、审计349/CI10通过，设备84唯一方法分轮都有通过记录（原font1轮81PASS/3FAIL，旧font2三项补轮3PASS，不是单轮全绿）。4张synthetic截图完成主控及独立端有限视觉核对。独立首轮的空目标清理断言失败未被重跑覆盖；调整R2DocumentBridge在清理后发布下载终态，14项自测及固定范围独立复验14+1通过，逐轮证据已归档。仅顺序修复对应范围通过，一般provider删除故障与可观测性缺口仍保留，不承诺删除必成。桶 PUT/PATCH UI、最终十操作覆盖、安全结清及缓存清理仍待完成；不能记为 R2-A 全完成，未真实验云。当前已获用户授权提交并推送此功能分支，实际结果以交付回执为准；不合并 main，不建 Tag 或 Release。见 [系统picker阶段证据](cloudflare-audit/r2-picker-verification-2026-10-18.md)、[前轮确认写入证据](cloudflare-audit/r2-write-loop-verification-2026-10-18.md)。
+
 > 2026-10-17 主线集成：P2 功能提交 `fbbb954` 已本地合入 `main`；合并后706 core、91平台项及Debug／lint通过。354个设备方法分轮证据与原失败记录保留，真实云和付费资格未验收。见[主线集成验证](cloudflare-audit/p2-main-integration-verification-2026-10-17.md)。
 
 
