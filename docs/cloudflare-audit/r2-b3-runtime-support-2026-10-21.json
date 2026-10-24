@@ -1,0 +1,1717 @@
+{
+ "format": "flarego.cloudflare-audit.r2-b3-runtime-support/1",
+ "as_of": "2026-10-21",
+ "scope": "R2 batch B3 Sippy local typed technical evidence on feature/cloudflare-p3-r2; the current 99-entry handwritten registry and the complete reviewed B20 state: 30 typed / 20 not started / 1 deferred candidate. Never an execution allowlist, authenticated acceptance or release qualification.",
+ "schema_commit": "6b00f157496cd6a1792a613dc94654c51273aeb9",
+ "schema_sha256": "06dbba919204662d42e758e1f5b1dc4e262e99ec8540e7bf564de920707b9461",
+ "candidate_count": 51,
+ "batch_a_count": 10,
+ "batch_b1_count": 10,
+ "batch_b2_count": 7,
+ "batch_b3_count": 3,
+ "batch_b_total": 20,
+ "batch_b_completed": 20,
+ "typed_handler_count": 30,
+ "not_started_count": 20,
+ "deferred_count": 1,
+ "batch_b3_acceptance": "DEVELOPER_VERIFIED_INDEPENDENT_PENDING",
+ "batch_b2_acceptance": "DEVELOPER_VERIFIED_INDEPENDENT_PENDING",
+ "batch_b1_acceptance": "DEVELOPER_VERIFIED_INDEPENDENT_PENDING",
+ "batch_a_acceptance": "LOCAL_ENGINEERING_ACCEPTED_CLOUD_UNVERIFIED",
+ "authenticated_cloud_accepted": false,
+ "paid_eligibility_verified": false,
+ "release_qualified": false,
+ "runtime_registry_observed": {
+  "count": 99,
+  "read": 50,
+  "write": 49,
+  "historical_p1_p2_auxiliary_count": 69,
+  "reviewed_batch_a_addition": 10,
+  "reviewed_batch_b1_addition": 10,
+  "reviewed_batch_b2_addition": 7,
+  "reviewed_batch_b3_addition": 3
+ },
+ "historical_batch_a_matrix": {
+  "path": "docs/cloudflare-audit/r2-batch-a-runtime-support-2026-10-18.json",
+  "sha256": "89a5c381d2df9027159584e6ed11d0189496c227688c06f316152749ed5dc81f",
+  "candidate_count": 51,
+  "batch_a_count": 10,
+  "not_started_count": 40,
+  "deferred_count": 1,
+  "runtime_registry_observed_count": 79,
+  "note": "Byte-frozen historical document. Its 10/40/1 split, 79-entry registry observation and source hashes describe the batch A exit snapshot and must never be rewritten into current numbers, nor used as current source hashes."
+ },
+ "historical_batch_b1_matrix": {
+  "path": "docs/cloudflare-audit/r2-b1-runtime-support-2026-10-21.json",
+  "sha256": "61299d96aadd9091420f4dc9a403a5daa99c455fcc5df05bb0fd6f2c6327707b",
+  "candidate_count": 51,
+  "batch_b1_count": 10,
+  "typed_handler_count": 20,
+  "not_started_count": 30,
+  "deferred_count": 1,
+  "runtime_registry_observed_count": 89,
+  "runtime_registry_observed_read": 46,
+  "runtime_registry_observed_write": 43,
+  "source_path_count": 59,
+  "note": "Byte-frozen batch B1 exit document. Its 20/30/1 split, 89-entry registry observation and 59 source hashes describe the batch B1 exit snapshot and must never be rewritten into current numbers, nor restored onto current sources."
+ },
+ "historical_batch_b2_matrix": {
+  "path": "docs/cloudflare-audit/r2-b2-runtime-support-2026-10-21.json",
+  "sha256": "445d113b3642a60784a704ffaa30f0e0f90e456b90bfb15d4ac7fa86d5086b78",
+  "candidate_count": 51,
+  "batch_b2_count": 7,
+  "typed_handler_count": 27,
+  "not_started_count": 23,
+  "deferred_count": 1,
+  "runtime_registry_observed_count": 96,
+  "runtime_registry_observed_read": 49,
+  "runtime_registry_observed_write": 47,
+  "source_path_count": 77,
+  "note": "Byte-frozen batch B2 exit document. Its 27/23/1 split, 96-entry registry observation and 77 source hashes describe the batch B2 exit snapshot and must never be rewritten into current numbers, nor restored onto current sources. Its acceptance authority stays in the plan and the QA report."
+ },
+ "qualification": "Audit metadata only. Handwritten registrations remain the only execution route; the runtime never loads this file, review.json or any ledger to grant a request.",
+ "limitations": [
+  "No authenticated-cloud, paid or release acceptance; every operation stays cloud-unverified.",
+  "The complete reviewed batch-B twenty is typed: batch A ten, batch B1 ten configuration operations, batch B2 seven domain/public-policy operations and batch B3 three Sippy operations; the credential operation stays DEFERRED_PENDING_APPROVAL outside batch B.",
+  "Sippy semantics: a GET never restores secret keys (the provider only echoes public metadata); a PUT receipt proves only that the configuration was accepted, never that the keys work, that a migration ran or that a connection succeeded.",
+  "An UNKNOWN/ACCEPTED/PARTIAL Sippy PUT is never promoted to SUCCEEDED by observing identical public metadata, and no write is ever replayed.",
+  "A Sippy DELETE only proves the configuration is known-disabled; it never deletes objects already copied.",
+  "Five controlled jurisdictions are the only ones admitted, and only for the reviewed operations that declare the header; the same bucket group lock serialises A/B1/B2/B3.",
+  "A REST account-level grant is required for Sippy writes: an S3 key or bucket-item permission is not administration, and the actual one-use editor material/random binding cannot be rebuilt from audit metadata."
+ ],
+ "source_sha256": {
+  "android-platform/src/main/kotlin/com/flarego/platform/CloudflareClient.kt": "f505fbb9e2db792ea3558a01bb99f0f174bcee4aabe347224b866c4e7d665aad",
+  "android-platform/src/main/kotlin/com/flarego/platform/CloudflareTransport.kt": "8a69fc776de4724d3b9d47a867476a91cc8ef4099d60596997f8ca5b547dff08",
+  "android-platform/src/main/kotlin/com/flarego/platform/R2UploadStaging.kt": "16160ed6a25e0ea7205b6b4780dbc92bb4a4a57b8bdd34ed5676a599c5c18532",
+  "android-platform/src/test/kotlin/com/flarego/platform/CloudflareClientTest.kt": "ccb9d8be6c8d4812876c818e22e2d9639118ed107a8953248b566b77836d6b4c",
+  "android-platform/src/test/kotlin/com/flarego/platform/CloudflareSensitiveBodyTest.kt": "912a7889380810e1d0982be6cc7fadf8d0f011fa9537b230b46cc07144788456",
+  "app/build.gradle.kts": "3c2244ef5af5eb2aae67cf842feb6e0aca9ba217bd270baa2fdd196fdfa0eb5f",
+  "app/src/androidTest/kotlin/com/flarego/R2ConfigurationManagementUiTest.kt": "dacf5b3fd68516d7f0383a6c8d1eb4f72055d8f56c68353185c33f971d8f5412",
+  "app/src/androidTest/kotlin/com/flarego/R2ConfigurationUiTest.kt": "13bf5ee61b697bf3fcefd5af178a90d762ef6790df5bac0e9372b39398d983f2",
+  "app/src/androidTest/kotlin/com/flarego/R2DomainConfigurationManagementUiTest.kt": "64ac7ec28a699ff41df31f841db2434b941cf07f5ef189b55f57387fee4c50eb",
+  "app/src/androidTest/kotlin/com/flarego/R2DomainConfigurationUiTest.kt": "e80ff57269ec1293762ca843fc3703f33fe9cdf9867c3fc95922868159f7e221",
+  "app/src/androidTest/kotlin/com/flarego/R2ManagementUiTest.kt": "8b13100dc8e8c18a78a7077fc6ef6dcedd8c129520f9989fe8437565aee11bc4",
+  "app/src/androidTest/kotlin/com/flarego/R2SippyFormUiTest.kt": "bcc626ad3daeacc8e1fb23ecbbfa2417682ec37919f58d85758cec82311965be",
+  "app/src/androidTest/kotlin/com/flarego/R2SippyFrameBarrierTest.kt": "8f8bc652699a8144f63fd29a9dab4aa34123da29b57eb82d3d45e609381d7641",
+  "app/src/androidTest/kotlin/com/flarego/R2SippyRecentsTest.kt": "f5e70e7e6471bbc140865c4117a51dd6b3181a4f28d601b02cd94872ca7d7bdb",
+  "app/src/androidTest/kotlin/com/flarego/R2SippyRecreateTest.kt": "93c0b2ac971f44249f510b34fdb030915023d060a99bd1e531e1ae6053611f28",
+  "app/src/androidTest/kotlin/com/flarego/R2SippySecureWindowTest.kt": "300e9146ec4bbd1ef28033c0fbdfe85e3c14abb2cf5e4a607d1d27e06194ac87",
+  "app/src/main/kotlin/com/flarego/AndroidSecureWindow.kt": "5ffdba9b5ddfdcf8bf73ecfbb92f0b72baf41b2973ebf3578925667b76e2a242",
+  "app/src/main/kotlin/com/flarego/CleanFrameMatch.kt": "ff9900044f6fa1e4952d38f4c7017a710264e11dfb20680f0f39298e01aec9b5",
+  "app/src/main/kotlin/com/flarego/FlareGoViewModel.kt": "c533350216863dd6388f65578eb7e0fa7384fec25862a47ce058759f9945de75",
+  "app/src/main/kotlin/com/flarego/MainActivity.kt": "d173ee9d1689c1ebff6840358102e93952156f792dc8d6ad4604fcaa8aa2596f",
+  "app/src/main/kotlin/com/flarego/R2DocumentBridge.kt": "a039620603a510b9781a4838f9ccf137ae1c9cb23c51765b58b19ca0aeaec0e5",
+  "app/src/test/kotlin/com/flarego/CleanFrameMatchTest.kt": "0cfcce8aacb4790b05db266621ad6b6badbedeb4721af2d83a29feb839c2fe9b",
+  "docs/cloudflare-audit/review.json": "52cc92b22c190f03bdaaa2df3a237a00700ec96dc5b6a43d69b764958d61fd3f",
+  "shared-core/build.gradle.kts": "1694e897beb49046c31f65663c405d82d1ee88d71cebb856bee480f6bde4d977",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/operations/ChangePlans.kt": "1f6211be678b8878ef068ea51eb40a072c753d262f425811d92eff5b836d4da4",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/operations/OperationCoordinator.kt": "8ceafddd2b363b5567c41123cbb094f5e6f48832c34b828807e51532ba6be887",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2ConfigurationController.kt": "f1399cce234a0ae04953639a2184f8b9d626306094d1f0ab0b582e1ca26a4ba2",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2ConfigurationEditing.kt": "2b3e54215eadf227b6e16cf8540da6eecd1248dec90d1def863740f5fa59b1fe",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2ConfigurationValidation.kt": "979872220c8b273b9159c052d4885b91c398b5cc8566092291c6e9e565e34791",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2Controller.kt": "c29bbf24e2b79a13a32d13b0bc0c88ba974043cf4293bf0d3d503eaea38ed804",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2DomainConfigurationController.kt": "78ca1ca329b1a983c446232a79aea04a2cb32cdfe9725a7e1d04ac9acc8676e5",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2DomainConfigurationEditing.kt": "d53d95663e5cdd214e925318c0e2b7740e3d14031f249e714681ceb412f98e60",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2DomainConfigurationValidation.kt": "842cc801321dfa2ba8b761c5e96f9488508000fea455978180adf236d0b54cff",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2SippyController.kt": "cdcc18ead692223f131c5ac930d7a4f4e86a10d99a1e7387b1ed99b797ed79d8",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2SippySecrets.kt": "13bd1e640d078048b0d071b70ea6477adb0ca2b877c6b1a84fa143fa535e9f9f",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2SippyValidation.kt": "66f81f8a32ab5720971be3fbe49427fc9565a66557d171fb057f979b8589a085",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2TaskTargets.kt": "770318d6c443f4b1f6cbbe8aa1d214de4d09317b9ebac160c3a567c439790487",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2WriteDispatch.kt": "2c571a808c4a309fd9f7ce8263859e21bed39002680e65e048bdfc9368258319",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/application/r2/R2WriteRuntime.kt": "34fe9105ce728e51c2ede98833cb36a13d2d21508325714f00b2171f4067aa42",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/HttpTransport.kt": "e8a68914eec77f2a3f218272beac6b0989db0fcaedc9e60ef24ea8c0dfaf473b",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/AuthorizedR2ConfigurationSession.kt": "7cd6e5a74283f94e47f38920fa7fb740bf75217c8bf7bb410b26a9d80c5c11c7",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/AuthorizedR2DomainConfigurationSession.kt": "74bf7b42b877a9c3375cab79c11024b7d543e99f05106e7df23205fc0cf7f596",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/AuthorizedR2Session.kt": "2e9c92022aa9dbcd3c6642e0d60b2fed29df68f4f8d803fc6b94f1627f6dc61e",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/AuthorizedR2SippySession.kt": "7089c402e22f28311f283708a6224a2a40b76ca1204cc7a9fa0ebb352f393304",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/CloudflareR2WriteAuthorityClient.kt": "a10d791e20904e026697057587d5411649ccd59ba8f838660c96f7d8025bf7d0",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/identity/R2TokenPolicyEvaluation.kt": "4259ce1054093588624bc955192c5649cd13bc1f39f043de7e0ec3e7c243a834",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/ActionPolicies.kt": "19422422aa35e5b2fe74e43f7a97b67299fdabba9d1f0bc8d75e9f008d45eb34",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/CloudflareGateway.kt": "d286c4b1e7421c6f8e13356c23776f78c07d49afa31676c546b78db971987a01",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/R2ConfigurationPolicies.kt": "b6083e5b9d63eef0f01ad00b442136d3ccdf22d3020cbecbcb65466cf8f012f1",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/R2DomainConfigurationPolicies.kt": "c140da4cb97d0210ce25d97a6abaf2d258908402303fb740ee9f282c168dbba1",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/R2Policies.kt": "332bf33d220b4c86ce993f3f54a58ec349028629e35e95d2fb2b35b7157f429a",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/R2SippyPolicies.kt": "0df6a8d54303223acf55325b704b2a955c7078f17cf622d396f7782b788b7954",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt": "a40b2e2a699c4c18cc15ad403d1797b6a69312483b1c43b16e60bdf66b052b56",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt": "c09477713cf84b2b8904fd2751a3a96f50cab0d93e72c6a9da38e30ba86f678c",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt": "cdaed531401623e17ea0f0e95a016729150f5621fdc2268a2d2a1bd1740f1253",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2SippyClient.kt": "f4a7b4caf6ccea6432a46d54abd586d8163c98742b08e3d5532b6c9a15dd425d",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/model/R2ConfigurationModels.kt": "70c5e9c53834a613f63e5fa22e910684dca822db0db14916333cc92d62acc133",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/model/R2DomainConfigurationModels.kt": "b75801d79010424fd5528428d019f06b31e39f8b52822d7f8ea555dde6b69903",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/model/R2SippyModels.kt": "925206c6cbe883aa67e119b4affb7bd8ca5bc83c95220644ac67cc287b8ef0fb",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/ports/R2ConfigurationPort.kt": "f824215d0629c51da68c938043be66077437ce905b716cb2964c677cdedee60b",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/ports/R2DomainConfigurationPort.kt": "a9138bf804edbfb7e8b724b3137f6b93930ec4a77a63751767c6a5fa7cd85cb1",
+  "shared-core/src/commonMain/kotlin/com/flarego/core/ports/R2SippyPort.kt": "f257d2eb339be747e88c43107bf019dbe0824f5aab3e5e305b99160d3b312aa5",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/P2CoverageTest.kt": "e4eccb39dd836c04ff381dc8df956ba2a43fd75d7832093253408cc870f3df2b",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt": "3e06315fb66d82401d2394a0155a7ca73ddc19835e820079ff8192085e189746",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt": "bf379b7e308e144c0d2cab8173c9a744570e8a12a14f9abefc7b8779c9c98d3e",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt": "bcea3ae02bdaf379cc8a52c3d561e9fc5cc10c4c07e7487dc1a3b0f752293e8c",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationControllerTest.kt": "3e4d8703f84697e1b6b8c3355224bd155bab1cc420e7c169a2c44b31fd5bb319",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationPoliciesTest.kt": "58a9702d18a5f19f1acfc681c7f9b6e46072a489a09216916febd68f987d0208",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationRuntimeTest.kt": "3ad9b37dfcdb13e7b363bb6cc2cf217fa523b9bcad57b330d362abd4edea0f1b",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationTestFixtures.kt": "ba2632ebe66e264c6fcc404d3e186fbe494a0600c40a94e116b059d857d3b681",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationValidationTest.kt": "f873f01bb3b4c5902004fc82b5069aed7fa07c3bc391e7301435101bb72ac815",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt": "ebbbeae035dd7e5b4bbe420f9df04046e2d8d9e1e383203b1027a8b2f8adc18d",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2CoverageTest.kt": "ab07ff5c3762a11217a01e1a5db5f385c40f933f600dc8ce012406214e20da0c",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt": "9e62c739bda4bf4f8a3a9172d7938ea74caeb614b931d230285e10c1d3d80cdd",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainControllerTest.kt": "e204a01d1575958bebb558c337f6e809510678a2ad69abfd051d22be5cc6f4b2",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainDeleteCrossLayerTest.kt": "99983c4a9e7d1107900f66e279954171644d18b9b0b8dc86ec9a66db17e75669",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainRuntimeTest.kt": "33af0ac8549d1b6d9d60d7102033c41c8bf9d9b3878ac600085951abf924a6f6",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainTestFixtures.kt": "88249f7eab8c82ee133218214670901587413c79f66c6f5f0ce11946fa8207c7",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectTest.kt": "8f578282ccfd8c8bd56e81cfd1cd78bb3fd858f10c47169c30ac9d4dab998329",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt": "2bf46f34bbacade668127f85c3a23988cafbc653706c4a41c46e7749a92072ef",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyAuthorityTest.kt": "d2aa89bf59e573dae3e588e1e8d5db8ffeb554eebf9260c24f1b27ca25780b13",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyCrossLayerOwnershipTest.kt": "94cbbced38d2f49af70f4d097506b8489ded45577b652b6ba69f3dc2f428895f",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyFix1Test.kt": "5bc78f07bacb3ecbeb950ddb40a64518c2449d9d296c9662f0771bbca96027cd",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyLocatorTest.kt": "ddfa55e62bdd518150765d4a3080764cd08374b8646a1d9a0362e01bd254a5cc",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyRuntimeTest.kt": "76b0afd3a7ad1cdd2c057d10d1065133ffdcd11de47a156262af2d1cb786140c",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyTest.kt": "e1d8069461698b4ee6fb9b6d96d4aa35e46685d2d82dc6ff6296089fc2a05f9d",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2TaskTargetsTest.kt": "abebb8cae7e8d0202b1c584019cbc8f219e606ee7b0b1398a9cb56a89ae2cf50",
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2WriteRuntimeTest.kt": "615f164585a92096a2705c7890e6bca2a2d4a3e20c7341afc9b1be7577be2c8c",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/dns/DnsScanPanel.kt": "4cfb8976c04a1672b8f49eefb375bca47e7e2ef092ec7f19d4735f011c856704",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2Browser.kt": "2f46170878c93d013dc87706774c1b324f461c2c0b5a78a6f6f9240a3b9ac9f0",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2BrowserHost.kt": "1eef6b172eaba8f26d7e702c8c6b8fcefc757fee1997024a44ebcd381846151b",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2BucketList.kt": "5f110ece981b45fb1a48b8fc9b36269d84777549c6f1df0d01393ad713558907",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2ConfigurationBrowser.kt": "e2ab33e308a6625d63c52e4976bb159025d688d7ffa4d8ee7268362480a45937",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2ConfigurationScreen.kt": "abccd696adc26a11aa0756ac894781e3e53f4443d47bec1c49914b42d341e2b3",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2ConfigurationUiModels.kt": "6e7b878868e449c3624d2e7710d9f78361b4dd3020c9649a9b57c5b8bfe2e340",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2CorsConfigurationPanel.kt": "b992517fa99f8b533dba5212c191af253ec45ef2cc0f5796d14e6656911a302f",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2CustomDomainConfigurationPanel.kt": "e62cb2c2005117e340e560639b0083261ec394f3ef611545296ba08790bc8eea",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2LifecycleConfigurationPanel.kt": "497cf765243109401d1213af6de4bb573c62fc2bd2afe515a55abf870fe43a6b",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2LocalUploadsConfigurationPanel.kt": "4ae93a9e3c1effab26b86d080755456ed52c30bd276f4ea88cbeaa434f3a8ae5",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2LockConfigurationPanel.kt": "1f72d99aa003237c7c87d688153f9c3d77ec1e7ba21d3539cd78a45ecf20d730",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2ManagedDomainConfigurationPanel.kt": "85c58d8a5a1137e8753a2a9cc88da6e466069ee537cd4e1ef406247af499b00b",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2SippyConfigurationPanel.kt": "83f107053efa5cb7a967ca60bbb0f011ffe955d807170d1140745ec3949ebfa8",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2SippyCredentialOwner.kt": "28656a9bb79deaee929e3d460f179d148dbe3adc3cd55edca0fb818c3940dc16",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/R2UiModels.kt": "028cc4985678dc5ef85b8a6324b043adec86422579e6c0c27c204bbb0a25d0b6",
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/r2/SecureWindowPort.kt": "cd3f22c6c99c494ccec795bac638fffe9a638a5d7f3a161c7cf37ebb945c1c32",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/FakeSecureWindowPort.kt": "933c621b0913d44321cc0ef5ac97feda0e9b8b5af94e6c710ae2acf9a50ec99b",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2BrowserWriteTest.kt": "a62799caf8b044a1cea20c37bd3cc617e3d49116cbcf00629c4ec838c5bd4fb0",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2ConfigurationBrowserTest.kt": "4fee8609857cab85cd53ba5c94087a2d5943ac53b6f62540d64c36de2ca553e9",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2DomainConfigurationBrowserTest.kt": "cdd8e18dba4ce9cbc9388a997f8ace8ebcc90c558e58212d9f1d3b69f5d2650a",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2SippyBrowserTest.kt": "038ff0dc67333c74a17e530d32e20505f1c310193e1b249b8f5215f530b56751",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2SippyCredentialOwnerTest.kt": "fca045af3c877cd3bd17fb94696204b2c67ec86512d4a74cd688490779f0e252",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/R2SippyFormFlowTest.kt": "99b1958919330159c82be96672d7480f043aee250029ecb6002647a0701a811d",
+  "shared-ui/src/commonTest/kotlin/com/flarego/ui/r2/SecureWindowOwnershipTest.kt": "5cc582edcde52b2af0b652cff00c6aa7fbcff4f5d514cfb823928c50c6b1e539"
+ },
+ "operations": {
+  "r2-add-custom-domain": {
+   "batch": "R2-B2",
+   "method": "POST",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "addCustomDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "aNewCustomDomainIsExplicitlyDisabledWithTlsAtLeast12"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainControllerTest.kt",
+     "class": "com.flarego.core.R2DomainControllerTest",
+     "method": "addingADomainRequiresAbsenceInTheCompleteCollectionAndVerifiesTheNewDomain"
+    }
+   ],
+   "policy": {
+    "method": "POST",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-create-bucket": {
+   "batch": "R2-A",
+   "method": "POST",
+   "path": "/accounts/{account_id}/r2/buckets",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "createBucket"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "createSendsOnlyTheReviewedBodyFields"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postAndPutReceiptsCannotClaimADifferentDefaultClassWasApplied"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postAndPutSucceedWhenThePostWriteReadMatchesTheRequestedClass"
+    }
+   ],
+   "policy": {
+    "method": "POST",
+    "path": "/accounts/{account_id}/r2/buckets",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-create-bucket-by-name": {
+   "batch": "R2-A",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "createBucketByName"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "thePutAndPatchVariantsCarryTheirStorageClassInTheHeaderAndNoBody"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "putPreviewStatesTheActualCreateVariantWithoutAPostLocationHint"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postAndPutReceiptsCannotClaimADifferentDefaultClassWasApplied"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postAndPutSucceedWhenThePostWriteReadMatchesTheRequestedClass"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postReceiptReadFailureStaysUnknownAndNeverResendsTheMutation"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-create-bucket-job": {
+   "batch": "R2-C",
+   "method": "POST",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/jobs",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-create-temp-access-credentials": {
+   "batch": "R2-E",
+   "method": "POST",
+   "path": "/accounts/{account_id}/r2/temp-access-credentials",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "DEFERRED_PENDING_APPROVAL"
+  },
+  "r2-delete-bucket": {
+   "batch": "R2-A",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "deleteBucket"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "aBucketDeleteSendsOneOwnedEmptyBodyRequestAndAcceptsAProviderReceipt"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "aProviderPreconditionFailureIsExplainableAndIsNeverRetried"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "aDeleteReceiptCannotClaimSuccessWhileTheBucketIsStillPresent"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "aDeleteSucceedsOnlyAfterAPostWriteReadProvesAbsence"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postReceiptReadFailureStaysUnknownAndNeverResendsTheMutation"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-bucket-cors-policy": {
+   "batch": "R2-B1",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "deleteCors"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationControllerTest.kt",
+     "class": "com.flarego.core.R2ConfigurationControllerTest",
+     "method": "deletesReachTheControllerAsRealDeleteCommandsAndA404ReadBackStaysUnknown"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-bucket-lock-configuration": {
+   "batch": "R2-B1",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "deleteLock"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationControllerTest.kt",
+     "class": "com.flarego.core.R2ConfigurationControllerTest",
+     "method": "deletesReachTheControllerAsRealDeleteCommandsAndA404ReadBackStaysUnknown"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-bucket-sippy-config": {
+   "batch": "R2-B3",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2SippyClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2SippyClient",
+    "method": "deleteSippy"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyTest.kt",
+     "class": "com.flarego.core.R2SippyTest",
+     "method": "deleteSendsNoSensitiveBodyAndRequiresAReadableSnapshot"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyAuthorityTest.kt",
+     "class": "com.flarego.core.R2SippyAuthorityTest",
+     "method": "bothSippyWritesMintTheirOwnFreshAccountLevelProof"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-custom-domain": {
+   "batch": "R2-B2",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "deleteCustomDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainDeleteCrossLayerTest.kt",
+     "class": "com.flarego.core.R2DomainDeleteCrossLayerTest",
+     "method": "aDeleteSendsOneSingleDomainDeleteAfterTheCompleteCollectionWasObserved"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainControllerTest.kt",
+     "class": "com.flarego.core.R2DomainControllerTest",
+     "method": "deletingRequiresTheCompleteCollectionWithoutTheDomainAndA404IsNotAbsence"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-object": {
+   "batch": "R2-A",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "deleteObject"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt",
+     "class": "com.flarego.core.R2ObjectWriteTest",
+     "method": "aSingleDeleteVerifiesTheEchoedKey"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": true,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-delete-objects": {
+   "batch": "R2-A",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "deleteObjects"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt",
+     "class": "com.flarego.core.R2ObjectWriteTest",
+     "method": "aBulkDeleteSendsOneJsonKeyArrayAndReportsACompleteSuccess"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt",
+     "class": "com.flarego.core.R2ObjectWriteTest",
+     "method": "aSameCountEchoOfDifferentOrDuplicateKeysIsNotOurSuccessfulBatch"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt",
+     "class": "com.flarego.core.R2ObjectWriteTest",
+     "method": "aPartialBulkDeleteIsNeverReportedAsCompleteAndIsNeverReplayed"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkDeleteCompletionCannotClaimSuccessWhileARequestedKeyStillExists"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkDeleteCompletionRequiresAnExhaustedReadWithNoRequestedKeys"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkPostReadFailureIsUnknownWithoutReplayingTheDelete"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkPostReadRejectsRepeatedCursorsAndStopsAtABoundedBudgetWithUnicodeSafePrefix"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkPartialAcceptedAndUnknownReceiptsDoNotPretendToHaveACompleteReadback"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "cancellingTheBulkUiWaiterDoesNotCancelItsAppOwnedPostRead"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "bulkPostReadForwardsTheCursorAndChecksLaterPagesBeforeSettling"
+    }
+   ],
+   "policy": {
+    "method": "DELETE",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-edit-custom-domain-settings": {
+   "batch": "R2-B2",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "editCustomDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "anEditSendsEnabledExplicitlyAndOnlyAProvenCipherList"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainControllerTest.kt",
+     "class": "com.flarego.core.R2DomainControllerTest",
+     "method": "editingKeepsEveryPreservedFieldAndComparesTheCompleteObservableTarget"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-event-notification-delete-config": {
+   "batch": "R2-C",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/event_notifications/r2/{bucket_name}/configuration/queues/{queue_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-get-account-level-metrics": {
+   "batch": "R2-C",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/metrics",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-get-bucket": {
+   "batch": "R2-A",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "getBucket"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "theBucketReadKeepsUnknownProviderFieldsAndRejectsAnIllegalNameLocally"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-cors-policy": {
+   "batch": "R2-B1",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "getCors"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "readsKeepTheProviderEnvelopeVerbatimForTheEditableKinds"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-job": {
+   "batch": "R2-C",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/jobs/{job_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-get-bucket-lifecycle-configuration": {
+   "batch": "R2-B1",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lifecycle",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "getLifecycle"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "unknownNestedRuleAndOversizeDocumentRemainReadOnly"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lifecycle",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-local-uploads-configuration": {
+   "batch": "R2-B1",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/local-uploads",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "getLocalUploads"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "nonDefaultLocalUploadsNeverCallsTransport"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/local-uploads",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-lock-configuration": {
+   "batch": "R2-B1",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "getLock"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "unknownNestedRuleAndOversizeDocumentRemainReadOnly"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-public-policy": {
+   "batch": "R2-B2",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/managed",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "getManagedDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "theManagedDomainDocumentKeepsEnabledSeparateFromEverythingElse"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/managed",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-bucket-sippy-config": {
+   "batch": "R2-B3",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2SippyClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2SippyClient",
+    "method": "getSippy"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyTest.kt",
+     "class": "com.flarego.core.R2SippyTest",
+     "method": "safeSippySnapshotDropsUnexpectedEchoedSecretsAndUnknownProvidersStayReadOnly"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-custom-domain-settings": {
+   "batch": "R2-B2",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "getCustomDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "customDomainsExposeOwnershipAndSslAsSeparateProviderStates"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "aSingleDomainReadMustReturnTheRequestedDomain"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom/{domain}",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-get-event-notification-config": {
+   "batch": "R2-C",
+   "method": "GET",
+   "path": "/accounts/{account_id}/event_notifications/r2/{bucket_name}/configuration/queues/{queue_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-get-event-notification-configs": {
+   "batch": "R2-C",
+   "method": "GET",
+   "path": "/accounts/{account_id}/event_notifications/r2/{bucket_name}/configuration",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-get-object": {
+   "batch": "R2-A",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "downloadObject"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectTest.kt",
+     "class": "com.flarego.core.R2ObjectTest",
+     "method": "aDownloadKeepsSlashesLiteralAndStreamsTheWholeBody"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectTest.kt",
+     "class": "com.flarego.core.R2ObjectTest",
+     "method": "acceptedEmptyOrPartialDownloadsCannotClaimACompleteObject"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "BINARY",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": true,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-list-bucket-jobs": {
+   "batch": "R2-C",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/jobs",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-list-custom-domains": {
+   "batch": "R2-B2",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "listCustomDomains"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "theDomainListKeepsEveryRowAndRefusesAnUnknownMember"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/custom",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-list-objects": {
+   "batch": "R2-A",
+   "method": "GET",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "listObjects"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectTest.kt",
+     "class": "com.flarego.core.R2ObjectTest",
+     "method": "theObjectListDecodesTheResultArrayAndForwardsEveryFilter"
+    }
+   ],
+   "policy": {
+    "method": "GET",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects",
+    "scope": "ACCOUNT",
+    "semantics": "READ",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "READ_ONLY",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": true,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-patch-bucket": {
+   "batch": "R2-A",
+   "method": "PATCH",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "patchBucketStorageClass"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2BucketManagementTest.kt",
+     "class": "com.flarego.core.R2BucketManagementTest",
+     "method": "thePutAndPatchVariantsCarryTheirStorageClassInTheHeaderAndNoBody"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "unknownOrMissingStorageClassKeepsTheBucketReadOnly"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "patchPreviewShowsBothFrozenClassesAndLeavesExistingObjectsUnchanged"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "aPatchReceiptCannotClaimAnUnchangedUnknownOrMissingDefaultClassWasApplied"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "aPatchSucceedsWhenThePostWriteReadMatchesTheRequestedClass"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "postReceiptReadFailureStaysUnknownAndNeverResendsTheMutation"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "acceptedAndUnknownReceiptsDoNotPretendToHaveACompletedPostcondition"
+    }
+   ],
+   "policy": {
+    "method": "PATCH",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-cors-policy": {
+   "batch": "R2-B1",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "putCors"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "corsPutReplacesExplicitRulesAndPreservesFalseAndArrayOrder"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/cors",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-lifecycle-configuration": {
+   "batch": "R2-B1",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lifecycle",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "putLifecycle"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "lifecycleAndLockUseDifferentAgeFields"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lifecycle",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-local-uploads-configuration": {
+   "batch": "R2-B1",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/local-uploads",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "putLocalUploads"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "nonDefaultLocalUploadsNeverCallsTransport"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/local-uploads",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-lock-configuration": {
+   "batch": "R2-B1",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2ConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2ConfigurationClient",
+    "method": "putLock"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationAuthorityTest.kt",
+     "class": "com.flarego.core.R2ConfigurationAuthorityTest",
+     "method": "everyReviewedConfigurationWriteIsAdmittedOnceForItsOwnJurisdiction"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ConfigurationClientTest.kt",
+     "class": "com.flarego.core.R2ConfigurationClientTest",
+     "method": "lifecycleAndLockUseDifferentAgeFields"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/lock",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "DESTRUCTIVE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-public-policy": {
+   "batch": "R2-B2",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/managed",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2DomainConfigurationClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2DomainConfigurationClient",
+    "method": "putManagedDomain"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt",
+     "class": "com.flarego.core.R2DomainConfigurationTest",
+     "method": "disablingTheManagedDomainSendsAnExplicitFalse"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainControllerTest.kt",
+     "class": "com.flarego.core.R2DomainControllerTest",
+     "method": "managedDomainFalseIsSentExplicitlyAndTheReadBackComparesTheManagedDocument"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/domains/managed",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-bucket-sippy-config": {
+   "batch": "R2-B3",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2SippyClient.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2SippyClient",
+    "method": "putSippy"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyTest.kt",
+     "class": "com.flarego.core.R2SippyTest",
+     "method": "fourProvidersSendExactlyThePinnedFieldsOnce"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyAuthorityTest.kt",
+     "class": "com.flarego.core.R2SippyAuthorityTest",
+     "method": "bothSippyWritesMintTheirOwnFreshAccountLevelProof"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/sippy",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": false,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "r2-put-event-notification-config": {
+   "batch": "R2-C",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/event_notifications/r2/{bucket_name}/configuration/queues/{queue_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "r2-put-object": {
+   "batch": "R2-A",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "TYPED_HANDLER",
+   "handler": {
+    "source_file": "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/r2/CloudflareR2Client.kt",
+    "class": "com.flarego.core.cloudflare.r2.CloudflareR2Client",
+    "method": "uploadObject"
+   },
+   "tests": [
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ObjectWriteTest.kt",
+     "class": "com.flarego.core.R2ObjectWriteTest",
+     "method": "anUploadStreamsTheSourceOnceAndVerifiesTheEchoedKey"
+    },
+    {
+     "source_file": "shared-core/src/commonTest/kotlin/com/flarego/core/R2ControllerTest.kt",
+     "class": "com.flarego.core.R2ControllerTest",
+     "method": "preexistingKeyNeverProvesUnknownUploadContentWasApplied"
+    }
+   ],
+   "policy": {
+    "method": "PUT",
+    "path": "/accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}",
+    "scope": "ACCOUNT",
+    "semantics": "WRITE",
+    "response_kind": "ENVELOPE_JSON",
+    "risk": "CHANGE",
+    "trailing_placeholder_spans_segments": true,
+    "retry": {
+     "enabled": false,
+     "max_retries": 2,
+     "max_wait_ms": 60000
+    }
+   }
+  },
+  "slurper-abort-all-jobs": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/jobs/abortAll",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-abort-job": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}/abort",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-check-source-connectivity": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/source/connectivity-precheck",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-check-target-connectivity": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/target/connectivity-precheck",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-create-job": {
+   "batch": "R2-D",
+   "method": "POST",
+   "path": "/accounts/{account_id}/slurper/jobs",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-delete-job": {
+   "batch": "R2-D",
+   "method": "DELETE",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-get-job": {
+   "batch": "R2-D",
+   "method": "GET",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-get-job-logs": {
+   "batch": "R2-D",
+   "method": "GET",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}/logs",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-get-job-progress": {
+   "batch": "R2-D",
+   "method": "GET",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}/progress",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-list-jobs": {
+   "batch": "R2-D",
+   "method": "GET",
+   "path": "/accounts/{account_id}/slurper/jobs",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-pause-job": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}/pause",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  },
+  "slurper-resume-job": {
+   "batch": "R2-D",
+   "method": "PUT",
+   "path": "/accounts/{account_id}/slurper/jobs/{job_id}/resume",
+   "scope_kind": "account",
+   "authenticated_cloud_accepted": false,
+   "paid_eligibility_verified": false,
+   "technical_support": "NOT_STARTED"
+  }
+ },
+ "cross_cutting_local_tests": [
+  {
+   "class": "com.flarego.core.R2WriteRuntimeTest",
+   "methods": [
+    "aFullRetentionWindowRefusesNewPreviewsWithoutEvictingValidConfirmations",
+    "expiredPreviewsFreeCapacityButReusedIdInputsCannotReviveTheOldPreview",
+    "repeatedExpiryReclaimsBucketAndObjectPayloadTablesAsWellAsIssuerMetadata",
+    "discardedPreviewsCannotConfirmOrExhaustCapacityEvenWithTheSameLiveCommandAndIdInput",
+    "latePreparationsWhichLoseTheirLiveContextDoNotExhaustCapacity",
+    "expiryAndDiscardDoNotDetachAnInFlightAdmissionOrRecreateItsPersistedTask",
+    "revocationDoesNotRequireAUsableClockOrAuthorizeNewWork"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2ControllerTest",
+   "methods": [
+    "aProvenPreDispatchRefusalSettlesWithoutReplayAndOnlyAFreshPlanMayWrite",
+    "theSameErrorAfterTheSendBoundaryCannotBeReclassifiedAsNotDispatched",
+    "anAdapterThatReturnsCompletionWithoutTheFinalGuardCannotClaimSuccess",
+    "objectRefusalsUseTheSameTrustedBoundaryAndCannotBeRevivedByReadOnlyReconciliation"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2DomainRuntimeTest",
+   "methods": [
+    "anUnsettledDomainWriteSharesTheBucketGateWithBatchAAndB1InBothDirections",
+    "twoDomainLocatorsOfOneBucketBlockEachOtherAndReconcilingOneDoesNotSettleTheOther",
+    "mixedConfigurationAndDomainPreviewsShareTheSixtyFourSlotWindow",
+    "aDomainCommandNeedsTheLiveCommandAndAConfiguredSession"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2DomainControllerTest",
+   "methods": [
+    "anAcceptedReceiptIsNotUpgradedAndIsNeverReplayed",
+    "aDriftedDocumentOrAFailedReadBackStaysUnsettledAndIsNeverReplayed",
+    "anUnsettledWriteOfTheSameBucketBlocksADomainWrite"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2SippyCrossLayerOwnershipTest",
+   "methods": [
+    "theTaskClaimMovesTheMaterialAwayFromTheEditorDraft",
+    "aClaimedTaskKeepsItsMaterialWhileTheDraftUiRetiresDuringTheConfigurationRead",
+    "aGenuineRouteRevokeInThatSameWindowStillSendsNothing",
+    "theClaimedMaterialIsReleasedWhenTheGuardRefusesBeforeTheSend"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2SippyRuntimeTest",
+   "methods": [
+    "unknownPutIsNeverProvenByIdenticalPublicMetadata",
+    "aDeleteIsProvenOnlyByAnIndependentlyReadDisabledState",
+    "beforeSendAndFinalGuardDriftBothProduceZeroWrites",
+    "sippySharesOneLockAndUnsettledGateWithAAndB1AndB2InBothDirections"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2SippyLocatorTest",
+   "methods": [
+    "aMalformedOrBorrowedSippyLocatorFailsClosed"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2SippyAuthorityTest",
+   "methods": [
+    "bucketScopedOrItemOnlyPermissionNeverAuthorizesASippyWrite",
+    "aNonDefaultJurisdictionIsAdmittedOnlyForTheReviewedSippyActions"
+   ]
+  },
+  {
+   "class": "com.flarego.core.R2SippyFix1Test",
+   "methods": [
+    "retiringOrConsumingALeaseDropsItsMaterialReferenceDeterministically",
+    "aConsumedOrDiscardedSensitiveBodyDropsItsTemporaryText",
+    "aRefusedWriteReleasesTheTemporaryBodyAndKeepsAnExplicitLeasePolicy"
+   ]
+  }
+ ]
+}

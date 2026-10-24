@@ -21,6 +21,7 @@ fun R2BucketList(
     state: R2BucketListState,
     onIntent: (R2BucketIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenConfiguration: ((String) -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         if (state.loading || state.refreshing) {
@@ -127,21 +128,87 @@ fun R2BucketList(
                 }
             }
 
+            state.editingBucketName?.let { editingBucket ->
+                val canSubmit = state.editingOriginalStorageClass in state.storageClasses &&
+                        state.editingStorageClass != state.editingOriginalStorageClass &&
+                        state.editingStorageClass in state.storageClasses &&
+                        !state.loading &&
+                        !state.refreshing
+                SectionCard(modifier = Modifier.fillMaxWidth().testTag("rb-edit-card")) {
+                    Text(
+                        text = "修改默认存储类型",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = "仅影响新上传的对象，不会迁移已有对象。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = "目标存储桶：$editingBucket",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("rb-edit-target"),
+                    )
+                    Text(
+                        text = "原存储类型：${state.editingOriginalStorageClass ?: "未知"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("rb-edit-original"),
+                    )
+                    Text(
+                        text = "新存储类型",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf("Standard", "InfrequentAccess").forEach { sc ->
+                            FilterChip(
+                                selected = state.editingStorageClass == sc,
+                                onClick = { onIntent(R2BucketIntent.EditStorageClassChanged(sc)) },
+                                label = {
+                                    Text(
+                                        when (sc) {
+                                            "Standard" -> "标准 (Standard)"
+                                            "InfrequentAccess" -> "低频 (InfrequentAccess)"
+                                            else -> sc
+                                        }
+                                    )
+                                },
+                                modifier = Modifier.testTag("rb-edit-class-$sc"),
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { onIntent(R2BucketIntent.CancelStorageClassEdit) },
+                            modifier = Modifier.weight(1f).testTag("rb-edit-cancel"),
+                        ) {
+                            Text("取消")
+                        }
+                        Button(
+                            onClick = { onIntent(R2BucketIntent.SubmitStorageClassEdit) },
+                            enabled = canSubmit,
+                            modifier = Modifier.weight(1f).testTag("rb-edit-submit"),
+                        ) {
+                            Text("保存修改")
+                        }
+                    }
+                }
+            }
+
             SectionCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "创建存储桶",
                     style = MaterialTheme.typography.titleMedium,
                 )
-                OutlinedTextField(
-                    value = state.draftName,
-                    onValueChange = { onIntent(R2BucketIntent.NameChanged(it)) },
-                    label = { Text("存储桶名称") },
-                    placeholder = { Text("例如 my-bucket") },
-                    modifier = Modifier.fillMaxWidth().testTag("rb-create-name"),
-                    singleLine = true,
-                )
                 Text(
-                    text = "位置提示 (Location Hint)",
+                    text = "创建模式",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -150,18 +217,58 @@ fun R2BucketList(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     FilterChip(
-                        selected = state.draftLocationHint == null,
-                        onClick = { onIntent(R2BucketIntent.LocationHintChanged(null)) },
-                        label = { Text("默认 (无偏好)") },
-                        modifier = Modifier.testTag("rb-location-hint-none"),
+                        selected = state.createMode == R2BucketCreateMode.POST,
+                        onClick = { onIntent(R2BucketIntent.CreateModeChanged(R2BucketCreateMode.POST)) },
+                        label = { Text("默认 (POST)") },
+                        modifier = Modifier.testTag("rb-create-mode-post"),
                     )
-                    state.locationHints.forEach { hint ->
+                    FilterChip(
+                        selected = state.createMode == R2BucketCreateMode.PUT,
+                        onClick = { onIntent(R2BucketIntent.CreateModeChanged(R2BucketCreateMode.PUT)) },
+                        label = { Text("按名称创建 (PUT)") },
+                        modifier = Modifier.testTag("rb-create-mode-put"),
+                    )
+                }
+                if (state.createMode == R2BucketCreateMode.PUT) {
+                    Text(
+                        text = "PUT 模式不支持位置提示；若同名桶已存在将直接报错，不会覆盖既有配置。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("rb-create-put-hint"),
+                    )
+                }
+                OutlinedTextField(
+                    value = state.draftName,
+                    onValueChange = { onIntent(R2BucketIntent.NameChanged(it)) },
+                    label = { Text("存储桶名称") },
+                    placeholder = { Text("例如 my-bucket") },
+                    modifier = Modifier.fillMaxWidth().testTag("rb-create-name"),
+                    singleLine = true,
+                )
+                if (state.createMode == R2BucketCreateMode.POST) {
+                    Text(
+                        text = "位置提示 (Location Hint)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         FilterChip(
-                            selected = state.draftLocationHint == hint,
-                            onClick = { onIntent(R2BucketIntent.LocationHintChanged(hint)) },
-                            label = { Text(hint) },
-                            modifier = Modifier.testTag("rb-location-hint-$hint"),
+                            selected = state.draftLocationHint == null,
+                            onClick = { onIntent(R2BucketIntent.LocationHintChanged(null)) },
+                            label = { Text("默认 (无偏好)") },
+                            modifier = Modifier.testTag("rb-location-hint-none"),
                         )
+                        state.locationHints.forEach { hint ->
+                            FilterChip(
+                                selected = state.draftLocationHint == hint,
+                                onClick = { onIntent(R2BucketIntent.LocationHintChanged(hint)) },
+                                label = { Text(hint) },
+                                modifier = Modifier.testTag("rb-location-hint-$hint"),
+                            )
+                        }
                     }
                 }
                 Text(
@@ -255,8 +362,9 @@ fun R2BucketList(
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.testTag("rb-row-${row.name}"),
                                 )
+                                val storageDisplay = row.storageClass ?: "未知"
                                 Text(
-                                    text = "位置：${row.location ?: "自动"} · 类型：${row.storageClass ?: "Standard"}",
+                                    text = "位置：${row.location ?: "自动"} · 类型：$storageDisplay",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -267,11 +375,28 @@ fun R2BucketList(
                                 )
                             }
                         }
-                        Row(
+                        val isKnownStorageClass = row.storageClass in state.storageClasses
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
+                            onOpenConfiguration?.let { openConfig ->
+                                TextButton(
+                                    onClick = { openConfig(row.name) },
+                                    enabled = !state.loading && !state.refreshing,
+                                    modifier = Modifier.testTag("rb-config-${row.name}"),
+                                ) {
+                                    Text("桶设置")
+                                }
+                            }
+                            TextButton(
+                                onClick = { onIntent(R2BucketIntent.RequestStorageClassEdit(row.name)) },
+                                enabled = isKnownStorageClass && !state.loading && !state.refreshing,
+                                modifier = Modifier.testTag("rb-edit-${row.name}"),
+                            ) {
+                                Text(if (isKnownStorageClass) "修改存储类型" else "存储类型只读")
+                            }
                             TextButton(
                                 onClick = { onIntent(R2BucketIntent.OpenBucket(row.name)) },
                                 modifier = Modifier.testTag("rb-open-${row.name}"),

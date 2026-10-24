@@ -45,6 +45,50 @@ sealed interface HttpBody {
             if (parts.isEmpty()) throw invalidInputFailure()
         }
     }
+
+    /**
+     * One-shot sensitive JSON body (batch B3 Sippy credentials).
+     *
+     * Its content is never part of `toString`, a log line, an error message or a plan/task: the
+     * value is readable exactly once through [consumeBytes] and is refused on any second send.
+     * The platform transport treats it as ordinary bytes on the wire; the gateway never retries it.
+     */
+    @OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+    class SensitiveJson(
+        initialText: String,
+        val contentType: String,
+    ) : HttpBody {
+        init {
+            requireMediaType(contentType)
+        }
+
+        /** The one temporary text reference; taken out on the single send or on discard. */
+        private val text = kotlin.concurrent.atomics.AtomicReference<String?>(initialText)
+        private val consumed = kotlin.concurrent.atomics.AtomicReference(false)
+
+        /** Deterministic internal observation for tests; never depends on GC timing. */
+        internal val retainsContent: Boolean get() = text.load() != null
+
+        /** The exact UTF-8 bytes of this body, exactly once; a replay is refused, never re-sent. */
+        fun consumeBytes(): ByteArray {
+            if (!consumed.compareAndSet(false, true)) throw invalidInputFailure()
+            while (true) {
+                val current = text.load() ?: throw invalidInputFailure()
+                if (text.compareAndSet(current, null)) return current.encodeToByteArray()
+            }
+        }
+
+        /** Drops the temporary encoded value on every refusal path (best effort on the JVM). */
+        fun discard() {
+            if (consumed.compareAndSet(false, true)) text.store(null)
+        }
+
+        override fun toString(): String = "SensitiveJson(redacted)"
+
+        override fun equals(other: Any?): Boolean = this === other
+
+        override fun hashCode(): Int = System.identityHashCode(this)
+    }
 }
 
 /**
@@ -113,6 +157,10 @@ data class HttpResponse(
     /** Legacy UTF-8 text view. Never opens, reads or drains a stream. */
     val body: String
         get() = bytes.decodeToString()
+
+    /** A sensitive-capable response never prints its body through `toString`. */
+    override fun toString(): String =
+        "HttpResponse(status=$status, bytes=${bytes.size}, headers=${headers.keys.sorted()})"
 }
 
 fun interface HttpTransport {

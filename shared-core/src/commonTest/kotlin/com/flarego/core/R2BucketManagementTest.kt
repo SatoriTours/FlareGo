@@ -165,6 +165,16 @@ class R2BucketManagementTest {
     }
 
     @Test
+    fun aBucketDeleteSendsOneOwnedEmptyBodyRequestAndAcceptsAProviderReceipt() = runTest {
+        respond = { request -> if (request.method == "GET") ok(bucketRow()) else ok("null") }
+        client().deleteBucket(account, "my-bucket")
+        assertEquals(listOf("GET", "DELETE"), requests.map { it.method })
+        assertEquals("/accounts/account-one/r2/buckets/my-bucket", requests.last().path)
+        assertEquals(HttpBody.Empty, requests.last().payload)
+        assertEquals(1, requests.count { it.method == "DELETE" })
+    }
+
+    @Test
     fun aProviderPreconditionFailureIsExplainableAndIsNeverRetried() = runTest {
         var deletes = 0
         respond = { request ->

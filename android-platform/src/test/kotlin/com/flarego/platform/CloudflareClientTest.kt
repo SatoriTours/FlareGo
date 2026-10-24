@@ -224,16 +224,163 @@ class CloudflareClientTest {
 
     @Test
     fun onlyReviewedBusinessHeadersReachTheWire() {
-        // The R2 storage-class header is the one reviewed addition for batch A.
+        // The R2 storage-class and controlled jurisdiction headers are the reviewed additions.
         val accepted = cloudflareRequest("fixture",
             HttpRequest("PATCH", "/accounts/a/r2/buckets/b", headers = mapOf("cf-r2-storage-class" to "Standard")))
         assertEquals("Standard", accepted.header("cf-r2-storage-class"))
-        for (name in listOf("x-custom", "cf-r2-jurisdiction", "host", "authorization")) {
+        // The jurisdiction header carries only the pinned schema enum, verbatim.
+        for (jurisdiction in listOf("default", "eu", "us", "fedramp", "fedramp-high")) {
+            val withJurisdiction =
+                cloudflareRequest(
+                    "fixture",
+                    HttpRequest("PUT", "/accounts/a/r2/buckets/b/cors", headers = mapOf("cf-r2-jurisdiction" to jurisdiction)),
+                )
+            assertEquals(jurisdiction, withJurisdiction.header("cf-r2-jurisdiction"))
+        }
+        for (invalid in listOf("", "eu ", " EU", "EU", "mars", "default,eu", "eu;us")) {
+            val failure =
+                assertFailsWith<CloudFailure>(invalid) {
+                    cloudflareRequest(
+                        "fixture",
+                        HttpRequest("PUT", "/accounts/a/r2/buckets/b/cors", headers = mapOf("cf-r2-jurisdiction" to invalid)),
+                    )
+                }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, invalid)
+        }
+        for (name in listOf("x-custom", "host", "authorization")) {
             val failure = assertFailsWith<CloudFailure>(name) {
                 cloudflareRequest("fixture",
                     HttpRequest("PATCH", "/accounts/a/r2/buckets/b", headers = mapOf(name to "1")))
             }
             assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, name)
+        }
+    }
+
+    @Test
+    fun theDataCatalogCheckHeaderIsOnlyAdmittedAsFixedTrueOnACreateJobPost() {
+        val accepted =
+            cloudflareRequest(
+                "fixture",
+                HttpRequest(
+                    "POST",
+                    "/accounts/a/r2/buckets/b/jobs",
+                    HttpBody.Text("""{"jobType":"prefixDelete","prefix":""}""", "application/json; charset=utf-8"),
+                    mapOf("cf-r2-jurisdiction" to "default", "cf-r2-data-catalog-check" to "true"),
+                ),
+            )
+        assertEquals("true", accepted.header("cf-r2-data-catalog-check"))
+        assertEquals("default", accepted.header("cf-r2-jurisdiction"))
+
+        for (value in listOf("false", "True", "TRUE", "1", "", " true", "true ")) {
+            val failure = assertFailsWith<CloudFailure>(value) {
+                cloudflareRequest(
+                    "fixture",
+                    HttpRequest(
+                        "POST",
+                        "/accounts/a/r2/buckets/b/jobs",
+                        HttpBody.Text("""{"jobType":"prefixDelete","prefix":""}""", "application/json; charset=utf-8"),
+                        mapOf("cf-r2-data-catalog-check" to value),
+                    ),
+                )
+            }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code, value)
+        }
+        // The protection header belongs only to the reviewed create-job POST route.
+        assertFailsWith<CloudFailure> {
+            cloudflareRequest(
+                "fixture",
+                HttpRequest("GET", "/accounts/a/r2/buckets/b/jobs", headers = mapOf("cf-r2-data-catalog-check" to "true")),
+            )
+        }
+        assertFailsWith<CloudFailure> {
+            cloudflareRequest(
+                "fixture",
+                HttpRequest(
+                    "POST",
+                    "/accounts/a/r2/buckets/b/cors",
+                    HttpBody.Text("""{}""", "application/json; charset=utf-8"),
+                    mapOf("cf-r2-data-catalog-check" to "true"),
+                ),
+            )
+        }
+        assertFailsWith<CloudFailure> {
+            cloudflareRequest(
+                "fixture",
+                HttpRequest(
+                    "POST",
+                    "/accounts/a/r2/buckets/b/jobs",
+                    HttpBody.Text("""{}""", "application/json; charset=utf-8"),
+                    mapOf("cf-r2-data-catalog-check" to "true", "cf-r2-data-catalog-check " to "true"),
+                ),
+            )
+        }
+        // The route is an exact structure, not a substring match.
+        for (wrongRoute in listOf(
+            "/accounts/a/r2/buckets/b/other/jobs",
+            "/accounts/a/r2/buckets/b/jobs/extra",
+            "/accounts/a/r2/buckets/b//jobs",
+            "/accounts/a/r2/buckets/b/../jobs",
+            "/x/accounts/a/r2/buckets/b/jobs",
+        )) {
+            assertFailsWith<CloudFailure>(wrongRoute) {
+                cloudflareRequest(
+                    "fixture",
+                    HttpRequest(
+                        "POST",
+                        wrongRoute,
+                        HttpBody.Text("""{}""", "application/json; charset=utf-8"),
+                        mapOf("cf-r2-data-catalog-check" to "true"),
+                    ),
+                )
+            }
+        }
+        // A case-variant duplicate of the same header is refused, not silently doubled.
+        assertFailsWith<CloudFailure> {
+            cloudflareRequest(
+                "fixture",
+                HttpRequest(
+                    "POST",
+                    "/accounts/a/r2/buckets/b/jobs",
+                    HttpBody.Text("""{}""", "application/json; charset=utf-8"),
+                    linkedMapOf(
+                        "cf-r2-data-catalog-check" to "true",
+                        "CF-R2-Data-Catalog-Check" to "true",
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun aSensitiveJsonBodyIsSentExactlyOnceAndNeverEchoedByToString(): Unit = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            server.start()
+            val secretBody =
+                HttpBody.SensitiveJson(
+                    """{"secret":"SYNTHETIC-PLATFORM-VALUE"}""",
+                    "application/json; charset=utf-8",
+                )
+            val request =
+                HttpRequest(
+                    "PUT",
+                    "/accounts/a/r2/buckets/b/sippy",
+                    secretBody,
+                    mapOf("cf-r2-jurisdiction" to "default"),
+                )
+            assertFalse(request.toString().contains("SYNTHETIC-PLATFORM-VALUE"))
+            assertFalse(secretBody.toString().contains("SYNTHETIC-PLATFORM-VALUE"))
+            val response = testTransport(server).execute(request)
+            assertEquals(200, response.status)
+            val recorded = assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("application/json; charset=utf-8", recorded.getHeader("Content-Type"))
+            assertEquals("""{"secret":"SYNTHETIC-PLATFORM-VALUE"}""", recorded.body.readUtf8())
+            // The one-shot body cannot be turned into a second request.
+            val failure = assertFailsWith<CloudFailure> { testTransport(server).execute(request) }
+            assertEquals(CloudFailureCode.INVALID_INPUT, failure.code)
+            assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+            assertEquals(1, server.requestCount)
+            assertFalse(response.toString().contains("SYNTHETIC-PLATFORM-VALUE"))
         }
     }
 

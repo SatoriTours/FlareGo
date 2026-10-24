@@ -70,8 +70,16 @@ class R2TokenAuthorityIssuer(
                                  force: Boolean, generation: Long): R2WriteObservation = refresh.withLock {
         ScopeGuard.requireOwned(target.account, connection)
         validateR2BucketName(target.bucket)
-        if (target.jurisdiction != "default" || operation !in R2TokenPolicyEvaluation.operations)
+        // The jurisdiction itself must be one of the five pinned values: anything else is
+        // refused here, before a provider read or a proof, not by the last wire client.
+        // A non-default jurisdiction is admitted only for the reviewed configuration writes
+        // whose endpoint declares the controlled header; everything else stays default-only.
+        if (target.jurisdiction !in R2_JURISDICTIONS ||
+            operation !in R2TokenPolicyEvaluation.operations ||
+            (target.jurisdiction != "default" && operation !in R2TokenPolicyEvaluation.jurisdictionOperations)
+        ) {
             return@withLock observation(target, operation, WriteAuthorityReason.UNSUPPORTED_OPERATION)
+        }
         try {
             val started = check(generation)
             state.load().lease?.let { lease ->

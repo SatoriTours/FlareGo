@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -16,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import com.flarego.core.model.Page
 import com.flarego.platform.AndroidUpdateInstaller
 import com.flarego.ui.FlareGoApp
+import com.flarego.ui.r2.SecurePurpose
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -45,6 +45,14 @@ class MainActivity : ComponentActivity() {
     private val r2Download = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         model.onR2DocumentResult(com.flarego.ui.r2.R2DocumentKind.DOWNLOAD, it.resultCode, it.data)
     }
+    /**
+     * The one `FLAG_SECURE` owner of this Activity's real window.
+     *
+     * The pre-existing connect/token dialog and the batch B3 Sippy credential editor are *purposes*
+     * of this single owner, so neither can clear the other's flag and neither clears a flag it does
+     * not own. It is created per Activity and bound to this window only.
+     */
+    private lateinit var secureWindow: AndroidSecureWindow
     override fun onResume() { super.onResume();model.onManagementResume() }
 
     private suspend fun installOrAuthorize(current: FlareGoViewModel) {
@@ -81,6 +89,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Bound before any content is composed, so the first frame that could show a secret already
+        // sees a real protection owner.
+        secureWindow = AndroidSecureWindow(window)
+        model.attachSecureWindow(secureWindow)
         setContent {
             val current = model
             val state by current.controller.state.collectAsState()
@@ -142,9 +154,11 @@ class MainActivity : ComponentActivity() {
                         Intent(Intent.ACTION_VIEW, Uri.parse("https://dash.cloudflare.com$path"))
                     )
                 },
+                // Pre-existing purpose (the connect/token dialog). It shares the one owner with the
+                // Sippy credential editor, so this callback can no longer clear the other purpose's
+                // flag and releasing it never clears a FLAG_SECURE this owner did not set.
                 sensitiveScreen = { sensitive ->
-                    if (sensitive) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                    else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    secureWindow.setPurpose(SecurePurpose.CONNECTION_TOKEN, sensitive)
                 },
                 updater = current.updater,
                 connectionDraft = current.connectionDraft,
@@ -157,5 +171,15 @@ class MainActivity : ComponentActivity() {
                 r2Browser = current.r2Browser,
             )
         }
+    }
+
+    override fun onDestroy() {
+        // Drop readiness and the private Sippy material of *this* generation; a new Activity's
+        // window is untouched by this stale owner.
+        model.onSecureWindowClosed(secureWindow)
+        // Teardown cancels eligibility but never clears the physical flag: the dying window may still
+        // show its last frame, and the layer disappears with the window itself.
+        secureWindow.closeForTeardown()
+        super.onDestroy()
     }
 }

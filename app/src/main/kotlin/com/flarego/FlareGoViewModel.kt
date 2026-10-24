@@ -125,6 +125,104 @@ class FlareGoViewModel constructor(
             throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
         return com.flarego.core.cloudflare.identity.AuthorizedR2Session(connection, bundle.gateway, bundle.transfers, bundle.r2Issuer)
     }
+    /**
+     * The batch B1 configuration session of the one app-owned credential bundle: reads reuse
+     * the reviewed wire client, every write obtains a fresh proof from the same stable
+     * `R2TokenAuthorityIssuer` as batch A.
+     */
+    private suspend fun r2ConfigurationSessionFor(
+        connection: Connection,
+        expectedRevision: Long? = null,
+    ): com.flarego.core.ports.R2ConfigurationSession {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 配置管理尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedR2ConfigurationSession(
+            connection, bundle.gateway, bundle.r2Issuer)
+    }
+    /**
+     * The batch B2 domain session of the one app-owned credential bundle. Zone ownership reuses
+     * the reviewed `ZoneManagementPort` read (`CloudflareZoneClient`), never a DNS write.
+     */
+    private suspend fun r2DomainSessionFor(
+        connection: Connection,
+        expectedRevision: Long? = null,
+    ): com.flarego.core.ports.R2DomainConfigurationSession {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 域名配置管理尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        val zones = com.flarego.core.cloudflare.zones.CloudflareZoneClient(connection, bundle.gateway)
+        return com.flarego.core.cloudflare.identity.AuthorizedR2DomainConfigurationSession(
+            connection, bundle.gateway, bundle.r2Issuer, zones)
+    }
+    /**
+     * The batch B3 Sippy session of the one app-owned credential bundle: reads reuse the reviewed
+     * wire client, every write obtains a fresh proof from the same stable `R2TokenAuthorityIssuer`.
+     */
+    private suspend fun r2SippySessionFor(
+        connection: Connection,
+        expectedRevision: Long? = null,
+    ): com.flarego.core.ports.R2SippySession {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 Sippy 配置管理尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedR2SippySession(
+            connection, bundle.gateway, bundle.r2Issuer)
+    }
+
+    /**
+     * The batch C bucket-job session of the one app-owned credential bundle: reads reuse the reviewed
+     * wire client, the single create obtains a fresh proof from the same stable `R2TokenAuthorityIssuer`.
+     */
+    private suspend fun r2JobsSessionFor(
+        connection: Connection,
+        expectedRevision: Long? = null,
+    ): com.flarego.core.ports.R2JobSession {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 后台作业尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedR2JobsSession(connection, bundle.gateway, bundle.r2Issuer)
+    }
+
+    /**
+     * The batch C event-notification session of the one app-owned credential bundle. Its writes install
+     * the proof-bound final guard on the client's own fresh pre-write document.
+     */
+    private suspend fun r2NotificationSessionFor(
+        connection: Connection,
+        expectedRevision: Long? = null,
+    ): com.flarego.core.ports.R2NotificationSession {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 事件通知尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision)
+            throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "R2 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedR2NotificationSession(
+            connection, bundle.gateway, bundle.r2Issuer)
+    }
+
+    /** The batch C account-metrics read of the one credential bundle (account-level only). */
+    private suspend fun r2MetricsFor(connection: Connection): com.flarego.core.ports.R2MetricsPort {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+            "当前 R2 账号指标尚无演示适配器；不会把示例当作真实云结果")
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        return com.flarego.core.cloudflare.r2.CloudflareR2MetricsClient(connection, bundle.gateway)
+    }
+
     private val r2Writes: R2WriteRuntime by lazy {
         R2WriteRuntime(viewModelScope, operationStore, operationDispatcher, AndroidFingerprint(),
             OperationClock(System::currentTimeMillis), OperationIds { UUID.randomUUID().toString() },
@@ -136,13 +234,75 @@ class FlareGoViewModel constructor(
                 val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
                     ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
                 r2SessionFor(connection)
-            }, publish = { controllerRef.publishTasks(it) })
+            }, publish = { controllerRef.publishTasks(it) },
+            configSession = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2ConfigurationSessionFor(connection)
+            },
+            domainSession = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2DomainSessionFor(connection)
+            },
+            sippySession = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2SippySessionFor(connection)
+            },
+            jobSession = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2JobsSessionFor(connection)
+            },
+            notificationSession = { account ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.INVALID_INPUT, "R2 账号已失效")
+                r2NotificationSessionFor(connection)
+            })
     }
-    val r2Browser: com.flarego.ui.r2.R2Browser by lazy {
-        com.flarego.ui.r2.R2Browser(viewModelScope, ::actualR2Context, r2Writes) { context ->
-            r2SessionFor(context.connection, context.credentialRevision)
-        }
+    /**
+     * The one secure-window port of the *current* Activity/window.
+     *
+     * It is replaced on Activity recreation and cleared on detach, so a stale owner can never change
+     * a new window and the credential editor loses its readiness (and its material) instead of
+     * pretending to be protected.
+     */
+    @Volatile
+    private var secureWindowPort: com.flarego.ui.r2.SecureWindowPort? = null
+
+    fun attachSecureWindow(port: com.flarego.ui.r2.SecureWindowPort) {
+        secureWindowPort = port
+        // Attaching a *different* window revokes the previous readiness and drops the private Sippy
+        // material now, instead of waiting for the old Activity's onDestroy or a later getter.
+        if (r2BrowserLazy.isInitialized()) r2Browser.sippyCredentials.onWindowAttached(port.generation)
     }
+
+    /** Test observation only: the port the current Activity attached (never a credential). */
+    internal fun attachedSecureWindowForTest(): com.flarego.ui.r2.SecureWindowPort? = secureWindowPort
+
+    /** The Activity/window is going away: drop readiness and the private Sippy material eagerly. */
+    fun onSecureWindowClosed(port: com.flarego.ui.r2.SecureWindowPort) {
+        if (secureWindowPort === port) secureWindowPort = null
+        if (r2BrowserLazy.isInitialized()) r2Browser.sippyCredentials.onWindowDetached(port.generation)
+    }
+
+    private val r2BrowserLazy = lazy {
+        com.flarego.ui.r2.R2Browser(
+            viewModelScope,
+            ::actualR2Context,
+            r2Writes,
+            { context -> r2ConfigurationSessionFor(context.connection, context.credentialRevision) },
+            { context -> r2DomainSessionFor(context.connection, context.credentialRevision) },
+            { context -> r2SippySessionFor(context.connection, context.credentialRevision) },
+            { secureWindowPort },
+            jobsSession = { context -> r2JobsSessionFor(context.connection, context.credentialRevision) },
+            notificationSession = { context -> r2NotificationSessionFor(context.connection, context.credentialRevision) },
+            metricsSession = { context -> r2MetricsFor(context.connection) },
+            session = { context -> r2SessionFor(context.connection, context.credentialRevision) },
+        )
+    }
+    val r2Browser: com.flarego.ui.r2.R2Browser get() = r2BrowserLazy.value
     private val r2Documents by lazy { R2DocumentBridge(getApplication(), viewModelScope, r2Browser) }
     fun takeR2DocumentLaunch(id: Long) = r2Documents.takeLaunch(id)
     fun onR2DocumentLaunchFailed(kind: com.flarego.ui.r2.R2DocumentKind) = r2Documents.launchFailed(kind)

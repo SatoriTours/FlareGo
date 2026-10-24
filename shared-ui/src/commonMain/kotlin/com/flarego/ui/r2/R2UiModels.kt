@@ -3,7 +3,14 @@ package com.flarego.ui.r2
 data class R2BucketRow(val name: String, val location: String?, val storageClass: String?, val createdAt: String?)
 data class R2ObjectRow(val key: String, val size: Long?, val etag: String?, val lastModified: String?)
 
+enum class R2BucketCreateMode { POST, PUT }
+
 sealed interface R2BucketIntent {
+    data class CreateModeChanged(val mode: R2BucketCreateMode) : R2BucketIntent
+    data class RequestStorageClassEdit(val name: String) : R2BucketIntent
+    data class EditStorageClassChanged(val value: String) : R2BucketIntent
+    object SubmitStorageClassEdit : R2BucketIntent
+    object CancelStorageClassEdit : R2BucketIntent
     data class NameChanged(val value: String) : R2BucketIntent
     data class LocationHintChanged(val value: String?) : R2BucketIntent
     data class StorageClassChanged(val value: String) : R2BucketIntent
@@ -23,6 +30,10 @@ data class R2BucketListState(
     val error: String? = null,
     val rows: List<R2BucketRow> = emptyList(),
     val nextCursor: String? = null,
+    val createMode: R2BucketCreateMode = R2BucketCreateMode.POST,
+    val editingBucketName: String? = null,
+    val editingOriginalStorageClass: String? = null,
+    val editingStorageClass: String = "Standard",
     val draftName: String = "",
     val draftLocationHint: String? = null,
     val draftStorageClass: String = "Standard",

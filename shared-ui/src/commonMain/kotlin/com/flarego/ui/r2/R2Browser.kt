@@ -3,6 +3,8 @@ package com.flarego.ui.r2
 import com.flarego.core.model.*
 import com.flarego.core.application.r2.*
 import com.flarego.core.ports.*
+import com.flarego.ui.r2.R2CDeletionConfirmation
+import com.flarego.ui.r2.R2CConfirmationTicket
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
@@ -29,51 +31,253 @@ class R2Browser(
     private val scope: CoroutineScope,
     private val actual: () -> R2BrowserContext?,
     private val writeRuntime: R2WriteRuntime?,
+    // Optional batch B1/B2 dependencies before the trailing `session` parameter, so the
+    // historical trailing-lambda `R2Session` constructor keeps working unchanged.
+    private val configurationSession: (suspend (R2BrowserContext) -> R2ConfigurationSession)? = null,
+    private val domainSession: (suspend (R2BrowserContext) -> R2DomainConfigurationSession)? = null,
+    // Batch B3 Sippy dependencies; both optional so every existing construction keeps working.
+    private val sippySession: (suspend (R2BrowserContext) -> R2SippySession)? = null,
+    private val sippySecureWindow: () -> SecureWindowPort? = { null },
+    // Batch C dependencies (all optional: without them the C surfaces stay read-only).
+    private val jobsSession: (suspend (R2BrowserContext) -> R2JobSession)? = null,
+    private val notificationSession: (suspend (R2BrowserContext) -> R2NotificationSession)? = null,
+    private val metricsSession: (suspend (R2BrowserContext) -> R2MetricsPort)? = null,
     private val session: suspend (R2BrowserContext) -> R2Session,
 ) {
-    constructor(scope: CoroutineScope, actual: () -> R2BrowserContext?, session: suspend (R2BrowserContext) -> R2Session) : this(scope, actual, null, session)
+    constructor(scope: CoroutineScope, actual: () -> R2BrowserContext?, session: suspend (R2BrowserContext) -> R2Session) : this(scope, actual, null, null, null, null, session = session)
+    /**
+     * The one active bucket-settings surface. It requests previews/confirmations from this
+     * same route and never holds an executable plan or a raw client.
+     */
+    val configuration: R2ConfigurationBrowser =
+        R2ConfigurationBrowser(
+            scope,
+            actual,
+            configurationSession,
+            domainSession,
+            requestPreview = { write -> prepareWrite(R2Command.Configuration(write)) },
+            requestDomainPreview = { write -> prepareWrite(R2Command.Domain(write)) },
+            requestConfirm = { confirmPreview() },
+            requestCancel = { cancelPreview() },
+            sippySession = sippySession,
+            requestSippyPreview = { write -> prepareWrite(R2Command.Sippy(write)) },
+            secureWindow = sippySecureWindow,
+        )
+    /** The app-owned, memory-only Sippy credential editor; the UI never sees a credential value. */
+    val sippyCredentials get() = configuration.sippyCredentials
+
     private var command: R2Command? = null
     var confirmationEpoch: Long = 0; private set
-    fun liveCommand(): R2Command? = command.takeIf { !closed && bound == actual() }
+    /** The pending batch C command, if the prepared preview belongs to the C surface. */
+    private var cCommand: R2Command? = null
+    private val cBucket = { cBucketName }
+    private var cBucketName: String? = null
+
+    /**
+     * The batch C root: typed reads plus the two write families, with the three-stage deletion
+     * owner as its execution guard. It never prepares or confirms anything by itself — both go
+     * through this browser's root path below.
+     */
+    val c: R2CController =
+        R2CController(
+            scope,
+            actual,
+            prepareCommand = { next -> prepareC(next) },
+            confirmCommand = { ticket -> confirmC(ticket) },
+            bucket = cBucket,
+            runtime = writeRuntime,
+            jobs = jobsSession,
+            notifications = notificationSession,
+            metrics = metricsSession,
+            requestInvalidate = { invalidateWrite() },
+        )
+
+    /** Selects the bucket the C surface addresses (a route choice, never parsed from a display name). */
+    fun onCBucketSelected(bucket: String) {
+        cBucketName = bucket
+        c.onTargetChanged(bucket)
+    }
+
+    /**
+     * Root prepare of one C command.
+     *
+     * It marks the preview as a C one (so the generic confirmation path refuses it) and uses the same
+     * one prepare path as every other family.
+     */
+    private fun prepareC(next: R2Command): Boolean {
+        if (closed || writeRuntime == null || bound != actual()) return false
+        if (!c.state.value.open || c.liveCommand() != next || mutable.value.writing) return false
+        prepareWrite(next)
+        return command === next
+    }
+
+    /**
+     * Root confirm of one C command.
+     *
+     * This is the only reachable path to a C write. A destructive command (prefix delete, notification
+     * selected/all removal) additionally requires a ticket from the three-stage owner that the C
+     * controller consumed exactly once and that is bound to the current draft and live route/credential;
+     * the generic [confirmPreview] refuses every C command, so no button, old callback or generic
+     * confirmation can bypass the stages.
+     */
+    private fun confirmC(ticket: R2CConfirmationTicket?): Job? {
+        val pending = cCommand ?: return null
+        if (!current() || mutable.value.writing || !c.isReadyFor(pending)) return null
+        val destructive =
+            when (pending) {
+                is R2Command.Job -> pending.write is R2JobWrite.PrefixDelete
+                is R2Command.Notification -> pending.write is R2NotificationWrite.Delete
+                else -> false
+            }
+        if (destructive && ticket == null) return null
+        if (ticket != null) {
+            if (!c.matchesTicket(pending, ticket)) return null
+        }
+        val runtime = writeRuntime ?: return null
+        val preview = mutable.value.preview ?: return null
+        val context = bound; val stamp = confirmationEpoch
+        mutable.value = mutable.value.copy(writing = true)
+        return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                val task = runtime.confirm(preview.planId)
+                if (context == actual() && stamp == confirmationEpoch) {
+                    val notice = taskNoticeFor(task)
+                    mutable.value = mutable.value.copy(preview = null, notice = notice)
+                    command = null
+                    cCommand = null
+                    c.onRootSettled(notice)
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (e: Exception) {
+                if (context == actual() && stamp == confirmationEpoch) {
+                    val message = safe(e)
+                    writeError(message); invalidateWrite(); c.onRootRejected(message)
+                }
+            } finally {
+                if (context == actual() && stamp == confirmationEpoch) mutable.value = mutable.value.copy(writing = false)
+            }
+        }
+    }
+
+    private fun taskNoticeFor(task: com.flarego.core.model.OperationTask): String =
+        when (task.state) {
+            com.flarego.core.model.TaskState.SUCCEEDED -> "只读核对为成功（仅该作业/该配置）"
+            com.flarego.core.model.TaskState.ACCEPTED -> "已受理，仍在进行；请稍后只读刷新"
+            com.flarego.core.model.TaskState.UNKNOWN -> "结果尚未确定，只能只读核对，不会自动重试"
+            com.flarego.core.model.TaskState.ACTION_REQUIRED -> "需要人工核对（可能已有副作用），不会重试"
+            com.flarego.core.model.TaskState.PARTIAL -> "部分成功；失败/跳过计数以供应商结果为准"
+            com.flarego.core.model.TaskState.FAILED -> "已被拒绝或未发送（可信本地证据）"
+            else -> "状态：${task.state.name}"
+        }
+
+    /**
+     * The actual editor command of the live route.
+     *
+     * A Sippy route resolves it from the current private credential draft and the current window
+     * protection — never from a prepared command or a plan id. When that draft is incomplete or
+     * unprotected there is no live command, so a stale confirmation cannot be completed.
+     */
+    fun liveCommand(): R2Command? {
+        if (closed || bound != actual()) return null
+        if (c.state.value.open) return c.liveCommand()
+        configuration.liveSippyCommand()?.let { return it }
+        return command
+    }
     fun cancelPreview() { if (!mutable.value.writing) invalidateWrite() }
     private fun invalidateWrite() {
-        confirmationEpoch++; command = null
+        mutable.value.preview?.let { writeRuntime?.discardPreview(it.planId) }
+        confirmationEpoch++; command = null; cCommand = null
         mutable.value = mutable.value.copy(preview = null, writing = false)
+        // The settings surface shares this one route, so its display preview dies with it.
+        configuration.onRootInvalidated()
+        c.onRootInvalidated()
     }
     private fun prepareWrite(next: R2Command) {
         val runtime = writeRuntime ?: run { writeError(WRITE_NOTICE); return }
         val context = bound ?: return
         invalidateWrite(); command = next
+        if (next is R2Command.Job || next is R2Command.Notification) {
+            cCommand = next
+            c.onRootPreparing(next)
+        }
         val stamp = confirmationEpoch
         mutable.value = mutable.value.copy(writing = true)
         scope.launch {
             try {
                 val preview = runtime.prepare(next)
-                if (bound == context && actual() == context && stamp == confirmationEpoch)
+                if (bound == context && actual() == context && stamp == confirmationEpoch) {
                     mutable.value = mutable.value.copy(preview = preview, notice = "仅预览，尚未发送；请核对目标后显式确认")
+                    when (next) {
+                        is R2Command.Configuration -> configuration.onRootPreview(preview, next.write)
+                        is R2Command.Domain -> configuration.onRootDomainPreview(preview, next.write)
+                        is R2Command.Sippy -> configuration.onRootSippyPreview(preview, next.write)
+                        is R2Command.Job -> c.onRootPreview(next,
+                            runtime.jobPreviewDetail(preview.planId).describe() + "；" + preview.detail.impact + "；" + preview.detail.concurrencyWarning)
+                        is R2Command.Notification -> c.onRootPreview(next,
+                            "账号：${preview.detail.scope}；桶：${preview.detail.bucket}；" +
+                                runtime.notificationPreviewDetail(preview.planId).describe() +
+                                (next.write as? R2NotificationWrite.Append)?.rules.orEmpty().joinToString("；", prefix = "；新增规则范围：") {
+                                    "${it.actions.joinToString("+")}；prefix=${it.prefix ?: "（全部对象）"}；suffix=${it.suffix ?: "（不限）"}；description=${it.description ?: "（无）"}"
+                                } + "；" + preview.detail.impact + "；" + preview.detail.concurrencyWarning)
+                        else -> Unit
+                    }
+                } else runtime.discardPreview(preview.planId)
             } catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { if (stamp == confirmationEpoch && actual() == context) writeError(safe(e)) }
-            finally { if (stamp == confirmationEpoch && actual() == context) mutable.value = mutable.value.copy(writing = false) }
+            catch (e: Exception) {
+                if (stamp == confirmationEpoch && actual() == context) {
+                    writeError(safe(e))
+                    configuration.onRootInvalidated()
+                    if (next is R2Command.Job || next is R2Command.Notification) c.onRootRejected(safe(e))
+                }
+            }
+            finally {
+                if (stamp == confirmationEpoch && actual() == context) {
+                    mutable.value = mutable.value.copy(writing = false)
+                    configuration.onRootWriting(false)
+                }
+            }
         }
     }
-    fun confirmPreview() {
-        if (!current() || mutable.value.writing) return
-        val runtime = writeRuntime ?: return
-        val preview = mutable.value.preview ?: return
+    /**
+     * Confirms the current preview exactly once.
+     *
+     * Returns the app-owned job of *this* confirmation (null when the guard refused), so a caller can
+     * observe the real outcome of the operation it started — never to re-execute it, never to skip the
+     * single-flight guard. The UI callbacks adapt it to `Unit`.
+     */
+    fun confirmPreview(): Job? {
+        // A batch C preview is only ever confirmed through the C root path (with its own guard).
+        if (command is R2Command.Job || command is R2Command.Notification || cCommand != null) return null
+        if (!current() || mutable.value.writing) return null
+        val runtime = writeRuntime ?: return null
+        val preview = mutable.value.preview ?: return null
         val context = bound; val stamp = confirmationEpoch
         mutable.value = mutable.value.copy(writing = true)
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 val task = runtime.confirm(preview.planId)
                 if (context == actual() && stamp == confirmationEpoch) {
-                    val notice = taskNotice(task)
+                    // Batch B1 and B2 domain writes are the same confirmation family: both must
+                    // settle the configuration surface, not only the root notice.
+                    val wasConfiguration = command is R2Command.Configuration || command is R2Command.Domain ||
+                        command is R2Command.Sippy
+                    val notice = if (wasConfiguration) configurationTaskNotice(task) else taskNotice(task)
                     mutable.value = mutable.value.copy(notice = notice, preview = null,
                         objects = mutable.value.objects?.copy(notice = notice))
                     if (command is R2Command.Object && (command as R2Command.Object).write is R2ObjectWrite.Upload) clearUpload()
                     command = null
+                    if (wasConfiguration) {
+                        configuration.onRootSettled(notice, reload = task.state == TaskState.SUCCEEDED)
+                    }
                 }
             } catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { if (context == actual() && stamp == confirmationEpoch) { writeError(safe(e)); invalidateWrite() } }
+            catch (e: Exception) {
+                if (context == actual() && stamp == confirmationEpoch) {
+                    writeError(safe(e))
+                    invalidateWrite()
+                }
+            }
             finally { if (context == actual() && stamp == confirmationEpoch) mutable.value = mutable.value.copy(writing = false) }
         }
     }
@@ -86,15 +290,33 @@ class R2Browser(
         scope.launch {
             try {
                 val task = runtime.reconcile(id)
-                if (context == actual() && stamp == confirmationEpoch) mutable.value = mutable.value.copy(notice = taskNotice(task))
+                if (context == actual() && stamp == confirmationEpoch) {
+                    // A configuration/domain task reconciles onto the configuration surface too.
+                    val configurationTask = task.actionKey in R2TaskTargets.CONFIGURATION_WRITE_ACTIONS ||
+                        task.actionKey in R2TaskTargets.DOMAIN_WRITE_ACTIONS ||
+                        task.actionKey in R2TaskTargets.SIPPY_ACTIONS
+                    val notice = if (configurationTask) configurationTaskNotice(task) else taskNotice(task)
+                    mutable.value = mutable.value.copy(notice = notice)
+                    if (configurationTask) {
+                        configuration.onRootSettled(notice, reload = task.state == TaskState.SUCCEEDED)
+                    }
+                }
             } catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { if (context == actual() && stamp == confirmationEpoch) writeError(safe(e)) }
             finally { if (context == actual() && stamp == confirmationEpoch) mutable.value = mutable.value.copy(writing = false) }
         }
     }
+    /** A configuration result is only the verified configuration state, never migration history. */
+    private fun configurationTaskNotice(task: OperationTask) = when (task.state) {
+        TaskState.SUCCEEDED ->
+            "配置写入已按同锁回读核对为当前可观察状态；请刷新查看。这不宣称对象迁移、供应商历史或内部原子隔离，也不宣称域名/SSL/连通性就绪"
+        TaskState.FAILED -> "配置写入未发送，或已有可信证据证明未生效；再次操作须重新预览确认"
+        else -> "配置任务状态：${task.state}。结果尚未完全确定，只能只读核对，不会自动重试写入"
+    }
+
     private fun taskNotice(task: OperationTask) = when (task.state) {
         TaskState.SUCCEEDED -> "供应商已确认该操作；请刷新列表查看当前结果"
-        TaskState.FAILED -> "供应商拒绝操作；请核对任务状态和权限"
+        TaskState.FAILED -> "操作未成功；请核对当前输入、权限和任务状态，再次操作须重新预览确认"
         else -> "任务状态：${task.state}。结果未完全确定；只能只读核对，不会自动重试写入"
     }
     private fun writeError(message: String) {
@@ -128,6 +350,8 @@ class R2Browser(
         if (current == bound) return
         epoch++; job?.cancel(); seen.clear(); clearUpload(); invalidateWrite()
         bound = current
+        configuration.onContextChanged(current)
+        c.close()
         mutable.value = R2BrowserState(context = current, notice = if (writesAvailable) WRITE_READY_NOTICE else WRITE_NOTICE)
         if (current != null) scope.launch { runCatching { writeRuntime?.refreshTasks() } }
         if (current != null) loadBuckets(false)
@@ -147,7 +371,32 @@ class R2Browser(
     fun close() {
         if (closed) return
         epoch++; closed = true; job?.cancel(); clearUpload(); invalidateWrite(); bound = null
+        configuration.close()
+        c.close()
         mutable.value = R2BrowserState(); launches.value = null
+    }
+
+    /**
+     * The single route for the bucket settings surface.
+     *
+     * Every input/target/panel change revokes the prepared preview before the new state is
+     * applied, so leaving the panel (or editing any field) can never leave a live
+     * configuration command behind.
+     */
+    fun onConfigurationIntent(intent: R2ConfigurationIntent) {
+        if (!current() || (mutable.value.writing &&
+                intent != R2ConfigurationIntent.CancelPreview &&
+                intent != R2ConfigurationIntent.Close)
+        ) {
+            return
+        }
+        when (intent) {
+            R2ConfigurationIntent.Confirm, R2ConfigurationIntent.CancelPreview -> configuration.onIntent(intent)
+            else -> {
+                invalidateWrite()
+                configuration.onIntent(intent)
+            }
+        }
     }
 
     fun onBucketIntent(intent: R2BucketIntent) {
@@ -155,15 +404,46 @@ class R2Browser(
         invalidateWrite()
         val b = mutable.value.buckets
         when (intent) {
+            is R2BucketIntent.CreateModeChanged -> mutable.value = mutable.value.copy(buckets = b.copy(
+                createMode = intent.mode,
+                draftLocationHint = if (intent.mode == R2BucketCreateMode.PUT) null else b.draftLocationHint,
+                editingBucketName = null, editingOriginalStorageClass = null,
+                pendingDeleteName = null, typedDeleteName = "", validationMessage = null))
+            is R2BucketIntent.RequestStorageClassEdit -> {
+                val row = b.rows.singleOrNull { it.name == intent.name }
+                if (row == null || row.storageClass !in b.storageClasses) {
+                    mutable.value = mutable.value.copy(buckets = b.copy(editingBucketName = null,
+                        editingOriginalStorageClass = null, validationMessage = if (row == null)
+                            "目标不在当前存储桶列表，请刷新后再编辑" else "当前存储类型未知或缺失，只能只读查看"))
+                    return
+                }
+                mutable.value = mutable.value.copy(buckets = b.copy(editingBucketName = row.name,
+                    editingOriginalStorageClass = row.storageClass, editingStorageClass = row.storageClass!!,
+                    pendingDeleteName = null, typedDeleteName = "", validationMessage = null))
+            }
+            is R2BucketIntent.EditStorageClassChanged -> if (b.editingBucketName != null)
+                mutable.value = mutable.value.copy(buckets = b.copy(editingStorageClass = intent.value, validationMessage = null))
+            R2BucketIntent.CancelStorageClassEdit -> mutable.value = mutable.value.copy(buckets = b.copy(
+                editingBucketName = null, editingOriginalStorageClass = null, validationMessage = null))
+            R2BucketIntent.SubmitStorageClassEdit -> {
+                val target = b.editingBucketName?.takeIf { name -> b.rows.any { it.name == name } }
+                    ?: run { writeError("请先选择当前列表中的存储桶"); return }
+                prepareWrite(R2Command.Bucket(R2BucketWrite.PatchStorageClass(bound!!.account, target, b.editingStorageClass)))
+            }
             is R2BucketIntent.NameChanged -> mutable.value = mutable.value.copy(buckets = b.copy(draftName = intent.value, validationMessage = null))
-            is R2BucketIntent.LocationHintChanged -> mutable.value = mutable.value.copy(buckets = b.copy(draftLocationHint = intent.value))
+            is R2BucketIntent.LocationHintChanged -> if (b.createMode == R2BucketCreateMode.POST)
+                mutable.value = mutable.value.copy(buckets = b.copy(draftLocationHint = intent.value))
             is R2BucketIntent.StorageClassChanged -> mutable.value = mutable.value.copy(buckets = b.copy(draftStorageClass = intent.value))
             is R2BucketIntent.RequestDelete -> if (b.rows.any { it.name == intent.name })
-                mutable.value = mutable.value.copy(buckets = b.copy(pendingDeleteName = intent.name, typedDeleteName = ""))
+                mutable.value = mutable.value.copy(buckets = b.copy(pendingDeleteName = intent.name, typedDeleteName = "",
+                    editingBucketName = null, editingOriginalStorageClass = null))
             is R2BucketIntent.TypedDeleteNameChanged -> mutable.value = mutable.value.copy(buckets = b.copy(typedDeleteName = intent.value))
             R2BucketIntent.CancelDelete -> mutable.value = mutable.value.copy(buckets = b.copy(pendingDeleteName = null, typedDeleteName = ""))
-            R2BucketIntent.SubmitCreate -> prepareWrite(R2Command.Bucket(R2BucketWrite.Create(bound!!.account,
-                R2BucketCreateInput(b.draftName, locationHint = b.draftLocationHint, storageClass = b.draftStorageClass))))
+            R2BucketIntent.SubmitCreate -> prepareWrite(R2Command.Bucket(when (b.createMode) {
+                R2BucketCreateMode.POST -> R2BucketWrite.Create(bound!!.account,
+                    R2BucketCreateInput(b.draftName, locationHint = b.draftLocationHint, storageClass = b.draftStorageClass))
+                R2BucketCreateMode.PUT -> R2BucketWrite.CreateByName(bound!!.account, b.draftName, b.draftStorageClass)
+            }))
             R2BucketIntent.ConfirmDelete -> b.pendingDeleteName?.let {
                 prepareWrite(R2Command.Bucket(R2BucketWrite.Delete(bound!!.account, it, b.typedDeleteName)))
             }

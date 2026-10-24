@@ -152,7 +152,13 @@ class ChangePlans(
     private val context: OperationContextResolver,
     private val clock: OperationClock,
     private val ids: OperationIds,
+    private val retentionLimit: Int? = null,
 ) {
+    init { require(retentionLimit == null || retentionLimit > 0) }
+    // Used only by opt-in bounded issuers. Reclaimed string IDs must never identify
+    // a later plan or confirmation, even if a trusted ID source repeats a value.
+    private var retainedSerial = 0L
+
     /** Shared by every engine built on this issuer. */
     internal val coordination = CoordinationDomain()
 
@@ -186,7 +192,11 @@ class ChangePlans(
             // A caller time may only shorten the window; the trusted clock caps it.
             val base = minOf(nowMs, trusted)
             if (base > Long.MAX_VALUE - TTL_MS) throw invalidInputFailure()
-            val id = ids.nextId()
+            pruneExpiredLocked(trusted)
+            if (retentionLimit != null && prepared.size >= retentionLimit) {
+                throw CloudFailure(CloudFailureCode.INVALID_INPUT, "待保留的预览或确认已达上限，请取消旧预览或稍后再试")
+            }
+            val id = nextIdentity()
             if (id.isBlank() || id in prepared) throw invalidInputFailure()
             val plan =
                 ChangePlan(
@@ -220,7 +230,7 @@ class ChangePlans(
             requireLiveSnapshot(plan.scope, plan.resourceRef, plan.credentialRevision, requestFingerprint)
             val existing = issued[planId]
             if (existing != null) return existing.confirmation
-            val confirmationId = ids.nextId()
+            val confirmationId = nextIdentity()
             if (confirmationId.isBlank() || issued.values.any { it.confirmation.confirmationId == confirmationId }) {
                 throw invalidInputFailure()
             }
@@ -250,6 +260,48 @@ class ChangePlans(
             entry.claim = claim
             AdmittedConfirmation(entry.plan, claim, owner = true)
         }
+
+    /** Discard only work which has not been admitted. Never detach an active or completed claim. */
+    internal fun discardUnclaimed(planId: String): Boolean {
+        if (!gate.tryLock()) return false
+        try {
+            if (issued[planId]?.claim != null) return false
+            prepared.remove(planId)
+            issued.remove(planId)
+            return true
+        } finally { gate.unlock() }
+    }
+
+    /** Opportunistic cleanup; no timers, no store writes and no cancellation of executions. */
+    internal fun pruneExpired() {
+        if (retentionLimit == null || !gate.tryLock()) return
+        try {
+            val now = clock.nowMs()
+            if (now >= 0) pruneExpiredLocked(now) // Broken time must not prevent local revocation.
+        } finally { gate.unlock() }
+    }
+
+    internal fun retains(planId: String): Boolean {
+        if (!gate.tryLock()) return true // A contended issuer is not evidence that an entry is dead.
+        try { return planId in prepared } finally { gate.unlock() }
+    }
+
+    private fun pruneExpiredLocked(now: Long) {
+        if (retentionLimit == null) return
+        val retired = prepared.values.filter {
+            now >= it.expiresAtMs && issued[it.id]?.claim?.outcome?.isCompleted != false
+        }.map { it.id }
+        for (id in retired) { prepared.remove(id); issued.remove(id) }
+    }
+
+    private fun nextIdentity(): String {
+        val value = ids.nextId()
+        if (value.isBlank()) throw invalidInputFailure()
+        if (retentionLimit == null) return value // Preserve all existing unbounded issuer contracts.
+        if (retainedSerial == Long.MAX_VALUE) throw invalidInputFailure()
+        retainedSerial++
+        return "$value:bounded:$retainedSerial"
+    }
 
     /** A cheap expiry check for the coordinating engine, using the trusted clock. */
     fun isExpired(plan: ChangePlan): Boolean = trustedNow() >= plan.expiresAtMs

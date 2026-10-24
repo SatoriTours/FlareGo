@@ -37,6 +37,10 @@ import java.security.MessageDigest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -44,6 +48,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.assertNotEquals
 
 /**
  * R2 bucket writes go through the shared confirmation machinery. These assertions pin
@@ -71,9 +76,21 @@ class R2ControllerTest {
         val objects = mutableListOf<String>()
         var gets = 0
         var sends = 0
+        var afterWrite: (R2BucketWrite) -> Unit = {}
+        var failPostWriteRead = false
+        var receipt: ExecutionReceipt = ExecutionReceipt.Completed()
+        var refuseBeforeGuard = false
+        var refuseAfterGuard = false
+        var skipGuard = false
+        var objectLists = 0
+        var failObjectList = false
+        var afterObjectWrite: (R2ObjectWrite) -> Unit = {}
+        var objectPage: (suspend (R2ObjectFilter, PageRequest) -> CloudPage<R2ObjectEntry>)? = null
+        val objectQueries = mutableListOf<Pair<R2ObjectFilter, PageRequest>>()
 
         override suspend fun getBucket(account: AccountScope, name: String): R2BucketDocument {
             gets++
+            if (sends > 0 && failPostWriteRead) error("synthetic post-receipt read failure")
             val raw = buckets[name] ?: throw CloudFailure(CloudFailureCode.NOT_FOUND, "未找到请求的资源，请刷新后重试")
             return R2BucketDocument(name, account, raw)
         }
@@ -84,6 +101,10 @@ class R2ControllerTest {
             filter: R2ObjectFilter,
             page: PageRequest,
         ): CloudPage<R2ObjectEntry> {
+            objectLists++
+            objectQueries += filter to page
+            if (failObjectList) error("synthetic post-delete read failure")
+            objectPage?.let { return it(filter, page) }
             val prefix = filter.prefix ?: ""
             val items =
                 objects.filter { it.startsWith(prefix) }.map {
@@ -95,9 +116,12 @@ class R2ControllerTest {
         override suspend fun write(write: R2BucketWrite, beforeSend: (R2BucketDocument?) -> Unit): ExecutionReceipt {
             val creating = write is R2BucketWrite.Create || write is R2BucketWrite.CreateByName
             val observed = if (creating) null else getBucket(write.scope, nameOf(write))
-            beforeSend(observed)
+            if (refuseBeforeGuard) throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED, "synthetic pre-dispatch refusal")
+            if (!skipGuard) beforeSend(observed)
+            if (refuseAfterGuard) throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED, "synthetic final-proof refusal")
             sends++
-            return ExecutionReceipt.Completed()
+            afterWrite(write)
+            return receipt
         }
 
         private fun nameOf(write: R2BucketWrite) = when (write) {
@@ -125,9 +149,12 @@ class R2ControllerTest {
         override suspend fun deleteObjects(account: AccountScope, bucket: String, keys: List<String>): R2BulkDeleteOutcome = TODO()
 
         override suspend fun writeObject(write: R2ObjectWrite, beforeSend: (R2ObjectEntry?) -> Unit): ExecutionReceipt {
-            beforeSend(null)
+            if (refuseBeforeGuard) throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED, "synthetic pre-dispatch refusal")
+            if (!skipGuard) beforeSend(null)
+            if (refuseAfterGuard) throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED, "synthetic final-proof refusal")
             sends++
-            return ExecutionReceipt.Completed()
+            afterObjectWrite(write)
+            return receipt
         }
     }
 
@@ -208,6 +235,271 @@ class R2ControllerTest {
     }
 
     @Test
+    fun bulkDeleteCompletionCannotClaimSuccessWhileARequestedKeyStillExists() = runTest {
+        val h = readyHarness(this)
+        h.session.objects += listOf("dir/a.txt", "dir/b.txt")
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("dir/a.txt", "dir/b.txt"))
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        assertEquals(TaskState.UNKNOWN, task.state)
+        assertEquals(1, h.session.objectLists)
+        assertEquals(1, h.session.sends)
+        assertFailsWith<CloudFailure> { h.prepareObject(write) }
+    }
+
+    @Test
+    fun bulkDeleteCompletionRequiresAnExhaustedReadWithNoRequestedKeys() = runTest {
+        val h = readyHarness(this)
+        h.session.objects += listOf("dir/a.txt", "dir/b.txt", "dir/unrelated.txt")
+        val keys = listOf("dir/a.txt", "dir/b.txt")
+        h.session.afterObjectWrite = { h.session.objects.removeAll(keys.toSet()) }
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", keys)
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        assertEquals(TaskState.SUCCEEDED, task.state)
+        assertEquals(1, h.session.objectLists)
+        assertEquals("dir/", h.session.objectQueries.single().first.prefix)
+        assertEquals(1000, h.session.objectQueries.single().second.limit)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun bulkPostReadFailureIsUnknownWithoutReplayingTheDelete() = runTest {
+        val h = readyHarness(this); h.session.failObjectList = true
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt"))
+        val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+        assertEquals(TaskState.UNKNOWN, task.state)
+        assertEquals(1, h.session.objectLists)
+        assertEquals(TaskState.ACTION_REQUIRED, h.controller.reconcileObject(task.id).state)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun bulkPostReadRejectsRepeatedCursorsAndStopsAtABoundedBudgetWithUnicodeSafePrefix() = runTest {
+        for (repeated in listOf(true, false)) {
+            val h = readyHarness(this)
+            h.session.objectPage = { _, _ -> CloudPage(emptyList(), com.flarego.core.model.PageToken.Cursor(
+                if (repeated) "repeat" else "page-${h.session.objectLists}"), null) }
+            val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("甲😀/a.txt", "甲😁/b.txt"))
+            val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+            assertEquals(TaskState.UNKNOWN, task.state)
+            assertEquals(if (repeated) 2 else 5, h.session.objectLists)
+            assertTrue(h.session.objectQueries.all { it.first.prefix == "甲" && it.second.limit == 1000 })
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun bulkPostReadForwardsTheCursorAndChecksLaterPagesBeforeSettling() = runTest {
+        for (remaining in listOf(true, false)) {
+            val h = readyHarness(this)
+            h.session.objectPage = { _, page ->
+                if (page.token == null) CloudPage(emptyList(), com.flarego.core.model.PageToken.Cursor("last-page"), null)
+                else {
+                    assertEquals(com.flarego.core.model.PageToken.Cursor("last-page"), page.token)
+                    val rows = if (remaining) listOf(R2ObjectEntry("dir/b.txt", 1, null, null, buildJsonObject { put("key", "dir/b.txt") })) else emptyList()
+                    CloudPage(rows, null, null)
+                }
+            }
+            val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("dir/a.txt", "dir/b.txt"))
+            val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+            assertEquals(if (remaining) TaskState.UNKNOWN else TaskState.SUCCEEDED, task.state)
+            assertEquals(2, h.session.objectLists)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun bulkPartialAcceptedAndUnknownReceiptsDoNotPretendToHaveACompleteReadback() = runTest {
+        for ((receipt, state) in listOf(ExecutionReceipt.Partial("部分拒绝") to TaskState.PARTIAL,
+            ExecutionReceipt.Accepted() to TaskState.ACCEPTED, ExecutionReceipt.Unknown() to TaskState.UNKNOWN)) {
+            val h = readyHarness(this); h.session.receipt = receipt
+            val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt"))
+            assertEquals(state, h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write)).state)
+            assertEquals(0, h.session.objectLists)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun cancellingTheBulkUiWaiterDoesNotCancelItsAppOwnedPostRead() = runTest {
+        val h = readyHarness(this)
+        val release = CompletableDeferred<Unit>()
+        h.session.objectPage = { _, _ -> release.await(); CloudPage(emptyList(), null, 0) }
+        val write = R2ObjectWrite.BulkDelete(account, "my-bucket", listOf("a.txt"))
+        val confirmed = h.confirmObject(h.prepareObject(write), write)
+        val waiter = async { h.controller.submitObject(write, confirmed) }
+        runCurrent()
+        assertEquals(TaskState.RUNNING, h.store.rows.values.single().state)
+        assertEquals(1, h.session.sends)
+        waiter.cancelAndJoin()
+        release.complete(Unit); runCurrent()
+        assertEquals(TaskState.SUCCEEDED, h.store.rows.values.single().state)
+        assertEquals(1, h.session.objectLists)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun aDeleteReceiptCannotClaimSuccessWhileTheBucketIsStillPresent() = runTest {
+        val h = readyHarness(this)
+        val write = R2BucketWrite.Delete(account, "my-bucket", "my-bucket")
+        val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+        assertEquals(TaskState.UNKNOWN, task.state)
+        assertEquals(3, h.session.gets)
+        assertEquals(TaskState.UNKNOWN, h.controller.reconcile(task.id).state)
+        assertEquals(1, h.session.sends)
+        assertFailsWith<CloudFailure> { h.prepare(write) }
+    }
+
+    @Test
+    fun aDeleteSucceedsOnlyAfterAPostWriteReadProvesAbsence() = runTest {
+        val h = readyHarness(this)
+        h.session.afterWrite = { h.session.buckets.remove("my-bucket") }
+        val write = R2BucketWrite.Delete(account, "my-bucket", "my-bucket")
+        val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+        assertEquals(TaskState.SUCCEEDED, task.state)
+        assertEquals(3, h.session.gets)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun aPatchReceiptCannotClaimAnUnchangedUnknownOrMissingDefaultClassWasApplied() = runTest {
+        for (value in listOf<String?>("Standard", "FutureArchive", null)) {
+            val h = readyHarness(this)
+            h.session.afterWrite = {
+                h.session.buckets["my-bucket"] = if (value == null)
+                    JsonObject(bucketRow("my-bucket").filterKeys { it != "storage_class" }) else bucketRow("my-bucket", value)
+            }
+            val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+            val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+            assertEquals(TaskState.UNKNOWN, task.state, "unproved class: $value")
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun aPatchSucceedsWhenThePostWriteReadMatchesTheRequestedClass() = runTest {
+        val h = readyHarness(this)
+        h.session.afterWrite = { h.session.buckets["my-bucket"] = bucketRow("my-bucket", "InfrequentAccess") }
+        val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+        assertEquals(TaskState.SUCCEEDED, h.controller.submit(write, h.confirm(h.prepare(write))).state)
+        assertEquals(3, h.session.gets)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
+    fun postAndPutReceiptsCannotClaimADifferentDefaultClassWasApplied() = runTest {
+        for (write in listOf(R2BucketWrite.Create(account, R2BucketCreateInput("my-bucket", storageClass = "InfrequentAccess")),
+            R2BucketWrite.CreateByName(account, "my-bucket", "InfrequentAccess"))) {
+            val h = Harness(this)
+            h.session.afterWrite = { h.session.buckets["my-bucket"] = bucketRow("my-bucket", "Standard") }
+            assertEquals(TaskState.UNKNOWN, h.controller.submit(write, h.confirm(h.prepare(write))).state)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun postAndPutSucceedWhenThePostWriteReadMatchesTheRequestedClass() = runTest {
+        for (write in listOf(R2BucketWrite.Create(account, R2BucketCreateInput("my-bucket", storageClass = "InfrequentAccess")),
+            R2BucketWrite.CreateByName(account, "my-bucket", "InfrequentAccess"))) {
+            val h = Harness(this)
+            h.session.afterWrite = { h.session.buckets["my-bucket"] = bucketRow("my-bucket", "InfrequentAccess") }
+            assertEquals(TaskState.SUCCEEDED, h.controller.submit(write, h.confirm(h.prepare(write))).state)
+            assertEquals(3, h.session.gets)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun postReceiptReadFailureStaysUnknownAndNeverResendsTheMutation() = runTest {
+        for (write in listOf(R2BucketWrite.CreateByName(account, "new-bucket", "Standard"),
+            R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess"), R2BucketWrite.Delete(account, "my-bucket", "my-bucket"))) {
+            val h = readyHarness(this)
+            h.session.failPostWriteRead = true
+            val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+            assertEquals(TaskState.UNKNOWN, task.state)
+            assertEquals(TaskState.UNKNOWN, h.controller.reconcile(task.id).state)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun acceptedAndUnknownReceiptsDoNotPretendToHaveACompletedPostcondition() = runTest {
+        for ((receipt, state) in listOf(ExecutionReceipt.Accepted() to TaskState.ACCEPTED, ExecutionReceipt.Unknown() to TaskState.UNKNOWN)) {
+            val h = readyHarness(this)
+            h.session.receipt = receipt
+            val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+            assertEquals(state, h.controller.submit(write, h.confirm(h.prepare(write))).state)
+            assertEquals(2, h.session.gets)
+            assertEquals(1, h.session.sends)
+        }
+    }
+
+    @Test
+    fun aProvenPreDispatchRefusalSettlesWithoutReplayAndOnlyAFreshPlanMayWrite() = runTest {
+        val h = readyHarness(this)
+        val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+        val confirmed = h.confirm(h.prepare(write))
+        h.session.refuseBeforeGuard = true
+        val refused = h.controller.submit(write, confirmed)
+        assertEquals(TaskState.FAILED, refused.state)
+        assertEquals(0, h.session.sends)
+        assertEquals(refused.id, h.controller.submit(write, confirmed).id)
+        val reads = h.session.gets
+        assertEquals(TaskState.FAILED, h.controller.reconcile(refused.id).state)
+        assertEquals(reads, h.session.gets, "a settled refusal is not turned back into uncertainty by another read")
+        h.session.refuseBeforeGuard = false
+        h.session.afterWrite = { h.session.buckets["my-bucket"] = bucketRow("my-bucket", "InfrequentAccess") }
+        val fresh = h.controller.submit(write, h.confirm(h.prepare(write)))
+        assertEquals(TaskState.SUCCEEDED, fresh.state)
+        assertNotEquals(refused.id, fresh.id)
+        assertEquals(1, h.session.sends)
+        assertEquals(TaskState.FAILED, h.store.rows.getValue(refused.id).state)
+    }
+
+    @Test
+    fun theSameErrorAfterTheSendBoundaryCannotBeReclassifiedAsNotDispatched() = runTest {
+        val h = readyHarness(this)
+        h.session.refuseAfterGuard = true
+        val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+        val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+        assertEquals(TaskState.RUNNING, task.state)
+        assertFailsWith<CloudFailure> { h.prepare(write) }
+        assertEquals(0, h.session.sends)
+    }
+
+    @Test
+    fun objectRefusalsUseTheSameTrustedBoundaryAndCannotBeRevivedByReadOnlyReconciliation() = runTest {
+        for (before in listOf(true, false)) {
+            val h = readyHarness(this)
+            h.session.refuseBeforeGuard = before
+            h.session.refuseAfterGuard = !before
+            val write = R2ObjectWrite.Delete(account, "my-bucket", "a.txt", "a.txt")
+            val task = h.controller.submitObject(write, h.confirmObject(h.prepareObject(write), write))
+            assertEquals(if (before) TaskState.FAILED else TaskState.RUNNING, task.state)
+            if (before) {
+                val reads = h.session.gets
+                assertEquals(TaskState.FAILED, h.controller.reconcileObject(task.id).state)
+                assertEquals(reads, h.session.gets)
+                h.resolver.live = h.resolver.live!!.copy(scope = AccountScope("local", "other-account"))
+                assertFailsWith<CloudFailure> { h.controller.reconcileObject(task.id) }
+                assertEquals(TaskState.FAILED, h.store.rows.getValue(task.id).state)
+            }
+            assertEquals(0, h.session.sends)
+        }
+    }
+
+    @Test
+    fun anAdapterThatReturnsCompletionWithoutTheFinalGuardCannotClaimSuccess() = runTest {
+        val h = readyHarness(this)
+        h.session.skipGuard = true
+        h.session.afterWrite = { h.session.buckets["my-bucket"] = bucketRow("my-bucket", "InfrequentAccess") }
+        val write = R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess")
+        val task = h.controller.submit(write, h.confirm(h.prepare(write)))
+        assertEquals(TaskState.UNKNOWN, task.state)
+        assertEquals(1, h.session.sends)
+    }
+
+    @Test
     fun createIsRefusedWhenTheBucketAlreadyExists() = runTest {
         val harness = Harness(this)
         harness.session.buckets["my-bucket"] = bucketRow("my-bucket")
@@ -227,6 +519,54 @@ class R2ControllerTest {
     }
 
     @Test
+    fun unknownOrMissingStorageClassKeepsTheBucketReadOnly() = runTest {
+        for (value in listOf<String?>("FutureArchive", null)) {
+            val h = Harness(this)
+            h.session.buckets["my-bucket"] = if (value == null)
+                JsonObject(bucketRow("my-bucket").filterKeys { it != "storage_class" }) else bucketRow("my-bucket", value)
+            val error = assertFailsWith<CloudFailure> {
+                h.prepare(R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess"))
+            }
+            assertEquals(CloudFailureCode.UNSUPPORTED_CAPABILITY, error.code)
+            assertEquals(0, h.session.sends)
+        }
+    }
+
+    @Test
+    fun patchPreviewShowsBothFrozenClassesAndLeavesExistingObjectsUnchanged() = runTest {
+        val h = readyHarness(this)
+        val plan = h.prepare(R2BucketWrite.PatchStorageClass(account, "my-bucket", "InfrequentAccess"))
+        val impact = h.controller.preview(plan.id).impact
+        assertTrue(impact.contains("Standard"))
+        assertTrue(impact.contains("InfrequentAccess"))
+        assertTrue(impact.contains("已有对象"))
+        assertEquals(0, h.session.sends)
+    }
+
+    @Test
+    fun putPreviewStatesTheActualCreateVariantWithoutAPostLocationHint() = runTest {
+        val h = Harness(this)
+        val plan = h.prepare(R2BucketWrite.CreateByName(account, "new-bucket", "InfrequentAccess"))
+        val impact = h.controller.preview(plan.id).impact
+        assertTrue(impact.contains("PUT"))
+        assertTrue(impact.contains("InfrequentAccess"))
+        assertTrue(!impact.contains("locationHint"))
+        assertEquals(0, h.session.sends)
+    }
+
+    @Test
+    fun unsupportedHeaderClassesCannotEvenProduceAPreparedPlan() = runTest {
+        val h = readyHarness(this)
+        for (write in listOf(R2BucketWrite.PatchStorageClass(account, "my-bucket", "FutureArchive"),
+            R2BucketWrite.CreateByName(account, "new-bucket", "FutureArchive"))) {
+            val error = assertFailsWith<CloudFailure> { h.prepare(write) }
+            assertEquals(CloudFailureCode.INVALID_INPUT, error.code)
+        }
+        assertEquals(0, h.session.gets)
+        assertEquals(0, h.session.sends)
+    }
+
+    @Test
     fun aBucketChangedBetweenPrepareAndSubmitBlocksTheSend() = runTest {
         val harness = Harness(this)
         harness.session.buckets["my-bucket"] = bucketRow("my-bucket", "Standard")
@@ -242,10 +582,9 @@ class R2ControllerTest {
         val task = harness.controller.submit(write, confirmed)
         // The final guard throws before the typed send, so nothing was sent...
         assertEquals(0, harness.session.sends, "a conflict detected at the final guard must block the send")
-        // ...but the coordinator cannot distinguish a pre-send stop from a post-send failure, so
-        // it keeps the possibly-sent state and the change must be reconciled instead.
-        assertEquals(TaskState.RUNNING, task.state)
-        assertEquals(TaskState.UNKNOWN, harness.controller.reconcile(task.id).state)
+        // The R2-only trusted boundary now proves this refusal was before dispatch.
+        assertEquals(TaskState.FAILED, task.state)
+        assertEquals(TaskState.FAILED, harness.controller.reconcile(task.id).state)
     }
 
     @Test
@@ -306,9 +645,9 @@ class R2ControllerTest {
         val write = R2BucketWrite.Delete(account, "my-bucket", "my-bucket")
         val confirmed = harness.confirm(harness.prepare(write))
         val task = harness.controller.submit(write, confirmed)
-        assertEquals(TaskState.SUCCEEDED, task.state)
+        assertEquals(TaskState.UNKNOWN, task.state)
 
-        // Still present: the read proves nothing, so the task returns to UNKNOWN.
+        // The receipt and a still-present bucket cannot prove successful deletion.
         val stillThere = harness.controller.reconcile(task.id)
         assertEquals(TaskState.UNKNOWN, stillThere.state)
 

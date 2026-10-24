@@ -128,6 +128,7 @@ fun DnsScanPanel(scope: ZoneScope, currentEpoch: Long, state: DnsScanPanelState,
                 is ExecutionReceipt.Accepted -> "审核请求已受理，等待供应商状态；不保证全网传播完成。"
                 is ExecutionReceipt.Completed -> "供应商已返回审核回执；这是回执与当前观察，不证明全网传播完成或历史执行者。"
                 is ExecutionReceipt.Rejected -> "供应商已明确拒绝本次审核。"
+                is ExecutionReceipt.NotDispatched -> "本次操作未分派；请核对输入和权限后重新预览确认。"
             }, Modifier.testTag("ds-outcome"))
             observed.value.accepted.filter { it.scope == scope }.forEach { doc -> runCatching { dnsScanRecordView(doc) }.getOrNull()?.let { Text(task7RecordText(it)) } }
             if (observed.value.rejected.isNotEmpty()) Text("回执拒绝候选：${observed.value.rejected.joinToString()}")

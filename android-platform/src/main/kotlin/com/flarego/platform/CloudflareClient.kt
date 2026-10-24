@@ -5,6 +5,7 @@ import com.flarego.core.cloudflare.HttpRequest
 import com.flarego.core.cloudflare.MultipartPart
 import com.flarego.core.model.CloudFailure
 import com.flarego.core.model.CloudFailureCode
+import com.flarego.core.model.R2_JURISDICTIONS
 import com.flarego.core.ports.ByteSink
 import com.flarego.core.ports.ByteSource
 import java.io.ByteArrayOutputStream
@@ -55,6 +56,13 @@ private val ALLOWED_BUSINESS_HEADERS =
         // R2 bucket writes carry the default storage class here: the pinned
         // `r2-patch-bucket` and `r2-create-bucket-by-name` have no request body at all.
         "cf-r2-storage-class",
+        // The controlled jurisdiction header of the pinned R2 configuration endpoints.
+        // Its value is restricted to the schema enum below, so no call site can smuggle
+        // an arbitrary value onto the wire through this header.
+        "cf-r2-jurisdiction",
+        // The controlled data-catalog protection header of the reviewed create-job request.
+        // Its value is fixed to `true` and its route to a POST bucket-jobs call below.
+        "cf-r2-data-catalog-check",
     )
 
 internal fun invalidInput(): CloudFailure =
@@ -112,13 +120,14 @@ internal fun cloudflareRequest(
     request: HttpRequest,
     accept: CloudflareAccept = CloudflareAccept.JSON,
     isActive: () -> Boolean = { true },
+    onSensitiveBody: ((SensitiveBytesBody) -> Unit)? = null,
 ): Request {
     val method = requireHttpMethod(request.method)
     val path = requireApiPath(request.path)
     val bodyless = method == "GET" || method == "HEAD"
     if (bodyless && request.payload != HttpBody.Empty) throw invalidInput()
-    val headers = requireBusinessHeaders(request.headers, request.payload)
-    val body = if (bodyless) null else request.payload.toRequestBody(isActive)
+    val headers = requireBusinessHeaders(method, path, request.headers, request.payload)
+    val body = if (bodyless) null else request.payload.toRequestBody(isActive, onSensitiveBody)
     val builder =
         Request.Builder()
             .url(requireCloudflareUrl(path))
@@ -173,8 +182,14 @@ internal class OwnedResources(payload: HttpBody, private val sink: ByteSink? = n
     private val sources: List<ByteSource> = uploadSourcesOf(payload)
     private val closedSources: MutableSet<ByteSource> =
         Collections.newSetFromMap(IdentityHashMap<ByteSource, Boolean>())
+    private val sensitiveBodies = mutableListOf<SensitiveBytesBody>()
     private var sinkClosed = false
     private var failure: Throwable? = null
+
+    /** The transport adopts the sensitive body it built, so every exit path can clear its buffer. */
+    fun adoptSensitive(body: SensitiveBytesBody) {
+        synchronized(this) { sensitiveBodies += body }
+    }
 
     /** Closes every owned resource once, never throwing. */
     fun closeAll(): Throwable? =
@@ -188,6 +203,7 @@ internal class OwnedResources(payload: HttpBody, private val sink: ByteSink? = n
                 sinkClosed = true
                 attempt { ownedSink.close() }
             }
+            for (body in sensitiveBodies) attempt { body.clearSensitiveBuffer() }
             failure
         }
 
@@ -379,10 +395,18 @@ private fun requireCloudflareUrl(path: String): HttpUrl {
     return url
 }
 
+/** The exact reviewed create-job route shape; the protection header is not a substring match. */
+private val R2_CREATE_JOB_PATH = Regex("^/accounts/[^/]+/r2/buckets/[^/]+/jobs$")
+
 private fun requireBusinessHeaders(
+    method: String,
+    path: String,
     headers: Map<String, String>,
     payload: HttpBody,
 ): Map<String, String> {
+    // A case-variant duplicate of the same business header is ambiguous and refused.
+    val catalogHeaderEntries = headers.keys.count { it.equals("cf-r2-data-catalog-check", ignoreCase = true) }
+    if (catalogHeaderEntries > 1) throw invalidInput()
     val accepted = LinkedHashMap<String, String>()
     for ((name, value) in headers) {
         val normalized = name.lowercase()
@@ -391,6 +415,13 @@ private fun requireBusinessHeaders(
         if (value.length > 4096) throw invalidInput()
         if (value.any { it.code !in 0x20..0x7E }) throw invalidInput()
         if (normalized == "content-type") requireMatchingContentType(value, payload)
+        if (normalized == "cf-r2-jurisdiction" && value !in R2_JURISDICTIONS) throw invalidInput()
+        if (normalized == "cf-r2-data-catalog-check") {
+            // Only the exact reviewed create-job POST may carry it, and only the fixed `true` value.
+            if (method != "POST") throw invalidInput()
+            if (!R2_CREATE_JOB_PATH.matches(path)) throw invalidInput()
+            if (value != "true") throw invalidInput()
+        }
         accepted[name] = value
     }
     return accepted
@@ -404,6 +435,7 @@ private fun requireMatchingContentType(value: String, payload: HttpBody) {
         is HttpBody.Text -> requireSameMediaType(value, payload.contentType)
         is HttpBody.Bytes -> requireSameMediaType(value, payload.contentType)
         is HttpBody.Stream -> requireSameMediaType(value, payload.contentType)
+        is HttpBody.SensitiveJson -> requireSameMediaType(value, payload.contentType)
     }
 }
 
@@ -424,14 +456,75 @@ private fun requireSameMediaType(value: String, declared: String) {
     if (!value.trim().equals(declared.trim(), ignoreCase = true)) throw invalidInput()
 }
 
-private fun HttpBody.toRequestBody(isActive: () -> Boolean): RequestBody =
+private fun HttpBody.toRequestBody(
+    isActive: () -> Boolean,
+    onSensitiveBody: ((SensitiveBytesBody) -> Unit)? = null,
+): RequestBody =
     when (this) {
         is HttpBody.Empty -> EmptyBody
         is HttpBody.Text -> BytesBody(value.encodeToByteArray(), requireSendableMediaType(contentType))
         is HttpBody.Bytes -> BytesBody(value, requireSendableMediaType(contentType))
         is HttpBody.Stream -> StreamBody(source, length, requireSendableMediaType(contentType), isActive)
+        // A sensitive body becomes bytes exactly once; the transport owns the buffer so it can clear
+        // it even when the call fails or is cancelled before the write.
+        is HttpBody.SensitiveJson -> {
+            val sensitive =
+                SensitiveBytesBody(consumeBytes(), requireSendableMediaType(contentType).toMediaTypeOrNull())
+            onSensitiveBody?.invoke(sensitive)
+            sensitive
+        }
         is HttpBody.Multipart -> multipartBody(parts, isActive)
     }
+
+/**
+ * The transport-owned buffer of one sensitive body.
+ *
+ * It is written exactly once and then best-effort zeroed, so the platform never leaves the encoded
+ * credential bytes in a reusable [RequestBody]. This is not a promise of physical erasure (the JVM
+ * may have copied the bytes already); a second write is refused.
+ */
+internal class SensitiveBytesBody(
+    private val bytes: ByteArray,
+    private val mediaType: MediaType?,
+) : RequestBody() {
+    private var written = false
+
+    @Volatile
+    private var cleared = false
+
+    /** Deterministic internal observation for tests; never prints or reflects material. */
+    internal val isSensitiveBufferCleared: Boolean get() = cleared
+
+    /**
+     * Best-effort release of the transport-owned buffer; idempotent and never throws.
+     *
+     * It is called after the single write (success or failure) and by the transport's exit
+     * cleanup even when the call failed or was cancelled before the write.
+     */
+    internal fun clearSensitiveBuffer() {
+        if (cleared) return
+        cleared = true
+        bytes.fill(0)
+    }
+
+    override fun contentType(): MediaType? = mediaType
+
+    override fun contentLength(): Long = bytes.size.toLong()
+
+    /** The sensitive body is never replayed, exactly like the ordinary one-shot bodies. */
+    override fun isOneShot(): Boolean = true
+
+    override fun writeTo(sink: BufferedSink) {
+        if (written) throw java.io.IOException("sensitive body already written")
+        written = true
+        // A failing write must still release the transport-owned buffer.
+        try {
+            sink.write(bytes)
+        } finally {
+            clearSensitiveBuffer()
+        }
+    }
+}
 
 /** An explicit zero-length one-shot body: `POST` with no payload still sends a body. */
 private object EmptyBody : RequestBody() {

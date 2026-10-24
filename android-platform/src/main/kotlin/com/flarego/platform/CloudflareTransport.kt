@@ -29,6 +29,8 @@ private const val TOO_LARGE_MESSAGE = "响应内容超出安全上限，请改�
 class CloudflareTransport internal constructor(
     private val token: String,
     private val client: OkHttpClient,
+    // Test-only observation seam; production uses the default null.
+    private val onSensitiveBody: ((SensitiveBytesBody) -> Unit)? = null,
 ) : HttpTransport {
     constructor(token: String) : this(token, cloudflareHttpClient())
 
@@ -37,7 +39,13 @@ class CloudflareTransport internal constructor(
         var primary: Throwable? = null
         try {
             val job = currentCoroutineContext()[Job]
-            val call = client.newCall(cloudflareRequest(token, request) { job?.isActive != false })
+            val call =
+                client.newCall(
+                    cloudflareRequest(token, request, isActive = { job?.isActive != false }) { sensitive ->
+                        owned.adoptSensitive(sensitive)
+                        onSensitiveBody?.invoke(sensitive)
+                    },
+                )
             return runCloudflareCall(call, owned) { response ->
                 HttpResponse(
                     response.code,

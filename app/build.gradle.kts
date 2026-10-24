@@ -45,6 +45,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    // Pure (non-instrumented) unit tests for the frame-barrier matching rule only.
+    testImplementation(kotlin("test-junit"))
+    testImplementation("junit:junit:4.13.2")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.03.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")

@@ -4,6 +4,7 @@ import com.flarego.core.application.operations.CanonicalJson
 import com.flarego.core.application.operations.ChangePlan
 import com.flarego.core.application.operations.ChangePlans
 import com.flarego.core.application.operations.ConfirmedPlan
+import com.flarego.core.application.operations.ExecutionReceipt
 import com.flarego.core.application.operations.LiveOperationContext
 import com.flarego.core.application.operations.OperationClock
 import com.flarego.core.application.operations.OperationContextResolver
@@ -21,6 +22,7 @@ import com.flarego.core.model.R2BucketWrite
 import com.flarego.core.model.R2ChangePreview
 import com.flarego.core.model.R2ObjectFilter
 import com.flarego.core.model.R2ObjectWrite
+import com.flarego.core.model.R2WriteTarget
 import com.flarego.core.model.R2_MAX_BULK_DELETE
 import com.flarego.core.model.R2_MAX_SINGLE_OBJECT_BYTES
 import com.flarego.core.model.ResourceRef
@@ -128,7 +130,7 @@ class R2Controller(
         val entry = Prepared(plan, write, name, before, live, previewOf(write, before))
         while (true) {
             val table = prepared.load()
-            if (prepared.compareAndSet(table, table + (plan.id to entry))) break
+            if (prepared.compareAndSet(table, table.filterKeys(plans::retains) + (plan.id to entry))) break
         }
         return plan
     }
@@ -141,7 +143,7 @@ class R2Controller(
         requireNoUnsettled(p.write, p.plan.id)
         requireBound(p, write, confirmed)
         val guard = { requireBound(p, write, confirmed) }
-        return coordinator.executeGrouped(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.name)) { composed ->
+        return executeWithDispatchEvidence(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.name)) { composed ->
             // Session/credential acquisition can suspend; it must finish before final checks.
             val api = session(p.write.scope)
             guard()
@@ -150,7 +152,7 @@ class R2Controller(
             requireNoUnsettled(p.write, p.plan.id)
             val creating = p.write is R2BucketWrite.Create || p.write is R2BucketWrite.CreateByName
             if (creating) requireAbsent(api, p.write.scope, p.name)
-            api.write(p.write) { observed ->
+            val receipt = api.write(p.write) { observed ->
                 if (!creating) {
                     val current = ownedSnapshot(observed ?: throw invalidInputFailure(), p.write.scope, p.name)
                     validateTarget(p.write, current)
@@ -163,7 +165,45 @@ class R2Controller(
                 // No suspension between this composed final guard and the typed send.
                 composed()
             }
+            verifyBucketCompletion(p, api, receipt)
         }
+    }
+
+    /**
+     * Only trusted R2 adapters use this boundary: every mutation must call the supplied
+     * guard before dispatch. Once it completes, *any* later error is possibly sent,
+     * including a final authority-proof refusal. Error codes alone prove nothing.
+     */
+    private suspend fun executeWithDispatchEvidence(
+        confirmed: ConfirmedPlan,
+        guard: () -> Unit,
+        group: ResourceRef,
+        write: suspend (beforeSend: () -> Unit) -> ExecutionReceipt,
+    ): OperationTask = coordinator.executeR2Dispatch(confirmed, guard, group, write)
+
+    /** The coordinator-owned bucket lock covers this read as well as the one mutation. */
+    private suspend fun verifyBucketCompletion(p: Prepared, api: R2Session, receipt: ExecutionReceipt): ExecutionReceipt {
+        if (receipt !is ExecutionReceipt.Completed) return receipt
+        val verified = try {
+            if (p.write is R2BucketWrite.Delete) {
+                !bucketPresent(api, p.write.scope, p.name)
+            } else {
+                val actual = ownedSnapshot(api.getBucket(p.write.scope, p.name), p.write.scope, p.name)
+                val observed = observedState(actual)
+                // A create that did not request a class accepts the provider default;
+                // an explicit class must actually be present and equal on the read.
+                val candidate = if ("storageClass" in desired(p.write)) observed
+                    else JsonObject(observed.filterKeys { it != "storageClass" })
+                digest(candidate) == p.plan.desiredHash
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        // A provider receipt is not verified application. Never relabel an inconclusive
+        // post-send read as a clean failure, release the unsettled gate, or replay it.
+        return if (verified) receipt else ExecutionReceipt.Unknown(receipt.providerRequestId)
     }
 
     /**
@@ -172,7 +212,7 @@ class R2Controller(
      * context, a payload or a confirmation.
      */
     suspend fun reconcile(taskId: String): OperationTask =
-        coordinator.reconcile(taskId) { task ->
+        settledRefusal(taskId, BUCKET_KIND, BUCKET_ACTIONS) ?: coordinator.reconcile(taskId) { task ->
             val live = resolver.current() ?: throw invalidInputFailure()
             if (live.scope != task.scope || live.credentialRevision < 0) throw invalidInputFailure()
             ScopeGuard.requireOwned(task.scope, live.connection)
@@ -255,7 +295,7 @@ class R2Controller(
         val entry = PreparedObject(plan, write, bucket, live, objectPreviewOf(write))
         while (true) {
             val table = preparedObjects.load()
-            if (preparedObjects.compareAndSet(table, table + (plan.id to entry))) break
+            if (preparedObjects.compareAndSet(table, table.filterKeys(plans::retains) + (plan.id to entry))) break
         }
         return plan
     }
@@ -268,19 +308,48 @@ class R2Controller(
         requireNoUnsettledObject(p.write, p.plan.id)
         requireBoundObject(p, write, confirmed)
         val guard = { requireBoundObject(p, write, confirmed) }
-        return coordinator.executeGrouped(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.bucket)) { composed ->
+        return executeWithDispatchEvidence(confirmed, guard, ResourceRef(p.write.scope, BUCKET_KIND, p.bucket)) { composed ->
             val api = session(p.write.scope)
             guard()
             requireNoUnsettledObject(p.write, p.plan.id)
             ownedSnapshot(api.getBucket(p.write.scope, p.bucket), p.write.scope, p.bucket)
-            api.writeObject(p.write) { observed ->
+            val receipt = api.writeObject(p.write) { observed ->
                 // An object write never pretends to have an existing document to compare.
                 if (observed != null) throw invalidInputFailure()
                 // Re-check the frozen target after the last suspending call.
                 requireBoundObject(p, write, confirmed)
                 composed()
             }
+            verifyBulkDeleteCompletion(p, api, receipt)
         }
+    }
+
+    /** D5: one bounded, independent read after a complete bulk receipt; never another DELETE. */
+    private suspend fun verifyBulkDeleteCompletion(p: PreparedObject, api: R2Session, receipt: ExecutionReceipt): ExecutionReceipt {
+        val write = p.write as? R2ObjectWrite.BulkDelete ?: return receipt
+        if (receipt !is ExecutionReceipt.Completed) return receipt
+        val keys = write.keys.toSet()
+        // commonPrefixWith does not split a UTF-16 surrogate pair. A shared prefix narrows
+        // the probe without assuming provider sort order or one-page completeness.
+        val prefix = write.keys.drop(1).fold(write.keys.first()) { value, key -> value.commonPrefixWith(key) }
+        var token: PageToken? = null
+        val seen = mutableSetOf<PageToken>()
+        try {
+            repeat(MAX_RECONCILE_PAGES) {
+                val page = api.listObjects(write.scope, p.bucket, R2ObjectFilter(prefix = prefix.takeIf { it.isNotEmpty() }),
+                    PageRequest(limit = 1000, token = token))
+                if (page.items.any { it.key in keys }) return ExecutionReceipt.Unknown(receipt.providerRequestId)
+                val next = page.next ?: return receipt
+                if (!seen.add(next)) return ExecutionReceipt.Unknown(receipt.providerRequestId)
+                token = next
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return ExecutionReceipt.Unknown(receipt.providerRequestId)
+        }
+        // An incomplete / failed / contradictory observation cannot unlock the bucket.
+        return ExecutionReceipt.Unknown(receipt.providerRequestId)
     }
 
     /**
@@ -293,7 +362,7 @@ class R2Controller(
      * be worse than telling the user to check the console.
      */
     suspend fun reconcileObject(taskId: String): OperationTask =
-        coordinator.reconcile(taskId) { task ->
+        settledRefusal(taskId, OBJECT_KIND, OBJECT_ACTIONS) ?: coordinator.reconcile(taskId) { task ->
             val live = resolver.current() ?: throw invalidInputFailure()
             if (live.scope != task.scope || live.credentialRevision < 0) throw invalidInputFailure()
             ScopeGuard.requireOwned(task.scope, live.connection)
@@ -334,6 +403,31 @@ class R2Controller(
         }
 
     // ------------------------------------------------------------------------ internals
+
+    /** A terminal refusal stays terminal; local task metadata never restores an executable command. */
+    private suspend fun settledRefusal(taskId: String, kind: String, actions: Set<String>): OperationTask? {
+        val task = withContext(storeDispatcher) { store.get(taskId) } ?: return null
+        if (task.state != TaskState.FAILED) return null
+        val live = resolver.current() ?: throw invalidInputFailure()
+        val reference = task.resourceRef ?: throw invalidInputFailure()
+        if (task.scope !is AccountScope || live.scope != task.scope || task.actionKey !in actions ||
+            reference.scope != task.scope || reference.kind != kind || live.credentialRevision < 0) throw invalidInputFailure()
+        requireSameLive(live)
+        ScopeGuard.requireOwned(task.scope, live.connection)
+        return task
+    }
+
+    /** Drop only payloads whose issuer entry was safely retired; executing claims remain owned. */
+    internal fun pruneRetiredPayloads() {
+        while (true) {
+            val table = prepared.load()
+            if (prepared.compareAndSet(table, table.filterKeys(plans::retains))) break
+        }
+        while (true) {
+            val table = preparedObjects.load()
+            if (preparedObjects.compareAndSet(table, table.filterKeys(plans::retains))) break
+        }
+    }
 
     private fun entry(id: String) = prepared.load()[id] ?: throw invalidInputFailure()
 
@@ -411,8 +505,12 @@ class R2Controller(
     private fun validateTarget(write: R2BucketWrite, before: R2BucketDocument?) {
         validateDelete(write)
         if (write is R2BucketWrite.Delete && before?.name != write.name) throw scopeMismatchFailure()
-        if (write is R2BucketWrite.PatchStorageClass && before?.raw?.get("storage_class") == JsonPrimitive(write.storageClass)) {
-            throw CloudFailure(CloudFailureCode.INVALID_INPUT, "该桶的默认存储等级没有变化，请修改后再预览")
+        if (write is R2BucketWrite.PatchStorageClass) {
+            val current = (before?.raw?.get("storage_class") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (current !in R2_STORAGE_CLASSES) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,
+                "该桶的默认存储类型未知或缺失，目前仅支持只读查看")
+            if (current == write.storageClass) throw CloudFailure(CloudFailureCode.INVALID_INPUT,
+                "该桶的默认存储等级没有变化，请修改后再预览")
         }
     }
 
@@ -449,8 +547,14 @@ class R2Controller(
     private fun validatedName(write: R2BucketWrite): String =
         when (write) {
             is R2BucketWrite.Create -> validateR2CreateInput(write.input).name
-            is R2BucketWrite.CreateByName -> validateR2BucketName(write.name)
-            is R2BucketWrite.PatchStorageClass -> validateR2BucketName(write.name)
+            is R2BucketWrite.CreateByName -> {
+                if (write.storageClass != null && write.storageClass !in R2_STORAGE_CLASSES) throw invalidInputFailure()
+                validateR2BucketName(write.name)
+            }
+            is R2BucketWrite.PatchStorageClass -> {
+                if (write.storageClass !in R2_STORAGE_CLASSES) throw invalidInputFailure()
+                validateR2BucketName(write.name)
+            }
             is R2BucketWrite.Delete -> validateR2BucketName(write.name)
         }
 
@@ -472,23 +576,17 @@ class R2Controller(
      * bucket itself or one of its objects: an unresolved object delete can still change what
      * a bucket operation sees.
      */
-    private suspend fun anyUnsettledForBucket(scope: AccountScope, bucket: String, excluding: String?): Boolean =
-        withContext(storeDispatcher) {
-            store.list(scope.connectionId).any { task ->
-                task.id != excluding && task.scope == scope && task.actionKey in ALL_ACTIONS &&
-                    task.resourceRef.blocksBucket(scope, bucket) && task.state in UNSETTLED_STATES
-            }
+    /**
+     * One shared gate for every R2 write of this bucket identity. Batch A writes are always
+     * default-jurisdiction, so they share the lock/gate with default batch B configuration
+     * writes and are never blocked by a same-named bucket in another jurisdiction.
+     */
+    private suspend fun anyUnsettledForBucket(scope: AccountScope, bucket: String, excluding: String?): Boolean {
+        val target = R2WriteTarget(scope, bucket, R2TaskTargets.DEFAULT_JURISDICTION)
+        return withContext(storeDispatcher) {
+            store.list(scope.connectionId).any { task -> task.id != excluding && R2TaskTargets.blocks(task, target) }
         }
-
-    private fun ResourceRef?.blocksBucket(scope: AccountScope, bucket: String): Boolean =
-        when (this) {
-            null -> true
-            else -> this.scope == scope && when (kind) {
-                BUCKET_KIND -> externalId == bucket
-                OBJECT_KIND -> externalId.startsWith("$bucket/")
-                else -> false
-            }
-        }
+    }
 
     private fun unsettledFailure() =
         CloudFailure(CloudFailureCode.UNKNOWN_RESULT, "该桶的上一操作尚未核对，请先核对结果，不要再次发送", uncertain = true)
@@ -662,11 +760,16 @@ class R2Controller(
         val bucket = before?.name ?: validatedName(write)
         val impact =
             when (write) {
-                is R2BucketWrite.Create, is R2BucketWrite.CreateByName ->
-                    "在所选账号创建 R2 桶；locationHint 只是位置提示，不保证精确数据中心"
+                is R2BucketWrite.Create ->
+                    "创建 R2 桶（POST）；新上传对象默认类型：${write.input.storageClass ?: "供应商默认"}。locationHint 只是位置提示，不保证精确数据中心"
 
-                is R2BucketWrite.PatchStorageClass ->
-                    "变更该桶**新上传对象**的默认存储等级；已有对象的存储等级不变，单次上传仍可覆盖"
+                is R2BucketWrite.CreateByName ->
+                    "按名称创建 R2 桶（PUT）；新上传对象默认类型：${write.storageClass ?: "供应商默认"}。此模式不发送位置参数或请求体，不覆盖已存在的同名桶"
+
+                is R2BucketWrite.PatchStorageClass -> {
+                    val original = (before?.raw?.get("storage_class") as? JsonPrimitive)?.content ?: "未知"
+                    "修改新上传对象的默认存储类型：$original → ${write.storageClass}。已有对象的存储等级不变，单次上传仍可覆盖"
+                }
 
                 is R2BucketWrite.Delete ->
                     "删除空桶及其配置；不会自动清空对象。供应商要求无对象、无未完成的分片上传、无事件通知规则，否则会失败"
@@ -717,16 +820,5 @@ class R2Controller(
         const val OBJECT_KIND = "r2_object"
         val BUCKET_ACTIONS = setOf("r2-create-bucket", "r2-create-bucket-by-name", "r2-patch-bucket", "r2-delete-bucket")
         val OBJECT_ACTIONS = setOf("r2-put-object", "r2-delete-object", "r2-delete-objects")
-        val ALL_ACTIONS = BUCKET_ACTIONS + OBJECT_ACTIONS
-        val UNSETTLED_STATES =
-            setOf(
-                TaskState.QUEUED,
-                TaskState.RUNNING,
-                TaskState.UNKNOWN,
-                TaskState.PARTIAL,
-                TaskState.RECONCILING,
-                TaskState.ACCEPTED,
-                TaskState.ACTION_REQUIRED,
-            )
     }
 }

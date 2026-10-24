@@ -79,14 +79,27 @@ class P2CoverageTest {
      * Reviewed keys from later batches. The gate keeps forbidding unreviewed actions:
      * every new batch must add its own handwritten registration function here, and
      * no assertion is relaxed to a subset or an "at least" count.
+     *
+     * Later batches register through their own handwritten function: batch A (`r2Registrations`),
+     * batch B1 (`r2ConfigurationRegistrations`), batch B2 (`r2DomainRegistrations`) and batch B3
+     * (`r2SippyRegistrations`) plus the three C functions are explicit, so the exact full-set comparison
+     * below rejects any missing or extra registration inside any of them.
      */
-    private fun reviewedLaterBatchIds():Set<String> = r2Registrations().map { it.policy.key }.toSet()
+    private fun reviewedLaterBatchIds():Set<String> =
+        (r2Registrations().map { it.policy.key } + r2ConfigurationRegistrations().map { it.policy.key } +
+            r2DomainRegistrations().map { it.policy.key } + r2SippyRegistrations().map { it.policy.key } +
+            r2JobRegistrations().map { it.policy.key } + r2MetricsRegistrations().map { it.policy.key } +
+            r2NotificationRegistrations().map { it.policy.key }).toSet()
 
     private fun checkRegistry(actual:JsonObject,rows:List<Map<String,String>>,manifest:JsonObject) {
         denominator(rows)
         val reviewed=expectedIds(rows)+reviewedLaterBatchIds()
         assertEquals(reviewed,actual.keys,"Missing route or unreviewed extra action (including writes)")
         assertEquals(reviewed.size,actual.size)
+        // Current107 = historical69 + A10 + B20 + C8; exact equality still rejects extras.
+        assertEquals(107,reviewed.size,"The current reviewed registry is exactly 107 operations")
+        assertEquals(55,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
+        assertEquals(52,actual.values.count { it.jsonObject.text("semantics")=="WRITE" },"Exact current WRITE count")
         val p1=json("docs/cloudflare-audit/p1-runtime-support-2026-10-16.json").getValue("operations").jsonObject
         val candidateIds=rows.map { it.getValue("operation_id") }.toSet()
         for((id,value) in p1.filterKeys { it !in candidateIds }) {

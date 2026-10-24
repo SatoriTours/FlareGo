@@ -44,6 +44,9 @@ class CloudflareGateway(
     suspend fun send(actionKey: String, request: HttpRequest): HttpResponse {
         val registration = policies.registration(actionKey) ?: throw unknownAction()
         if (!registration.matches(request.method, request.path)) throw policyMismatch()
+        // The catalog protection header is admitted only for the reviewed create-job POST and only
+        // with its fixed value. A GET/other route or any other value is refused before the wire.
+        if (!isCatalogCheckHeaderAdmitted(actionKey, request.method, request.headers)) throw policyMismatch()
         var response = transport.execute(request)
         val policy = registration.policy
         if (policy.semantics != ActionSemantics.READ) return response
@@ -99,6 +102,8 @@ class CloudflareGateway(
     private fun isRepeatable(request: HttpRequest): Boolean =
         when (val payload = request.payload) {
             is HttpBody.Stream -> false
+            // A one-shot sensitive body is never a retry candidate, even if a caller ever marks it read.
+            is HttpBody.SensitiveJson -> false
             is HttpBody.Multipart -> payload.parts.none { it.body is HttpBody.Stream }
             else -> true
         }
