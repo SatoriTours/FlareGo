@@ -34,7 +34,12 @@ fun ConnectionDialog(
     draft: ConnectionDraft = remember { ConnectionDraft() },
     discoverAccounts: (suspend (String, PageRequest) -> CloudPage<AccountSummary>)? = null,
     verifyToken: (suspend (String, TokenKind, String?) -> TokenVerification)? = null,
+    oauthConnection: OAuthConnection? = null,
 ) {
+    if (oauthConnection != null && !draft.manualToken) {
+        OAuthConnectionDialog(onDismiss, draft, oauthConnection)
+        return
+    }
     var error by remember { mutableStateOf<String?>(null) }
     var accountInvalid by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -82,6 +87,9 @@ fun ConnectionDialog(
         title = { Text("连接 Cloudflare") },
         text = {
             FormBody {
+                if (oauthConnection != null) TextButton(onClick = { draft.token = ""; draft.manualToken = false }) {
+                    Text("改用 Cloudflare 官方授权")
+                }
                 Text(
                     "在官方页面选择「Create Token」→「Create Custom Token」，限定账号／域名范围并配置所需权限，复制 Token 回来填写。",
                     style = MaterialTheme.typography.bodyMedium,

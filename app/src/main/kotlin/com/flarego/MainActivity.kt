@@ -86,6 +86,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun consumeOAuthIntent(incoming: Intent?) {
+        val callback = incoming?.dataString ?: return
+        if (model.acceptOAuthCallback(callback)) {
+            // Do not retain authorization codes in the Activity intent across recreation.
+            incoming.data = null
+            intent = Intent(incoming).setData(null)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        consumeOAuthIntent(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -93,6 +107,7 @@ class MainActivity : ComponentActivity() {
         // sees a real protection owner.
         secureWindow = AndroidSecureWindow(window)
         model.attachSecureWindow(secureWindow)
+        consumeOAuthIntent(intent)
         setContent {
             val current = model
             val state by current.controller.state.collectAsState()
@@ -169,6 +184,7 @@ class MainActivity : ComponentActivity() {
                 panelPorts = current.panelPorts,
                 panelContext = panelContext,
                 r2Browser = current.r2Browser,
+                oauthConnection = current.oauthConnection,
             )
         }
     }

@@ -46,14 +46,16 @@ class AppSmokeTest {
     @Test
     fun freshInstallGuidesServiceAndKeySetupAcrossTabs() {
         compose.onNodeWithText("添加你的第一个云服务").assertIsDisplayed()
-        compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
+        compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
         compose.onNodeWithText("api-gateway").assertDoesNotExist()
         listOf("domains", "resources", "billing", "accounts").forEach { tab ->
             compose.onNodeWithTag("nav-$tab").performClick()
-            compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
+            compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
         }
-        compose.onNodeWithText("添加服务并绑定密钥").performClick()
-        compose.onNodeWithText("获取 API Token").assertIsDisplayed()
+        compose.onNodeWithText("添加 Cloudflare 服务").performClick()
+        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
+        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
+        compose.onNodeWithText("获取 API Token").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("验证并连接").assertIsNotEnabled()
         compose.onNodeWithText("取消").performClick()
         compose.onNodeWithContentDescription("切换云账号").performClick()
@@ -116,6 +118,7 @@ class AppSmokeTest {
         val secret = "fixture-recreation-token-not-real"
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
         compose.onNode(hasSetTextAction() and hasText("账号名称"))
             .performScrollTo().performTextInput("恢复测试")
         compose.onNode(hasSetTextAction() and hasText("Account ID"))
@@ -151,6 +154,7 @@ class AppSmokeTest {
             )
         }
         compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
         listOf("账号名称", "Account ID", "API Token").forEach { label ->
             val field = compose.onNode(hasSetTextAction() and hasText(label)).performScrollTo()
             assertEquals("", field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
@@ -171,16 +175,17 @@ class AppSmokeTest {
         }
         instrumentation.addMonitor(monitor)
         try {
-            compose.onNodeWithText("前往 Cloudflare 配置密钥").performClick()
-            compose.onNodeWithText("添加服务并绑定密钥").assertIsDisplayed()
+            compose.onNodeWithText("Cloudflare 授权帮助").performClick()
+            compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
             compose.onNodeWithTag("nav-accounts").performClick()
             compose.onNodeWithContentDescription("连接账号").performClick()
+            compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
             compose.onNodeWithText("获取 API Token").performScrollTo().performClick()
             compose.onNodeWithText("查找 Account ID").performScrollTo().performClick()
             compose.runOnIdle {
                 assertEquals(
                     listOf(
-                        "https://dash.cloudflare.com/profile/api-tokens",
+                        "https://developers.cloudflare.com/fundamentals/oauth/",
                         "https://dash.cloudflare.com/profile/api-tokens",
                         "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
                     ),

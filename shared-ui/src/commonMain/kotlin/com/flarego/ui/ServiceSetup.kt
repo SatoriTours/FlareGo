@@ -24,15 +24,16 @@ fun ServiceSetupCard(connect: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     SectionCard {
         Text("添加你的第一个云服务", style = MaterialTheme.typography.headlineSmall)
-        Text("还没有连接云服务。添加服务并绑定 API Token 后，即可查看你的域名、资源和账单。")
+        Text("还没有连接云服务。连接 Cloudflare 后，可查看授权范围内的域名、资源和账单。")
         Pill("Cloudflare")
-        Text("1. 前往 Cloudflare 创建 API Token，按需授予读取权限。")
-        Text("2. 添加服务，填写 Account ID 和 API Token，验证后保存。")
+        Text("1. 添加服务，在官方页面确认 OAuth 授权。")
+        Text("2. 返回 App 选择账号，验证后保存连接。")
+        Muted("OAuth 需此构建已配置客户端；未配置时可选择高级 API Token 方式。")
         Muted("目前支持 Cloudflare，其他云厂商正在规划中。密钥加密保存在本机。")
         OutlinedButton(
             onClick = {
                 try {
-                    uriHandler.openUri("https://dash.cloudflare.com/profile/api-tokens")
+                    uriHandler.openUri("https://developers.cloudflare.com/fundamentals/oauth/")
                     error = null
                 } catch (_: Exception) {
                     error = "无法打开浏览器，请安装或启用浏览器后重试"
@@ -42,12 +43,12 @@ fun ServiceSetupCard(connect: () -> Unit) {
         ) {
             Icon(Icons.AutoMirrored.Filled.OpenInNew, null)
             Spacer(Modifier.width(8.dp))
-            Text("前往 Cloudflare 配置密钥")
+            Text("Cloudflare 授权帮助")
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Button(onClick = connect, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Add, null)
-            Text("添加服务并绑定密钥")
+            Text("添加 Cloudflare 服务")
         }
     }
 }

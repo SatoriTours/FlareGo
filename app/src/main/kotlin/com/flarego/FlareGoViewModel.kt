@@ -72,7 +72,10 @@ class FlareGoViewModel constructor(
 
     /** Recoverable task metadata, consumed by the operation lifecycle work. */
     val operationStore = localDatabase.operationStore
-    private val vault = TokenVault(application)
+    private val oauthConfig = cloudflareOAuthConfig()
+    private val credentials = OAuthCredentialOwner.get(application, oauthConfig)
+    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection)
+    fun acceptOAuthCallback(value: String) = oauthConnection.acceptCallback(value)
     val connectionDraft = ConnectionDraft()
     private val managementPlatformOwner = ManagementPlatformOwner.forApplication(application)
     private val managementBorrower = managementPlatformOwner.borrow()
@@ -83,9 +86,19 @@ class FlareGoViewModel constructor(
     private fun credentialRevision(id:String)=managementPlatformOwner.credentialRevision(id)
     private lateinit var controllerRef: AppController
     private suspend fun credentialBundle(connection:Connection):ManagementCredentialBundle {
+        val expectedRevision = credentialRevision(connection.id)
+        val resolveToken: suspend () -> String = {
+            withContext(operationDispatcher) {
+                if (credentialRevision(connection.id) != expectedRevision) throw CloudException("连接凭据已变化，请刷新")
+                val token = credentials.accessToken(connection.id) ?: throw CloudException("请重新连接 Cloudflare")
+                if (credentialRevision(connection.id) != expectedRevision) throw CloudException("连接凭据已变化，请刷新")
+                token
+            }
+        }
         val bundle=managementPlatformOwner.acquireCredential(connection,
-            loadToken={ withContext(operationDispatcher) { vault.get(connection.id) } },
-            jsonForToken=transportForToken,transfersForToken=transfersForToken)
+            loadToken=resolveToken,
+            jsonForToken={ RenewingHttpTransport(resolveToken, transportForToken) },
+            transfersForToken={ RenewingTransferPort(resolveToken, transfersForToken) })
         managementPlatformOwner.requireCurrent(bundle)
         return bundle
     }
@@ -446,17 +459,24 @@ class FlareGoViewModel constructor(
                 cleanToken.any(Char::isWhitespace)
         )
             throw CloudException("请检查账号名称和 Token；Token 不能包含空格或换行")
-        val existing = store.connections().find { it.accountId == cleanAccount }
-        val connection =
-            Connection(existing?.id ?: UUID.randomUUID().toString(), name.trim(), cleanAccount)
         identity(cleanToken).verifyAccount(cleanAccount)
+        saveConnection(name.trim(), cleanAccount) { id -> credentials.putApiToken(id, cleanToken) }
+    }
+
+    private suspend fun saveOAuthConnection(name: String, accountId: String, tokens: OAuthTokens) {
+        saveConnection(name, accountId) { id -> credentials.putOAuth(id, tokens) }
+    }
+
+    private suspend fun saveConnection(name: String, accountId: String, persist: suspend (String) -> Unit) {
+        val existing = store.connections().find { it.accountId == accountId }
+        val connection = Connection(existing?.id ?: UUID.randomUUID().toString(), name, accountId)
         val change=managementPlatformOwner.beginCredentialChange(connection)
         // Synchronous transition admission retires old issuer before the first vault write suspension.
         extendedAdapter.invalidateConnection(connection.id)
         controller.invalidateSession(connection.id)
         panelContextState.value=null
         managementPlatformOwner.finishCredentialChange(change) {
-            withContext(operationDispatcher) { vault.put(connection.id,cleanToken);store.putConnection(connection) }
+            withContext(operationDispatcher) { persist(connection.id);store.putConnection(connection) }
         }
         controller.reloadConnections(store.connections())
         controller.selectConnection(connection)
@@ -467,6 +487,7 @@ class FlareGoViewModel constructor(
         r2Browser.close()
         r2Documents.close()
         connectionDraft.clear()
+        oauthConnection.cancel()
         // Application file service remains shared. Claimed jobs release their own capability in finally.
         CoroutineScope(SupervisorJob()+Dispatchers.IO).launch {
             managementPlatformOwner.releaseBorrower(managementBorrower)
@@ -483,8 +504,8 @@ class FlareGoViewModel constructor(
         viewModelScope.launch(start=CoroutineStart.UNDISPATCHED) {
             try {
                 managementPlatformOwner.retireCredential(connection) {
+                    credentials.remove(connection.id)
                     operationRuntime.removeConnection(connection.id) {
-                        vault.remove(connection.id)
                         operationStore.removeConnection(connection.id)
                         store.removeConnection(connection.id)
                     }

@@ -79,6 +79,7 @@ fun FlareGoApp(
     panelPorts: com.flarego.ui.management.ManagementPanelPorts? = null,
     panelContext: com.flarego.ui.management.ManagementPanelContext? = null,
     r2Browser: com.flarego.ui.r2.R2Browser? = null,
+    oauthConnection: OAuthConnection? = null,
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
@@ -161,7 +162,7 @@ fun FlareGoApp(
             !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
     val dismiss = {
-        if (dialog is DialogState.Connect) connectionDraft.clear()
+        if (dialog is DialogState.Connect) { oauthConnection?.cancel(); connectionDraft.clear() }
         dialog = null
     }
     val openConnection = {
@@ -601,7 +602,7 @@ fun FlareGoApp(
             }
         }
         when (val modal = dialog) {
-            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft, discoverAccounts, verifyToken)
+            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft, discoverAccounts, verifyToken, oauthConnection)
             DialogState.Create ->
                 CreateResourceDialog(dismiss) {
                     dialog = null

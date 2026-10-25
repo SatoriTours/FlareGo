@@ -11,6 +11,7 @@ import com.flarego.core.ports.TokenVerification
 /** In-memory only: survives Activity recreation, never saved to a Bundle or disk. */
 class ConnectionDraft {
     var name by mutableStateOf("")
+    var manualToken by mutableStateOf(false)
     private var accountValue by mutableStateOf("")
     private var tokenValue by mutableStateOf("")
     private var kindValue by mutableStateOf(TokenKind.UNKNOWN)
@@ -47,6 +48,7 @@ class ConnectionDraft {
 
     fun clear() {
         name = ""
+        manualToken = false
         accountId = ""
         token = ""
         tokenKind = TokenKind.UNKNOWN

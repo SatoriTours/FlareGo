@@ -50,18 +50,20 @@
 
 ## 快速开始
 
-### 添加服务并绑定密钥
+### 添加 Cloudflare 服务
 
-首次安装后显示添加服务引导，不预置测试账号或云资源。点击「前往 Cloudflare 配置密钥」可直接打开官方 API Token 页面，再点击「添加服务并绑定密钥」填写连接信息。目前支持 Cloudflare，其他云厂商仍在规划中。
+首次安装后显示添加服务引导，不预置测试账号或云资源。点击「添加 Cloudflare 服务」进入连接页，优先使用官方 OAuth 授权，也可选择高级 API Token 方式。目前支持 Cloudflare，其他云厂商仍在规划中。
 
 连接成功后加载真实账号数据，重启会恢复本机已保存的连接。断开最后一个账号后回到添加服务引导；演示数据仅供设计展示和隔离测试使用。
 
 ### 连接 Cloudflare
 
 1. 打开 FlareGo 的「账号」，点击「连接 Cloudflare 账号」或标题栏的 `+`。
-2. 点击「获取 API Token」，浏览器会打开 [Cloudflare API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)。选择 `Create Token` → `Create Custom Token`，按需配置权限并限定账号和 Zone 范围；Token 仅显示一次，请及时复制，不要使用 Global API Key。「查找 Account ID」可打开官方获取说明。
-3. 返回 App，输入账号名称、Account ID 和 API Token；验证通过后保存连接。
+2. 已配置 OAuth 的构建：点击「使用 Cloudflare 官方授权」，在系统浏览器确认权限，返回 App 后选择账号并「验证并连接」。无需填写 API Token；账号发现失败时可手填 Account ID 验证。
+3. 未配置 OAuth 或需要 API Token：点击「高级：使用 API Token 连接」→「获取 API Token」，浏览器打开 [Cloudflare API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)。选择 `Create Token` → `Create Custom Token`，按需配置权限并限定账号和 Zone 范围；不要使用 Global API Key。返回 App 填写账号名称、Account ID 和 API Token，验证后保存。
 4. 点击闪电 Logo，从抽屉选择对应账号，再进入域名、资源或账单页。
+
+**OAuth 当前为待配置接入能力，不代表已上线可用**：仓库不含真实 Client ID 或已验证回调域名。未配置的构建会禁用授权按钮，Token 备用路径和已有账号不受影响。浏览器授权、域名 App Links、真实 API 权限兼容性尚需配置后在设备验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
 
 Account ID 是 32 位十六进制字符串。建议从读取权限开始：账号访问可使用 `Account Settings Read`，域名列表需要 Zone 读取权限；修改 DNS 时再添加 DNS 写权限。Workers、R2、D1、KV 按需授予对应读取权限。权限名称和范围以 [Cloudflare 权限文档](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) 及 [账号接口要求](https://developers.cloudflare.com/api/resources/accounts/methods/get/) 为准。
 
@@ -92,7 +94,8 @@ P1 主线的账号发现、现代／显式旧 Workers、两种账单来源与历
 
 ## 凭据与操作
 
-- API Token 使用 Android Keystore 与 AES/GCM 加密保存，不进入 SQL 数据库或应用日志。
+- API Token 及 OAuth access/refresh token 使用 Android Keystore 与 AES/GCM 加密保存，不进入 SQL 数据库、Bundle 或应用日志；APK 不包含 Client Secret。
+- OAuth 使用 Authorization Code + PKCE S256，state／精确 HTTPS 回调／十分钟有效期／一次性消费校验。访问令牌过期前续期；不因 401 自动重放业务请求。断开只删除本机凭据；撤销云端 OAuth 授权需在 Cloudflare 官方授权管理页操作。
 - 账号元数据和操作记录保存在本机 SQLDelight 数据库；Token 输入页禁止系统截图，系统备份与设备迁移已禁用。
 - 未提交的连接草稿只暂存在内存，Activity 重建后仍可继续填写；取消或验证成功后清空，进程结束后不会恢复未提交的 Token。
 - 云请求固定发送到 Cloudflare HTTPS API，不携带 Token 跟随重定向。
