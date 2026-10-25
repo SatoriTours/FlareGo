@@ -13,3 +13,12 @@
 **/__pycache__/
 *.pyc
 /.superpowers/
+
+# Raw audit evidence stays local; only reviewed build-required baselines are allowed.
+# Existing tracked files remain versioned regardless of these ignore rules.
+/docs/cloudflare-audit/evidence/**
+!/docs/cloudflare-audit/evidence/**/
+!/docs/cloudflare-audit/evidence/r2-b-2026-10-19/task3/coverage/baseline/review-round-start-2026-10-21.json.gz
+!/docs/cloudflare-audit/evidence/r2-b-2026-10-19/task4/coverage/baseline/review-round-start-2026-10-21-b2.json.gz
+!/docs/cloudflare-audit/evidence/r2-b-2026-10-19/task6/coverage/baseline/review-round-start-2026-10-21-b3.json.gz
+!/docs/cloudflare-audit/evidence/r2-c-2026-10-22/baselines/review-before-c.json.gz

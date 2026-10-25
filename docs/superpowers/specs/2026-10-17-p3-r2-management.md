@@ -1,7 +1,7 @@
 # P3 批次一：R2 深度管理 规格
 
 **日期：** 2026-10-17
-**状态：** R2-A 本地工程出口验收通过（2026-10-18）；R2-B §9完整20项已通过API36合成本地工程验收（2026-10-21，同一独立QA round2＋round3及主控补缺核定），见[B当前出口](../plans/2026-10-19-p3-r2-batch-b.md)。C8 §10完整8项已于2026-10-24通过API36合成本地工程验收（独立自动化与两字体实际视觉补验、父核定，见[批次C当前出口](../plans/2026-10-22-p3-r2-batch-c.md)）；D12尚未开始，R2-E仍待单独批准。实际API26–28、真实云／付费／发布资格未验收，无新增Git授权。A历史见[最终核对](../../cloudflare-audit/r2-a-local-exit-verification-2026-10-18.md)。
+**状态：** R2-A 本地工程出口验收通过（2026-10-18）；R2-B §9完整20项已通过API36合成本地工程验收（2026-10-21，同一独立QA round2＋round3及主控补缺核定），见[B当前出口](../plans/2026-10-19-p3-r2-batch-b.md)。C8 §10完整8项已于2026-10-24通过API36合成本地工程验收（独立自动化与两字体实际视觉补验、父核定，见[批次C当前出口](../plans/2026-10-22-p3-r2-batch-c.md)）；D12 §11已于2026-10-25通过本地合成验收，成果保留原功能树、未整合到本目录，见§11.6；R2-E仍待单独批准。实际API26–28、真实云／付费／发布资格未验收，无新增Git授权。A历史见[最终核对](../../cloudflare-audit/r2-a-local-exit-verification-2026-10-18.md)。
 **上游：** `docs/cloudflare-coverage-audit.md` §3.1（R2 行）、§8（P3 批次）、§9（验收体系）
 **候选范围：** `docs/cloudflare-audit/review.json` 中 `phase=P3` 且 `product_id=r2-objects-and-buckets`，共 **51** 个 REST 操作（20 读／26 写／5 未知，全部 `scope_kind=account`）。
 
@@ -219,3 +219,67 @@ interface R2ManagementPort {
 3. 最终独立弹窗：再次显示精确范围与后果，有明确取消；最终按钮不默认聚焦/不由IME回车提交，与上一步危险按钮不沿用同一触点，连续点击不得穿透。仅此处单次接纳写任务，写入中禁重复动作；重复确认也不能重放。
 
 任何草稿/选项/规则选择/目标/地区/route/credential变化、取消或离开页面都撤销本次三级确认；旧弹窗回调不得确认新草稿。确认阶段属于当前真实编辑器的内存状态，不从SavedState/任务/plan恢复，也不代替新鲜REST证明。真VM/Compose需证明只做前两步0write、输入错误0write、旧弹窗/凭据漂移0write、取消0write、连续点击至多1write；各删除模式在两字体下范围与取消/确认可见。既有A/B删除保护不能因共用预览/确认接线而倒退，不扩改无关产品的删除流程。
+
+## 11. R2-D Super Slurper 迁移管理设计（2026-10-25，已批准实施）
+
+**状态：用户已明确回复“按完整 12 项方案继续（推荐）”，批准本节完整推荐方案及新增风险；实施已开始。** 本次继续推进的完整目标仍为全部可管理 CF 能力，本节是既定 A→B→C→D 顺序中的下一批，不把完成 R2 当作完成全 App。基线 `main@f76465470fe0933c9f48faebed13b3e1594a0a72`；其 OAuth 修复已推送，两个相关 Actions 成功，签名 artifact 已核验，见 `~/.local/state/agent-artifacts/FlareGo/2026-10-25-oauth-local/delivery/report.md`。原 local checkout 仅维护本设计，产品实现位于独立 Workspace `wks_aec70b4ad64f08fc`、`feat/r2-slurper-1025`；计划见该 worktree 的 `docs/superpowers/plans/2026-10-25-p3-r2-slurper.md`，不复制原 checkout 的未知改动或本机配置。
+
+### 11.1 实现方式与范围
+
+推荐一次实现完整 D12、分层开发和验收：四项观察、六项任务变更、两项提交凭据的连通性预检。另一种方式是先交付四项观察，再单独开发八项敏感控制；能较早提供查看入口，但迁移闭环仍未完成，不能将其作为 D12 的替代终点。沿用现有客户端直连、typed port、任务协调与 Compose 结构；不引入云端代理或手机直连源存储的 S3 客户端。
+
+| operationId | 方法与 `/accounts/{account_id}/slurper` 后缀 | 产品行为 |
+| --- | --- | --- |
+| `slurper-list-jobs` | GET `/jobs` | 按需分页列出迁移任务 |
+| `slurper-get-job` | GET `/jobs/{job_id}` | 查看任务身份、源与目标、覆盖选项及供应商状态 |
+| `slurper-get-job-progress` | GET `/jobs/{job_id}/progress` | 查看已传输、失败、跳过数量，缺省保持未知 |
+| `slurper-get-job-logs` | GET `/jobs/{job_id}/logs` | 按需分页查看安全投影日志 |
+| `slurper-create-job` | POST `/jobs` | 显式选择源、目标、范围及覆盖策略后创建 |
+| `slurper-pause-job` | PUT `/jobs/{job_id}/pause` | 请求暂停指定任务，再独立读取状态 |
+| `slurper-resume-job` | PUT `/jobs/{job_id}/resume` | 请求恢复指定任务，明确继续复制及可能费用 |
+| `slurper-abort-job` | PUT `/jobs/{job_id}/abort` | 终止指定任务，不表示撤销已复制对象 |
+| `slurper-abort-all-jobs` | PUT `/jobs/abortAll` | 账号级终止，不能伪装成当前桶范围 |
+| `slurper-delete-job` | DELETE `/jobs/{job_id}` | 删除迁移任务记录；活动任务 409 保持失败，不代为终止 |
+| `slurper-check-source-connectivity` | PUT `/source/connectivity-precheck` | 明确提交源凭据给 Cloudflare 作连通性预检 |
+| `slurper-check-target-connectivity` | PUT `/target/connectivity-precheck` | 明确提交目标凭据作预检，不代替权限或目标归属证明 |
+
+本节不准入 E1 临时凭据签发、S3 直连或真实云测试。固定 51 候选及 REST/S3 独立分母保持；D12 全部真正完成后才可由 38 typed/12 NOT_STARTED/1 DEFERRED 更新为 50 typed/0 NOT_STARTED/1 DEFERRED。批准时计数不变，验收后的功能树与未整合主目录状态见§11.6。
+
+### 11.2 来源、范围与凭据
+
+- 固定 Schema 支持源 `s3`、`gcs`、`r2`，目标仅 `r2`。S3 包含可选 HTTPS endpoint、region；三类源支持可选原字面 `pathPrefix`、至多 10,000 个显式 keys。不得把未知源类型映射成 S3、把空 keys 默认为整桶，或以 UI 便利暗中缩减官方候选字段。明确区分整桶、前缀、显式 keys；同时提供 keys 与 prefix 时保留原语义，不自行推测优先级。
+- Slurper 的 jurisdiction 为 `default/eu/us/fedramp`，没有现有桶配置的 `fedramp-high`；必须独立验证，不能照抄五值校验或加桶级 `cf-r2-jurisdiction` 头。
+- 源访问密钥、GCS privateKey 与目标 R2 密钥由未来使用者显式输入。REST Bearer 不可顶替 S3 secret，不读取本机秘密，不自动签发凭据；当前开发全用合成值。预检和创建都会把相应凭据送给 Cloudflare，界面在发送前明确说明。自定义 endpoint 是交给 Cloudflare 的参数，App 不直接访问该域名。
+- 复用 B3 的私有内存、SecureWindow、敏感正文一次消费及撤销机制，按 Slurper 字段单独建立 owner；不得把敏感值塞入公开 UI state、SavedState、任务库、指纹、日志、异常或截图。切账号/目标/路由、后台退出和宿主销毁后的行为至少保持 B3 保护；擦除只作 best effort 声明。
+- 源/目标表单使用安全预览，不展示 secret。provider 响应也按安全字段投影，不直接持久化 raw JSON、日志 message 或未知字段。未知任务状态保留可辨的只读表示；日志仅展示已审核类型与经过边界处理的字段，不以简单字符串替换声称全部脱敏。
+- REST 连接账号、job 所属账号及源/目标凭据的授权范围分别处理。目标桶选择和成功预检不能证明某组 S3 凭据必属当前账号；无证据时不声称已证明，界面保留明确的源/目标核对。正式启用控制前须建立官方权限证据和专用策略映射；固定 Schema 权限元数据为空，不能拿现有某桶 proof 当作账号级 abortAll 权限。
+
+### 11.3 确认、互斥与未知结果
+
+- 覆盖策略是必选项，不沿用 API 缺省 `overwrite=true` 静默覆盖。创建预览明确源、目标、地区、整桶/前缀/完整 keys 和“覆盖/跳过”；覆盖模式使用风险确认→手输目标桶名→独立最终弹窗。预检必须有单独的提交凭据动作，不能输入即发送；预检成功不自动创建迁移。
+- 终止单项、终止全部、删除记录延续 §10.6 的三级防误触；账号级操作手输精确账号标识，明显展示“该账号全部迁移任务”，不得以当前页列表或当前桶名作为范围。确认快照之外后来创建的任务也可能被账号级 API 影响，不能承诺只影响当前可见任务。暂停/恢复仍使用冻结目标的预览与确认。
+- DELETE 仅删除任务记录，不删除已复制对象；abort 不是回滚，可能仍有在途复制。所有变更与预检均不自动重试；创建缺失可信 ID/丢响应记 UNKNOWN，不从“最近相似任务”认领 ID，也不重发 POST。只有 `(connection, account, jobId)` 安全 locator 可恢复只读观察，凭据、执行命令和确认权不恢复。
+- 复用现有 coordinator、task store、凭据代次和最终发送前守卫；扩展账号级 Slurper 互斥，阻止 abortAll 与本 App 同账号创建/控制并发。已知本账号目标桶的迁移与 A/B/C 桶写共享门禁；不能推断其他客户端或外部源的互斥。未知/在途状态不靠退出页面或点击刷新强行解除。
+- 请求接纳、控制动作观察、整项迁移完成分开结算。供应商 `completed` 不等于所有对象均成功；缺省计数不补 0，失败/跳过显式展示。无法证明覆盖影响、最终状态或目标身份时保留未知/需要核对，不从 ETag 相等或一次 HTTP 200 推断数据完整。
+
+### 11.4 页面、工程顺序与验收出口
+
+账号 R2 页面新增“数据迁移”入口，提供任务列表/分页/详情/进度/安全日志与创建入口；桶页可进入带目标草稿的迁移页面，仍显示账号级任务身份。账号级“终止全部”与桶内操作明显分开。错误独立于已加载数据，分页失败保留旧列表和待重试 offset；切 scope 后旧请求不得覆盖新页面。创建表单支持所有已冻结源类型、过滤字段和覆盖选项，不把未实现功能只做成控制台跳转后计数完成。
+
+获批后由当前 Codex 连续负责实现、自测及普通修复，不使用 pi；相关实现/验收复用一个功能 Workspace，创建前按当前规则核实完整基线与独立 index。先做真实 wire/敏感模型 RED→GREEN，再接授权与任务生命周期，再完成生产入口、平台保护和交互；最后更新当前覆盖门禁与本批证据。独立验收复用可用 Codex，独立性与实际视觉能力须先核实；不按文件或单轮测试拆 Agent。
+
+必需证据：12 个操作各有 literal handler/policy/行为测试；所有源/过滤/地区/覆盖字段、列表与日志分页；预检/创建不重试且正文不外泄；错误回显不落秘密；缺 ID/超时/未知状态不重放；账号级/桶级并发边界；凭据/路由/草稿漂移与旧弹窗 0 写；精确确认与取消、重复点击至多一次。生产 VM 和 API36 关键场景两种字体的交互及实际语义视觉必需，继承历史 API26–28 未实测限制，不把它们写成通过。工程检查沿现有 core/UI/platform/app 定向与最终受影响回归、assemble、lint、Python 审计；历史 A/B/C 冻结快照保持，当前新增 inputs 与计数按实际修改验证。
+
+### 11.5 官方依据与批准决定
+
+2026-10-25 已核对固定 `openapi.json` 的全部 12 路径及 `r2-slurper_*` 模型；未更新固定 Schema。当前官方文档：[Super Slurper](https://developers.cloudflare.com/r2/data-migration/super-slurper/)、[创建任务](https://developers.cloudflare.com/api/resources/r2/subresources/super_slurper/subresources/jobs/methods/create/)、[读取详情](https://developers.cloudflare.com/api/resources/r2/subresources/super_slurper/subresources/jobs/methods/get/)。官方确认迁移复制而不删除源对象，覆盖是可选行为，ETag 不宜用作迁移完整性证明；不以这些产品说明替代未提供的权限证据或真实验收。
+
+用户已一次批准以上推荐实施完整 D12（含未来由使用者明确提交迁移凭据、显式覆盖选项及账号级终止能力），本轮只做本地合成测试，不执行真实迁移、云写、付费、E1、提交或发布。该确认针对新增重要产品/安全取舍，源于 Paseo 核心“重要产品/架构取舍合并一次确认”；不再要求批准计划文稿、实现方式或每轮普通修复。
+
+### 11.6 当前出口（2026-10-25）
+
+**完整D12已通过API36本地合成验收。** 原独立验收发现F1/F2/F3后，同负责人修复冻结完整keys、相邻字段更新和预检安全身份；独立返工core146/UI84均0、font1完整8/0、font2关键4/0。唯一末页视觉缺图经作者临时截图采集点定向1/0、源码逐字节恢复后，由原独立验收员实际单张original核图闭合。首轮失败、返工未完成及143环境中断均保留，不伪造一次全量通过。
+
+最终独立报告 `~/.local/state/agent-artifacts/FlareGo/2026-10-25-r2-slurper/independent/recheck-report.md` SHA256 `1470191f11f917ff356be3defce0434263400156b87a9a83fe49089787c51754`；38文件manifest `4964139a912b2a9052359770fdf7edcada230b9e91d1e2b533a7ba31a5f7d70c`、169源码hash与diffcheck父核一致。既有功能Workspace/worktree原地保留，计划已结清；当前功能树119注册=59READ/60WRITE、51候选=50typed/0NOT_STARTED/1DEFERRED。本目录review未整合，不改冻结A/B/C矩阵或历史资格。owned模拟器已核名、还原font1.0、关闭并确认断连，其他设备/服务未动。
+
+生产八控制/预检仍默认关闭，官方Slurper权限映射缺口未解决；真实云/付费/生产写入与API26–28未验证。E1仍待批准，未提交/推送/发布/归档，不迁移成果。整体CF目标仍未完成，后续KV/D1/Workers/Pages及其他批次继续按独立规格推进。
