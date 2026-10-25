@@ -6,6 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.flarego.core.application.AppController
 import com.flarego.core.application.operations.*
 import com.flarego.core.application.r2.*
+import com.flarego.core.application.kv.*
+import com.flarego.ui.kv.*
+import com.flarego.core.application.d1.*
+import com.flarego.ui.d1.*
 import com.flarego.core.cloudflare.inventory.CloudflareDirectoryClient
 import com.flarego.core.cloudflare.billing.CloudflareBillingClient
 import com.flarego.core.cloudflare.identity.CloudflareCapabilityClient
@@ -31,12 +35,27 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FlareGoViewModel constructor(
+/** Internal immutable dependency injection for synthetic device tests; no product/config switch. */
+internal class D1SyntheticAdapters(
+    val session: suspend (Connection,D1ContentStore,() -> Unit) -> D1Session,
+    val transfers: D1SignedTransferPort,
+)
+
+class FlareGoViewModel private constructor(
     application: Application,
     private val operationDispatcher: kotlinx.coroutines.CoroutineDispatcher,
     private val transportForToken: (String) -> HttpTransport,
     private val transfersForToken: (String) -> TransferPort,
+    private val d1Synthetic: D1SyntheticAdapters?,
 ) : AndroidViewModel(application) {
+    constructor(application: Application, operationDispatcher: kotlinx.coroutines.CoroutineDispatcher,
+        transportForToken: (String) -> HttpTransport, transfersForToken: (String) -> TransferPort):
+        this(application,operationDispatcher,transportForToken,transfersForToken,null)
+    companion object {
+        internal fun forD1SyntheticTest(application: Application,dispatcher: kotlinx.coroutines.CoroutineDispatcher,
+            transport: (String) -> HttpTransport,transfers: (String) -> TransferPort,synthetic: D1SyntheticAdapters) =
+            FlareGoViewModel(application,dispatcher,transport,transfers,synthetic)
+    }
     // Keep the original three-parameter/default/trailing-lambda constructor intact.
     // The explicit four-parameter constructor adds only the streaming test seam.
     @JvmOverloads constructor(application:Application,
@@ -236,6 +255,92 @@ class FlareGoViewModel constructor(
         return com.flarego.core.cloudflare.r2.CloudflareR2MetricsClient(connection, bundle.gateway)
     }
 
+    private fun actualKvContext(): KvBrowserContext? {
+        if (!::controllerRef.isInitialized) return null
+        val state=controllerRef.state.value
+        if(state.page!=Page.RESOURCES || state.resourceKind!=ResourceKind.KV)return null
+        val selected=state.selected?.takeIf{it in state.connections}?:return null
+        val stamp=managementPlatformOwner.currentCredentialStamp(selected)?:return null
+        return KvBrowserContext(selected,stamp.revision,controllerRef.operationEpoch)
+    }
+    private val kvContents by lazy { KvEncryptedContentStore(File(getApplication<Application>().cacheDir,"kv-private")) }
+    private suspend fun kvSessionFor(connection:Connection,expectedRevision:Long?=null,beforeSend:()->Unit={}):KvSession {
+        if(connection.demo)throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,"KV 深度管理尚无演示适配器，请使用本地合成验收环境")
+        val bundle=credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if(expectedRevision!=null&&bundle.stamp.revision!=expectedRevision)throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED,"KV 凭据已变化，请刷新")
+        return com.flarego.core.cloudflare.identity.AuthorizedKvSession(connection,bundle.gateway,bundle.transfers,
+            kvContents,{System.currentTimeMillis()/1000},bundle.kvIssuer,beforeSend)
+    }
+    private val kvWrites:KvWriteRuntime by lazy {
+        KvWriteRuntime(viewModelScope,operationStore,operationDispatcher,AndroidFingerprint(),
+            OperationClock(System::currentTimeMillis),OperationIds{UUID.randomUUID().toString()},
+            actual={actualKvContext()?.let{KvLiveSelection(it.connection,it.credentialRevision,kvBrowser.confirmationEpoch,kvBrowser.liveCommand())}},
+            connections={if(::controllerRef.isInitialized)controllerRef.state.value.connections else emptyList()},
+            revision=::credentialRevision,
+            session={account,guard->
+                val connection=controllerRef.state.value.connections.singleOrNull{it.id==account.connectionId&&it.accountId==account.accountId}
+                    ?:throw CloudFailure(CloudFailureCode.INVALID_INPUT,"KV 账号已失效")
+                kvSessionFor(connection,beforeSend=guard)
+            })
+    }
+    private val kvBrowserLazy=lazy {
+        KvBrowser(viewModelScope,::actualKvContext,kvWrites,kvContents,{secureWindowPort},
+            {System.currentTimeMillis()/1000},{ctx->kvSessionFor(ctx.connection,ctx.credentialRevision)})
+    }
+    val kvBrowser:KvBrowser get()=kvBrowserLazy.value
+    private val kvDocumentsLazy=lazy{KvDocumentBridge(getApplication(),viewModelScope,kvBrowser,::actualKvContext)}
+    private val kvDocuments get()=kvDocumentsLazy.value
+    suspend fun takeKvDocumentLaunch(request:KvDocumentRequest)=kvDocuments.takeLaunch(request)
+    fun onKvDocumentLaunchFailed()=kvDocuments.launchFailed()
+    fun onKvDocumentResult(export:Boolean,code:Int,data:android.content.Intent?)=kvDocuments.result(export,code,data)
+    fun onKvBackground(){if(kvBrowserLazy.isInitialized())kvBrowser.background()}
+
+    private fun actualD1Context(): D1BrowserContext? {
+        if (!::controllerRef.isInitialized) return null
+        val state = controllerRef.state.value
+        if (state.page != Page.RESOURCES || state.resourceKind != ResourceKind.D1) return null
+        val selected = state.selected?.takeIf { it in state.connections } ?: return null
+        val stamp = managementPlatformOwner.currentCredentialStamp(selected) ?: return null
+        return D1BrowserContext(selected,stamp.revision,controllerRef.operationEpoch)
+    }
+    private val d1Contents by lazy { D1EncryptedContentStore(File(getApplication<Application>().cacheDir,"d1-private")) }
+    private val d1Transfers by lazy { d1Synthetic?.transfers ?: d1SignedTransfers() }
+    private suspend fun d1SessionFor(connection: Connection,expectedRevision: Long? = null,beforeSend: () -> Unit = {}): D1Session {
+        if (connection.demo) throw CloudFailure(CloudFailureCode.UNSUPPORTED_CAPABILITY,"D1 深度管理尚无演示适配器，请使用本地合成验收环境")
+        if (expectedRevision != null && credentialRevision(connection.id) != expectedRevision) throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED,"D1 凭据已变化")
+        d1Synthetic?.let { return it.session(connection,d1Contents,beforeSend) }
+        val bundle = credentialBundle(connection)
+        managementPlatformOwner.requireCurrent(bundle)
+        if (expectedRevision != null && bundle.stamp.revision != expectedRevision) throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED,"D1 凭据已变化")
+        return com.flarego.core.cloudflare.identity.AuthorizedD1Session(connection,bundle.gateway,bundle.transfers,d1Contents,bundle.d1Issuer,beforeSend)
+    }
+    private val d1Writes: D1WriteRuntime by lazy {
+        D1WriteRuntime(viewModelScope,operationStore,operationDispatcher,AndroidFingerprint(),OperationClock(System::currentTimeMillis),OperationIds { UUID.randomUUID().toString() },
+            actual = { actualD1Context()?.let { D1LiveSelection(it.connection,it.credentialRevision,d1Browser.confirmationEpoch,d1Browser.liveCommand()) } },
+            connections = { if (::controllerRef.isInitialized) controllerRef.state.value.connections else emptyList() },revision = ::credentialRevision,
+            session = { account,guard ->
+                val connection = controllerRef.state.value.connections.singleOrNull { it.id == account.connectionId && it.accountId == account.accountId }
+                    ?: throw CloudFailure(CloudFailureCode.CONFLICT,"D1 账号已失效")
+                d1SessionFor(connection,beforeSend = guard)
+            },pipeline = { _,api,onLocator -> D1FilePipeline(api,d1Transfers,d1Contents,System::currentTimeMillis,onLocator = onLocator) },
+            onResult = { live,result -> d1Browser.claimResult(live,result) },onExportReady = { live,result -> d1Browser.claimExport(live,result) })
+    }
+    private val d1BrowserLazy = lazy {
+        D1Browser(viewModelScope,::actualD1Context,d1Writes,d1Contents,{ secureWindowPort },D1Md5Fingerprint,
+            { ctx -> d1SessionFor(ctx.connection,ctx.credentialRevision) },{ ctx,outcome ->
+                if (actualD1Context() != ctx) throw CloudFailure(CloudFailureCode.CONFLICT,"D1 范围已变化")
+                D1FilePipeline(d1SessionFor(ctx.connection,ctx.credentialRevision),d1Transfers,d1Contents,System::currentTimeMillis).downloadExport(outcome)
+            })
+    }
+    val d1Browser: D1Browser get() = d1BrowserLazy.value
+    private val d1DocumentsLazy = lazy { D1DocumentBridge(getApplication(),viewModelScope,d1Browser,::actualD1Context) }
+    private val d1Documents get() = d1DocumentsLazy.value
+    suspend fun takeD1DocumentLaunch(request: D1DocumentRequest) = d1Documents.takeLaunch(request)
+    fun onD1DocumentLaunchFailed() = d1Documents.launchFailed()
+    fun onD1DocumentResult(export: Boolean,code: Int,data: android.content.Intent?) = d1Documents.result(export,code,data)
+    fun onD1Background() { if (d1BrowserLazy.isInitialized()) d1Browser.background() }
+
     private val r2Writes: R2WriteRuntime by lazy {
         R2WriteRuntime(viewModelScope, operationStore, operationDispatcher, AndroidFingerprint(),
             OperationClock(System::currentTimeMillis), OperationIds { UUID.randomUUID().toString() },
@@ -289,6 +394,8 @@ class FlareGoViewModel constructor(
         // Attaching a *different* window revokes the previous readiness and drops the private Sippy
         // material now, instead of waiting for the old Activity's onDestroy or a later getter.
         if (r2BrowserLazy.isInitialized()) r2Browser.sippyCredentials.onWindowAttached(port.generation)
+        if(kvBrowserLazy.isInitialized())kvBrowser.content.onWindowChanged()
+        if(d1BrowserLazy.isInitialized())d1Browser.content.onWindowChanged()
     }
 
     /** Test observation only: the port the current Activity attached (never a credential). */
@@ -298,6 +405,8 @@ class FlareGoViewModel constructor(
     fun onSecureWindowClosed(port: com.flarego.ui.r2.SecureWindowPort) {
         if (secureWindowPort === port) secureWindowPort = null
         if (r2BrowserLazy.isInitialized()) r2Browser.sippyCredentials.onWindowDetached(port.generation)
+        if(kvBrowserLazy.isInitialized())kvBrowser.content.onWindowChanged()
+        if(d1BrowserLazy.isInitialized())d1Browser.content.onWindowChanged()
     }
 
     private val r2BrowserLazy = lazy {
@@ -422,10 +531,10 @@ class FlareGoViewModel constructor(
     ).also { controllerRef = it; it.bindManagement(operationRuntime.management) }
 
     init {
-        viewModelScope.launch { operationRuntime.recover(); r2Writes.refreshTasks() }
+        viewModelScope.launch { operationRuntime.recover(); r2Writes.refreshTasks(); kvWrites.refreshTasks() }
         viewModelScope.launch {
             combine(controller.state,management.zones.state) { _,_ -> Unit }
-                .collect { registerDemoSelection();extendedAdapter.refreshActual();panelContextState.value=actualManagementContext()?.panel;r2Browser.refreshContext() }
+                .collect { registerDemoSelection();extendedAdapter.refreshActual();panelContextState.value=actualManagementContext()?.panel;r2Browser.refreshContext();kvBrowser.refreshContext();d1Browser.refreshContext() }
         }
     }
     suspend fun reconcileTask(id: String) = operationRuntime.reconcile(id)
@@ -486,6 +595,12 @@ class FlareGoViewModel constructor(
         extendedAdapter.close()
         r2Browser.close()
         r2Documents.close()
+        if(kvDocumentsLazy.isInitialized())kvDocuments.close()
+        if(kvBrowserLazy.isInitialized())kvBrowser.close()
+        kvContents.releaseAll()
+        if(d1DocumentsLazy.isInitialized())d1Documents.close()
+        if(d1BrowserLazy.isInitialized())d1Browser.close()
+        d1Contents.releaseAll()
         connectionDraft.clear()
         oauthConnection.cancel()
         // Application file service remains shared. Claimed jobs release their own capability in finally.

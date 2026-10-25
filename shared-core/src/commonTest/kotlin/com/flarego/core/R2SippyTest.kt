@@ -365,12 +365,12 @@ class R2SippyTest {
         assertTrue(rows.drop(1).all { it.policy.risk == RiskLevel.CHANGE })
         // The credential-issuing operation remains unapproved.
         assertEquals(null, ActionPolicies.registry.registration("r2-create-temp-access-credentials"))
-        // The live registry now also carries C8 (107 = 55 READ + 52 WRITE). This is
+        // The live registry now also carries C8, KV and D1 (131 = 62 READ + 69 WRITE). This is
         // a current count only; historical B2/B3 matrices retain their frozen registry observations.
         val all = ActionPolicies.registry.registrations.values
-        assertEquals(107, all.size)
-        assertEquals(55, all.count { it.policy.semantics == ActionSemantics.READ })
-        assertEquals(52, all.count { it.policy.semantics == ActionSemantics.WRITE })
+        assertEquals(131, all.size)
+        assertEquals(62, all.count { it.policy.semantics == ActionSemantics.READ })
+        assertEquals(69, all.count { it.policy.semantics == ActionSemantics.WRITE })
     }
 
     @Test

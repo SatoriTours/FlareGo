@@ -12,6 +12,12 @@ enum class SecurePurpose {
 
     /** Batch B3 Sippy credential editing. */
     SIPPY_CREDENTIALS,
+
+    /** Explicit KV value / metadata viewing and editing. */
+    KV_CONTENT,
+
+    /** D1 SQL, parameters, schema, results and file scopes. */
+    D1_CONTENT,
 }
 
 /**

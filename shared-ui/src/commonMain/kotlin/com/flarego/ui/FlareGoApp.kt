@@ -79,7 +79,9 @@ fun FlareGoApp(
     panelPorts: com.flarego.ui.management.ManagementPanelPorts? = null,
     panelContext: com.flarego.ui.management.ManagementPanelContext? = null,
     r2Browser: com.flarego.ui.r2.R2Browser? = null,
+    kvBrowser: com.flarego.ui.kv.KvBrowser? = null,
     oauthConnection: OAuthConnection? = null,
+    d1Browser: com.flarego.ui.d1.D1Browser? = null,
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
@@ -160,6 +162,8 @@ fun FlareGoApp(
     val searchEnabled =
         activeModule == null && state.selected != null &&
             !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
+            !(kvBrowser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.KV) &&
+            !(d1Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.D1) &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
     val dismiss = {
         if (dialog is DialogState.Connect) { oauthConnection?.cancel(); connectionDraft.clear() }
@@ -540,7 +544,9 @@ fun FlareGoApp(
                             }
                             Page.RESOURCES ->
                                 ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
-                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account) }) })
+                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account) }) },
+                                    kvContent = kvBrowser?.let { browser -> ({ com.flarego.ui.kv.KvBrowserHost(browser, account) }) },
+                                    d1Content = d1Browser?.let { browser -> ({ com.flarego.ui.d1.D1BrowserHost(browser, account) }) })
                             Page.DNS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->
                                     if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {

@@ -45,6 +45,18 @@ class MainActivity : ComponentActivity() {
     private val r2Download = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         model.onR2DocumentResult(com.flarego.ui.r2.R2DocumentKind.DOWNLOAD, it.resultCode, it.data)
     }
+    private val kvImport=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onKvDocumentResult(false,it.resultCode,it.data)
+    }
+    private val kvExport=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onKvDocumentResult(true,it.resultCode,it.data)
+    }
+    private val d1Import=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onD1DocumentResult(false,it.resultCode,it.data)
+    }
+    private val d1Export=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.onD1DocumentResult(true,it.resultCode,it.data)
+    }
     /**
      * The one `FLAG_SECURE` owner of this Activity's real window.
      *
@@ -54,6 +66,7 @@ class MainActivity : ComponentActivity() {
      */
     private lateinit var secureWindow: AndroidSecureWindow
     override fun onResume() { super.onResume();model.onManagementResume() }
+    override fun onStop() {model.onKvBackground();model.onD1Background();super.onStop()}
 
     private suspend fun installOrAuthorize(current: FlareGoViewModel) {
         val request = current.pendingInstall ?: return
@@ -135,6 +148,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
             LaunchedEffect(current) {
+                current.kvBrowser.documentRequests.collect { request ->
+                    val launch=current.takeKvDocumentLaunch(request)?:return@collect
+                    try{if(launch.first)kvExport.launch(launch.second)else kvImport.launch(launch.second)}
+                    catch(_:Exception){current.onKvDocumentLaunchFailed()}
+                }
+            }
+            LaunchedEffect(current) {
+                current.d1Browser.documentRequests.collect { request ->
+                    val launch = current.takeD1DocumentLaunch(request) ?: return@collect
+                    try { if (launch.first) d1Export.launch(launch.second) else d1Import.launch(launch.second) }
+                    catch (_: Exception) { current.onD1DocumentLaunchFailed() }
+                }
+            }
+            LaunchedEffect(current) {
                 if (current.pendingInstall != null && !current.permissionRequestPending)
                     installOrAuthorize(current)
                 // collect, rather than collectLatest/a state-keyed effect: consuming an event must
@@ -184,7 +211,9 @@ class MainActivity : ComponentActivity() {
                 panelPorts = current.panelPorts,
                 panelContext = panelContext,
                 r2Browser = current.r2Browser,
+                kvBrowser = current.kvBrowser,
                 oauthConnection = current.oauthConnection,
+                d1Browser = current.d1Browser,
             )
         }
     }

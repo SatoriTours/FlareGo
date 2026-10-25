@@ -94,7 +94,7 @@ sealed interface HttpBody {
 /**
  * One multipart part.
  *
- * Only [HttpBody.Text], [HttpBody.Bytes] and [HttpBody.Stream] are accepted:
+ * Only [HttpBody.Text], [HttpBody.Bytes], [HttpBody.Stream] and one-shot [HttpBody.SensitiveJson] are accepted:
  * an empty part or a nested multipart part is rejected, and `name`, `filename`
  * and `contentType` are validated so no CRLF or quoted-string break can be
  * injected into the part headers.

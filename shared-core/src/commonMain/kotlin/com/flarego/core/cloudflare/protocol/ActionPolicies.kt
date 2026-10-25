@@ -119,8 +119,11 @@ data class ActionRegistration(
      */
     internal fun matches(method: String, path: String): Boolean {
         if (method != this.method) return false
-        if (!requestShapeIsSafe(path)) return false
-        val rawPath = path.substringBefore('?')
+        val checked = if (policy.key in KV_KEY_ACTIONS) {
+            com.flarego.core.cloudflare.kv.KvEncodedKeyPath.maskForValidation(path) ?: return false
+        } else path
+        if (!requestShapeIsSafe(checked)) return false
+        val rawPath = checked.substringBefore('?')
         val templateSegments = pathTemplate.split('/').drop(1)
         val rawSegments = rawPath.split('/').drop(1)
         // A reviewed trailing placeholder may own the whole remainder, so a value that
@@ -204,6 +207,12 @@ object ActionPolicies {
 }
 
 private val ALLOWED_METHODS = setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+private val KV_KEY_ACTIONS = setOf(
+    "workers-kv-namespace-read-the-metadata-for-a-key",
+    "workers-kv-namespace-read-key-value-pair",
+    "workers-kv-namespace-write-key-value-pair-with-metadata",
+    "workers-kv-namespace-delete-key-value-pair",
+)
 private const val MAX_MATCH_LENGTH = 4096
 
 private fun readPolicy(key: String) =
@@ -221,9 +230,7 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
 
     return arrayOf(
         read("accounts-account-details", "/accounts/{account_id}", ActionScope.ACCOUNT),
-        read("d1-list-databases", "/accounts/{account_id}/d1/database", ActionScope.ACCOUNT),
         read("r2-list-buckets", "/accounts/{account_id}/r2/buckets", ActionScope.ACCOUNT),
-        read("workers-kv-namespace-list-namespaces", "/accounts/{account_id}/storage/kv/namespaces", ActionScope.ACCOUNT),
         read("worker-script-list-workers", "/accounts/{account_id}/workers/scripts", ActionScope.ACCOUNT),
         read("user-billing-history-(-deprecated)-billing-history-details", "/user/billing/history", ActionScope.USER),
         read("zones-get", "/zones", ActionScope.USER),
@@ -256,6 +263,8 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
         *r2JobRegistrations(),
         *r2NotificationRegistrations(),
         *r2MetricsRegistrations(),
+        *kvRegistrations(),
+        *d1Registrations(),
     )
 }
 

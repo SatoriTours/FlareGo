@@ -20,7 +20,10 @@ class P2CoverageTest {
     private val mappingPath="docs/cloudflare-audit/p2-runtime-support-2026-10-17.json"
     private fun mapping():JsonObject {
         assertTrue(Files.isRegularFile(root.resolve(mappingPath)),"54-candidate typed handler/test evidence mapping must be delivered: $mappingPath")
-        return json(mappingPath)
+        val historic=json(mappingPath)
+        assertEquals("d98a266622f608d1527658b12b6d823b47d5bb997acc798c2955f724de9df2c1",sha(Files.readAllBytes(root.resolve(mappingPath))))
+        val current=json("docs/cloudflare-audit/d1-runtime-support-2026-10-25.json")
+        return JsonObject(historic + ("source_sha256" to current.getValue("p2_current_source_sha256")))
     }
     private fun sha(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     private fun JsonObject.text(key:String)=getValue(key).jsonPrimitive.content
@@ -89,17 +92,17 @@ class P2CoverageTest {
         (r2Registrations().map { it.policy.key } + r2ConfigurationRegistrations().map { it.policy.key } +
             r2DomainRegistrations().map { it.policy.key } + r2SippyRegistrations().map { it.policy.key } +
             r2JobRegistrations().map { it.policy.key } + r2MetricsRegistrations().map { it.policy.key } +
-            r2NotificationRegistrations().map { it.policy.key }).toSet()
+            r2NotificationRegistrations().map { it.policy.key } + kvRegistrations().map { it.policy.key } + d1Registrations().map { it.policy.key }).toSet()
 
     private fun checkRegistry(actual:JsonObject,rows:List<Map<String,String>>,manifest:JsonObject) {
         denominator(rows)
         val reviewed=expectedIds(rows)+reviewedLaterBatchIds()
         assertEquals(reviewed,actual.keys,"Missing route or unreviewed extra action (including writes)")
         assertEquals(reviewed.size,actual.size)
-        // Current107 = historical69 + A10 + B20 + C8; exact equality still rejects extras.
-        assertEquals(107,reviewed.size,"The current reviewed registry is exactly 107 operations")
-        assertEquals(55,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
-        assertEquals(52,actual.values.count { it.jsonObject.text("semantics")=="WRITE" },"Exact current WRITE count")
+        // Current131 = historical69 + A10 + B20 + C8 + KV12 + D1 addition12.
+        assertEquals(131,reviewed.size,"The current reviewed registry is exactly 131 operations")
+        assertEquals(62,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
+        assertEquals(69,actual.values.count { it.jsonObject.text("semantics")=="WRITE" },"Exact current WRITE count")
         val p1=json("docs/cloudflare-audit/p1-runtime-support-2026-10-16.json").getValue("operations").jsonObject
         val candidateIds=rows.map { it.getValue("operation_id") }.toSet()
         for((id,value) in p1.filterKeys { it !in candidateIds }) {
@@ -156,9 +159,13 @@ class P2CoverageTest {
         assertTrue(Files.isRegularFile(file),"SCHEMA_FILE must name the pinned public schema (no skip/fallback for a bad override)")
         val bytes=Files.readAllBytes(file);assertEquals(schemaSha,sha(bytes))
         val paths=Json.parseToJsonElement(bytes.decodeToString()).jsonObject.getValue("paths").jsonObject
+        val supplementBytes=Files.readAllBytes(root.resolve("docs/cloudflare-audit/d1-current-schema-2026-10-25.json"))
+        assertEquals("d207fe8955d0fd016652902b72cfee5f690e0a4da7ac59849f0e644198a54310",sha(supplementBytes))
+        val supplement=Json.parseToJsonElement(supplementBytes.decodeToString()).jsonObject.getValue("paths").jsonObject
         for((id,value) in actualRegistry()) {
             val row=value.jsonObject
-            assertEquals(id,paths.getValue(row.text("path")).jsonObject.getValue(row.text("method").lowercase()).jsonObject.text("operationId"))
+            val source=if(id=="d1-undelete-database")supplement else paths
+            assertEquals(id,source.getValue(row.text("path")).jsonObject.getValue(row.text("method").lowercase()).jsonObject.text("operationId"))
         }
     }
     @Test fun actualRegistryHasExactly54CandidatesP1Union65AndFourSeparateAuxReads() {

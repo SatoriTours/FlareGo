@@ -23,7 +23,7 @@ sealed interface ExecutionReceipt {
 
     data class Partial(val safeDetail: String, val providerRequestId: String? = null) : ExecutionReceipt
 
-    data class Unknown(val providerRequestId: String? = null) : ExecutionReceipt
+    data class Unknown(val providerRequestId: String? = null, val pollPath: String? = null) : ExecutionReceipt
 }
 
 /** Trusted read-only reconciliation evidence for one task. */
@@ -283,6 +283,79 @@ class OperationCoordinator(
     fun invalidateConnection(connectionId: String) = coordination.invalidate(connectionId)
 
     /**
+     * Explicit local closure of an uncertain task. It asserts no provider outcome and never
+     * reconstructs a write. The product must verify the exact target and the user's acknowledgement.
+     * The resource lock prevents closure of a still-active send; metadata uses the normal latch.
+     */
+    internal suspend fun closeUncertain(taskId: String, resourceGroup: ResourceRef, guard: () -> Unit): OperationTask {
+        val key = "${resourceGroup.kind}:${resourceGroup.externalId}:${resourceGroup.scope}"
+        return stableLock(key, metadata = false).withLock {
+            val task = storeOnIo { store.get(taskId) } ?: throw invalidInputFailure()
+            requireLiveMetadata(task)
+            val pendingFile = task.state == TaskState.ACCEPTED && task.actionKey in setOf("d1-import-database", "d1-export-database") && task.pollPath != null
+            if (task.resourceRef != resourceGroup || !pendingFile && task.state !in setOf(TaskState.QUEUED, TaskState.RUNNING,
+                    TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.RECONCILING)) throw invalidInputFailure()
+            val generation = generationOf(task.connectionId)
+            guard()
+            val closed = advance(task, TaskState.ACTION_REQUIRED).copy(
+                safeDetail = "用户已人工关闭本地门禁；云端结果仍未知，历史请求不可重放",
+            )
+            writeMetadata(task.connectionId, closed, generation, requireExisting = true)
+            closed
+        }
+    }
+
+    /** Called by a trusted product adapter while it holds executeGrouped's resource lock. */
+    internal suspend fun recordPollLocator(taskId: String, resourceGroup: ResourceRef, pollPath: String, guard: () -> Unit) {
+        val connectionId = connectionIdOf(resourceGroup.scope)
+        val generation = generationOf(connectionId)
+        withMetadataGate(connectionId) {
+            storeOnIo {
+                val task = store.get(taskId) ?: throw invalidInputFailure()
+                requireLiveMetadata(task)
+                if (task.resourceRef != resourceGroup || task.state != TaskState.RUNNING) throw invalidInputFailure()
+                val updated = advance(task, task.state).copy(pollPath = pollPath)
+                guard()
+                if (store.get(taskId) == null) throw invalidInputFailure()
+                if (isInvalidated(connectionId) || generationOf(connectionId) != generation) throw invalidInputFailure()
+                store.putWithSummary(updated, OperationTaskPersistence.summaryFor(updated))
+            }
+        }
+    }
+
+    /** Explicit continuation only. The product must decode/verify the exact locator, never a payload. */
+    internal suspend fun pollGrouped(taskId: String, resourceGroup: ResourceRef, guard: () -> Unit,
+        poll: suspend (beforeSend: () -> Unit) -> ExecutionReceipt): OperationTask {
+        val key = "${resourceGroup.kind}:${resourceGroup.externalId}:${resourceGroup.scope}"
+        return stableLock(key, metadata = false).withLock {
+            val task = storeOnIo { store.get(taskId) } ?: throw invalidInputFailure()
+            requireLiveMetadata(task)
+            if (task.resourceRef != resourceGroup || task.pollPath == null || task.state !in setOf(TaskState.ACCEPTED, TaskState.UNKNOWN, TaskState.RUNNING)) throw invalidInputFailure()
+            val generation = generationOf(task.connectionId)
+            guard()
+            val running = advance(task, TaskState.RECONCILING)
+            writeMetadata(task.connectionId, running, generation, requireExisting = true)
+            val beforeSend = {
+                guard()
+                if (isInvalidated(task.connectionId) || generationOf(task.connectionId) != generation) throw invalidInputFailure()
+            }
+            val receipt = try { poll(beforeSend) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { ExecutionReceipt.Unknown(pollPath = task.pollPath) }
+            val updated = try {
+                val path = when (receipt) {
+                    is ExecutionReceipt.Accepted -> receipt.pollPath
+                    is ExecutionReceipt.Unknown -> receipt.pollPath ?: task.pollPath
+                    else -> null
+                }
+                advance(running, stateFor(receipt)).copy(pollPath = path, providerRequestId = receiptProviderId(receipt))
+            } catch (_: Exception) { return@withLock running }
+            try { writeMetadata(task.connectionId, updated, generation, requireExisting = true); updated }
+            catch (_: Exception) { running }
+        }
+    }
+
+    /**
      * Runs [remove] under the same latch that guards metadata updates, on the store
      * dispatcher, so a late result cannot recreate a deleted task.
      */
@@ -398,20 +471,20 @@ class OperationCoordinator(
     }
 
     private fun settle(plan: ChangePlan, running: OperationTask, receipt: ExecutionReceipt): OperationTask {
-        val state =
-            when (receipt) {
-                is ExecutionReceipt.Rejected, is ExecutionReceipt.NotDispatched -> TaskState.FAILED
-                is ExecutionReceipt.Completed -> TaskState.SUCCEEDED
-                is ExecutionReceipt.Accepted -> TaskState.ACCEPTED
-                is ExecutionReceipt.Partial -> TaskState.PARTIAL
-                is ExecutionReceipt.Unknown -> TaskState.UNKNOWN
-            }
         val providerId = receiptProviderId(receipt)
-        val pollPath = (receipt as? ExecutionReceipt.Accepted)?.pollPath?.let { safePollPathOrNull(it, plan) }
-        return advance(running, state).copy(
+        val locator = when (receipt) { is ExecutionReceipt.Accepted -> receipt.pollPath; is ExecutionReceipt.Unknown -> receipt.pollPath; else -> null }
+        val pollPath = locator?.let { safePollPathOrNull(it, plan) }
+        return advance(running, stateFor(receipt)).copy(
             providerRequestId = providerId,
             pollPath = pollPath,
         )
+    }
+    private fun stateFor(receipt: ExecutionReceipt): TaskState = when (receipt) {
+        is ExecutionReceipt.Rejected, is ExecutionReceipt.NotDispatched -> TaskState.FAILED
+        is ExecutionReceipt.Completed -> TaskState.SUCCEEDED
+        is ExecutionReceipt.Accepted -> TaskState.ACCEPTED
+        is ExecutionReceipt.Partial -> TaskState.PARTIAL
+        is ExecutionReceipt.Unknown -> TaskState.UNKNOWN
     }
 
     private fun receiptProviderId(receipt: ExecutionReceipt): String? {

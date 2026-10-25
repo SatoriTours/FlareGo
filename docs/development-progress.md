@@ -1,6 +1,44 @@
 # FlareGo 开发进度与证据
 
-## 最新接续（2026-10-25，CF 本地授权修复与独立验收通过）
+## 当前接续（2026-10-25，完整 D1 13项本地合成独立验收通过）
+
+用户批准[完整13项设计](superpowers/specs/2026-10-25-p3-d1-management.md)，当前Codex在原local/main连续实现，保留混合KV/历史成果与独立R2树，不建空间或分支。已接入实际Resources/Main：typed数据库CRUD/复制设置、受控只读浏览、任意SQL/query/raw/batch、完整SQL文件与私有结果、导入导出、Time Travel/previous bookmark和精确UUID删除恢复。任意SQL为潜在WRITE，危险动作三级确认；完整私有内容独立加密owner、SecureWindow与默认遮蔽；云终态释放输入，结果会话继续完整查看/SAF，并在撤销时释放。
+
+作者完整JVM core1222/UI143/platform142/app8均0；Debug/testAPK及app/platform lint通过，Python349/0、CI10/0。实际Main与真实SAF，1.0完整10/0、2.0完整10/0，另1.0恢复显示定向1/0；包含完整SQL/params、完整表末页、全文件SHA/长度、部分/未知持久化门禁、取消/后台/迟到拒绝。当前registry131＝62R/69W，D1为13＝3R/10W；冻结历史矩阵不追写，D1当前overlay承担源码快照。普通缓存源码漂移真实4/1拒绝，精确恢复4/0。原失败及普通返工见 `~/.local/state/agent-artifacts/FlareGo/2026-10-25-d1/progress.md`。详见[实施计划](superpowers/plans/2026-10-25-p3-d1-management.md)。
+
+独立首验已执行JVM203/0、两字体各10/0（共223次），仍因I1最终确认缺连接身份、I2大字号目录胶囊裁字判不通过；报告及原失败保留。作者已冻结连接名称/稳定ID，并将多行目录改为有留白的圆角矩形；新增实际Main断言先1/1复现I1，修后core44/UI11均0、两字体各定向3/0、Debug/testAPK和app lint通过。
+
+原Codex独立定向复验通过：core44/UI11均0，实际Main query及目录CRUD两字体各2/0，共59次执行零失败/错误/跳过；实际original核5张新图，两处Important闭合，无新增Important。257来源验前后无差异，较首验精确9项变化/248项不变，HEAD/index/schema及历史矩阵保持。父核当前快照、日志与两张2.0关键原图后接受完整13项本地合成切片。详见[复验报告](/home/jimxl/.local/state/agent-artifacts/FlareGo/2026-10-25-d1/independent/recheck-report.md)，SHA256 `8ce7716cecf108ffabb25617a53386ab1d00cc02af6bf660f605da233c5545a5`；收尾仅更新三份交付文稿，来源差量与设备收尾记同根 `final-validation.json`。
+
+真实云/生产写入为0，D1四项缺证操作（import/export/restore/undelete）及签名host/path默认关闭；API26–28未实测，5GiB边界为生成流测试。未Git提交、推送、Tag/Release或归档，整体CF目标继续，usage未知。
+
+## 前次接续（2026-10-25，完整标准 KV 13项本地合成验收通过）
+
+用户明确选择完整13项现行标准KV方案（已有目录1项、新增12项），批准旧批删迁移、敏感value/metadata、文本/二进制及批量文件、加密私有临时缓存和三级覆盖/删除确认。当前Codex复用 `/home/jimxl/projects/FlareGo`、main及既有协调空间连续实现、自测与普通修复，再独立验收；不迁移R2-D成果，不新建空间或分支。本轮仅本地合成，不调用真实云、不提交或发布。详见[已批准设计](superpowers/specs/2026-10-25-p3-kv-management.md)与[实施计划](superpowers/plans/2026-10-25-p3-kv-management.md)。完整13项已通过本地合成独立验收，真实云资格仍0，整体CF目标继续active。
+
+作者交验阶段：13项typed/native入口、独立KV授权与namespace协调、私有内容/加密缓存、完整批量校验、三级确认及SAF事务已完成自测。首轮完整core1162仅两项旧registry计数失败，UI131/platform126/app8均0；修复后相关57/0。新增取消清理和终态私有内容释放回归后，文件7/0、全UI132/0、最新KV门禁4/0；Debug/test APK及app/platform lint通过，Python349/0、CI10/0。字号1.0八项8/0＋真实SAF2/0；字号2.0最终受影响八项8/0＋前轮真实SAF2/0，原失败和定向轮次分别保留。当前root registry119=60读/59写，冻结历史矩阵未追写。原独立Codex已完成当前冻结快照验收并通过；整体CF目标继续active。证据 `~/.local/state/agent-artifacts/FlareGo/2026-10-25-kv/`。
+
+独立最终：core112/UI16/platform29/app8共165/0，正式Main API36字号1.0与2.0各10/0，独立共185/0，未发现已确认产品缺陷。实际original核看53张独立图；唯一G1（2.0非空metadata遮蔽字段未入图）由作者临时capture-only定向1/0补拍、测试源码逐字节恢复后，原QA实际看补图闭合。最终[独立报告](/home/jimxl/.local/state/agent-artifacts/FlareGo/2026-10-25-kv/independent/report.md) SHA256 `3ad6c00290fa3a4d277096b982be71c32a10e1ea07ec6e87ae0bb5b68a0276b0`，保留未完成历史和原失败，不把作者补拍冒作独立重测。210项原快照及HEAD/index均匹配；父收尾只更新KV文稿，证据见同根final-validation.json。仅owned DailySatori_API_36已核名、字号1.0后关闭，其他设备/服务未动。
+
+真实云/生产写入/OAuth注册与App Links仍未验收，API26–28未实测；未提交、推送、Tag/Release或归档。整体CF目标active：用户已批准D1现行13项完整本地合成实施（固定12＋新增undelete），当前按既有计划连续实现；Workers/Pages及其余产品按覆盖清单继续，不缩小全CF目标。usage未知。
+
+D1下一批[完整13项设计](superpowers/specs/2026-10-25-p3-d1-management.md)已完成独立builder check（报告`~/.local/state/agent-artifacts/FlareGo/2026-10-25-d1-preflight/builder-review.md`，SHA `f0b2863d244cb00c464eeabd8aa8bbbfb6309e59ee944a6efab0c32b0518cac4`）。唯一Important由负责人在设计中闭合：云操作终态释放输入，独立受保护结果会话继续完整查看/导出，并在会话撤销时释放；不增加正文持久化或自动重放。导入5GiB精确字节边界、完整SQL多结果及缺证生产准入均已锁定；批准前设计SHA `37341d76cbcb227fb9b01e0b566d73c9f1eadd0ed29f52b00964d47a2eaf9453`。用户已选择完整13项，按[实施计划](superpowers/plans/2026-10-25-p3-d1-management.md)原地连续实现。首批已落盘13路由、受控只读factory、严格输入验证及完整SQL/结果流扫描，15项定向测试通过；typed客户端正在验证，其余缓存、管线、权限/协调、原生UI与独立验收仍待完成，不将局部视为完整交付。
+
+## 最新接续（2026-10-25，R2-D 完整12项本地合成验收通过）
+
+用户已批准完整D12，当前Codex连续实现、自测和普通返工，原独立Codex复验后最终通过。成果保留在既有 `wks_aec70b4ad64f08fc`、`feat/r2-slurper-1025`、`/home/jimxl/.paseo/worktrees/2bpfajhp/r2-slurper-1025`，基线 `f76465470fe0933c9f48faebed13b3e1594a0a72`；未迁移、提交或整合到本目录。后续默认复用原协调local空间，不因新功能自动创建Workspace/worktree/分支。
+
+已实现四观察、六任务变更、两项显式提交凭据预检：三类源、R2目标、四地区、完整prefix/keys、覆盖策略、账号终止全部迁移与三级确认；复用私有内存/SecureWindow、单次敏感正文、撤销守卫、账号共享锁和安全任务locator。八控制/预检因官方权限映射未核实仍默认关闭，内部合成permit不构成生产授权。当前功能树矩阵119注册=59READ/60WRITE，51候选=50typed/0NOT_STARTED/1DEFERRED；本目录review及冻结A/B/C历史未追写。
+
+作者返工前完整JVM回归1396/0、Debug/app/platform lint通过；Python审计349/0（skip1）、CI10/0，正常缓存源码漂移拒绝并还原。独立首轮发现F1冻结keys只有数量、F2字段回退、F3预检缺安全身份；同负责人修复后受影响core52/UI20与门禁17均通过，最新app lint和测试APK构建通过。独立返工实际core146/UI84均0、字号1.0完整8/0、字号2.0关键4/0；一次143环境中断保留，不计产品红绿，也未机械重复1396全套。
+
+唯一剩余视觉缺口是2.0创建最终确认末页：作者仅临时增加截图滚动/显示断言，定向创建1/0后逐字节还原测试；原QA以original单张实际语义确认key-10/key-11、11–12/12、上一页及完整标题/取消/确认均可读，最终独立结论 **PASS_LOCAL_SYNTHETIC_D12**。38文件manifest `4964139a912b2a9052359770fdf7edcada230b9e91d1e2b533a7ba31a5f7d70c`、169源码hash与diffcheck父核一致。原失败、未完成、环境中断和最终通过记录均保留，不把作者补证冒充独立重测。
+
+证据根 `~/.local/state/agent-artifacts/FlareGo/2026-10-25-r2-slurper/`，最终 [独立复验报告](/home/jimxl/.local/state/agent-artifacts/FlareGo/2026-10-25-r2-slurper/independent/recheck-report.md) SHA256 `1470191f11f917ff356be3defce0434263400156b87a9a83fe49089787c51754`；`final-validation.json` 为父最终核对。原QA已交回所有权，仅owned模拟器核名、字号1.0后关闭并确认断连，其他设备/服务未动。新留存材料统一外部证据目录，既有未知/未跟踪历史成果未清理。
+
+真实云/付费/生产写入、API26–28仍未验收，官方权限映射缺口未关闭，E1未批准。未提交、推送、打Tag、发布或归档，usage未知。**整体CF目标保持active**；KV/D1/Workers/Pages及后续产品仍待继续，KV已完成[候选预研](cloudflare-audit/kv-preflight-2026-10-25.md)与[完整方案](superpowers/specs/2026-10-25-p3-kv-management.md)，后续已获批准，见当前接续。
+
+## 前次接续（2026-10-25，CF 本地授权修复与独立验收通过）
 
 按用户要求，本轮由当前 Codex 会话直接实现和自测，独立验收使用同型号 `codex/gpt-6.1-sol`，没有使用 pi。延续现有 local Workspace `wks_777a025be3c6808e`，不隔离，基线 `cebe3c9083988cc974d5b73be39d20286cf1de1a`；既有未跟踪证据全部保留。用户确认 OAuth 尚未注册，先完善本地授权流程；本轮没有真实云操作或凭据读取。
 

@@ -260,9 +260,10 @@ private fun requireApiPath(raw: String): String {
         if (!character.isRawUrlCharacter() || character == '\\' || character == '#') throw invalidInput()
     }
     requireValidEscapes(raw)
-    val queryAt = raw.indexOf('?')
-    val rawPath = if (queryAt < 0) raw else raw.substring(0, queryAt)
-    val rawQuery = if (queryAt < 0) "" else raw.substring(queryAt + 1)
+    val inspected = com.flarego.core.cloudflare.kv.KvEncodedKeyPath.maskForValidation(raw) ?: raw
+    val queryAt = inspected.indexOf('?')
+    val rawPath = if (queryAt < 0) inspected else inspected.substring(0, queryAt)
+    val rawQuery = if (queryAt < 0) "" else inspected.substring(queryAt + 1)
     requireSafePath(rawPath)
     requireSafeQuery(rawQuery)
     var decoded = rawPath
@@ -473,7 +474,7 @@ private fun HttpBody.toRequestBody(
             onSensitiveBody?.invoke(sensitive)
             sensitive
         }
-        is HttpBody.Multipart -> multipartBody(parts, isActive)
+        is HttpBody.Multipart -> multipartBody(parts, isActive, onSensitiveBody)
     }
 
 /**
@@ -591,21 +592,27 @@ private class StreamBody(
     }
 }
 
-private fun multipartBody(parts: List<MultipartPart>, isActive: () -> Boolean): RequestBody {
+private fun multipartBody(parts: List<MultipartPart>, isActive: () -> Boolean,
+    onSensitiveBody: ((SensitiveBytesBody) -> Unit)?): RequestBody {
     val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
     for (part in parts) {
-        val body = part.body.toPartBody(part, isActive)
+        val body = part.body.toPartBody(part, isActive, onSensitiveBody)
         if (part.filename == null) builder.addFormDataPart(part.name, null, body)
         else builder.addFormDataPart(part.name, part.filename, body)
     }
     return builder.build()
 }
 
-private fun HttpBody.toPartBody(part: MultipartPart, isActive: () -> Boolean): RequestBody =
+private fun HttpBody.toPartBody(part: MultipartPart, isActive: () -> Boolean,
+    onSensitiveBody: ((SensitiveBytesBody) -> Unit)?): RequestBody =
     when (this) {
         is HttpBody.Text -> BytesBody(value.encodeToByteArray(), requireSendableMediaType(part.contentType))
         is HttpBody.Bytes -> BytesBody(value, requireSendableMediaType(part.contentType))
         is HttpBody.Stream -> StreamBody(source, length, requireSendableMediaType(part.contentType), isActive)
+        is HttpBody.SensitiveJson -> {
+            requireSameMediaType(part.contentType, contentType)
+            toRequestBody(isActive, onSensitiveBody)
+        }
         else -> throw invalidInput()
     }
 

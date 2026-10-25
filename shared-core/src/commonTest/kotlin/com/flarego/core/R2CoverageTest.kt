@@ -28,9 +28,10 @@ import kotlin.test.*
  *    observation (49 READ / 47 WRITE) and its 77 source hashes describe the batch B2 exit snapshot.
  *    Its file SHA is pinned; its hashes are history and never restored onto current code.
  * 1d. **Frozen B3 history.** Its 30/20/1, registry99 and 113 source hashes remain byte-frozen.
- * 2. **Current C state.** `docs/cloudflare-audit/r2-c-runtime-support-2026-10-22.json` records
+ * 2. **Frozen C exit.** `docs/cloudflare-audit/r2-c-runtime-support-2026-10-22.json` records
  *    51 literal candidates = 38 typed + 12 not started + 1 deferred; registry107 = 55 READ +
- *    52 WRITE, with 147 reviewed sources. Local evidence only, independent acceptance pending.
+ *    52 WRITE, with 147 historical source hashes. KV overlays current hashes and registry119;
+ *    frozen C bytes and local-only qualification remain unchanged.
  *
  * No document, nor `review.json`, is ever loaded by the runtime: the last test scans the
  * production sources for any reference to them, and no registration is created from data.
@@ -167,7 +168,16 @@ class R2CoverageTest {
 
     private fun JsonObject.text(key: String) = getValue(key).jsonPrimitive.content
 
-    private fun matrix() = json(matrixPath)
+    private fun matrix(): JsonObject {
+        // C is a frozen exit document. D1 carries the current cross-product overlay;
+        // historical C counters/anchors/review observations remain byte-for-byte unchanged.
+        assertEquals("763e9042c6224ac7faed0e07bc8109a953018c10e982646a605d93b25750f382",sha(bytes(matrixPath)))
+        val historic=json(matrixPath)
+        val current=json("docs/cloudflare-audit/d1-runtime-support-2026-10-25.json")
+        return JsonObject(historic + mapOf(
+            "source_sha256" to current.getValue("r2_current_source_sha256"),
+            "runtime_registry_observed" to current.getValue("runtime_registry_observed")))
+    }
 
     private fun b2Matrix() = json(b2MatrixPath)
 
@@ -302,16 +312,16 @@ class R2CoverageTest {
         val rows = candidates(matrix)
         val typed = rows.filterValues { it.text("technical_support") == "TYPED_HANDLER" }.keys
         // Exact union: the frozen P1/P2/auxiliary baseline plus the reviewed A/B1/B2/B3/C additions.
-        val expected = baseline + typed
+        val expected = baseline + typed + kvRegistrations().map { it.policy.key } + d1Registrations().map { it.policy.key }
         assertEquals(69, baseline.size, "the frozen P1/P2/auxiliary baseline stays 69")
-        assertEquals(107, expected.size, "the current reviewed registry is exactly 107 operations")
+        assertEquals(131, expected.size, "the current reviewed registry is exactly 131 operations")
         assertEquals(expected, registry.keys, "a missing route or an unreviewed extra action (including a read) is refused")
         assertEquals(expected.size, registry.size)
-        assertEquals(55, registry.values.count { it.policy.semantics == ActionSemantics.READ }, "exact current READ count")
-        assertEquals(52, registry.values.count { it.policy.semantics == ActionSemantics.WRITE }, "exact current WRITE count")
-        assertEquals(JsonPrimitive(107), matrix.getValue("runtime_registry_observed").jsonObject["count"])
-        assertEquals(JsonPrimitive(55), matrix.getValue("runtime_registry_observed").jsonObject["read"])
-        assertEquals(JsonPrimitive(52), matrix.getValue("runtime_registry_observed").jsonObject["write"])
+        assertEquals(62, registry.values.count { it.policy.semantics == ActionSemantics.READ }, "exact current READ count")
+        assertEquals(69, registry.values.count { it.policy.semantics == ActionSemantics.WRITE }, "exact current WRITE count")
+        assertEquals(JsonPrimitive(131), matrix.getValue("runtime_registry_observed").jsonObject["count"])
+        assertEquals(JsonPrimitive(62), matrix.getValue("runtime_registry_observed").jsonObject["read"])
+        assertEquals(JsonPrimitive(69), matrix.getValue("runtime_registry_observed").jsonObject["write"])
         assertEquals(JsonPrimitive(69), matrix.getValue("runtime_registry_observed").jsonObject["historical_p1_p2_auxiliary_count"])
         assertEquals(JsonPrimitive(10), matrix.getValue("runtime_registry_observed").jsonObject["reviewed_batch_a_addition"])
         assertEquals(JsonPrimitive(10), matrix.getValue("runtime_registry_observed").jsonObject["reviewed_batch_b1_addition"])
@@ -1411,7 +1421,7 @@ class R2CoverageTest {
     }
 
     @Test
-    fun handwrittenRoutesKeepThePinnedSchemaAndTheExact107EntryRegistry() {
+    fun handwrittenRoutesKeepThePinnedSchemaAndTheExact131EntryRegistry() {
         validateSchema(matrix())
         validateRegistry(matrix(), ActionPolicies.registry.registrations)
     }

@@ -155,10 +155,10 @@ class R2DomainConfigurationTest {
             }
         }
         assertEquals(RiskLevel.DESTRUCTIVE, ActionPolicies.policy("r2-delete-custom-domain")!!.risk)
-        // Current107 includes B3 and C8; the exact domain per-action sets above stay unchanged.
-        assertEquals(107, ActionPolicies.registry.registrations.size)
-        assertEquals(55, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.READ })
-        assertEquals(52, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.WRITE })
+        // Current131 includes B3, C8, KV and D1; the exact domain per-action sets above stay unchanged.
+        assertEquals(131, ActionPolicies.registry.registrations.size)
+        assertEquals(62, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.READ })
+        assertEquals(69, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.WRITE })
     }
 
     // ------------------------------------------------------------------ locator vocabulary

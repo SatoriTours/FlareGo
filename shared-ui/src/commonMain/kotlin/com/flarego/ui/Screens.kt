@@ -194,7 +194,7 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit) {
 @Composable
 fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Unit,
     selectKind: (ResourceKind) -> Unit = {}, refresh: () -> Unit = {}, more: () -> Unit = {}, selectWorkers: (com.flarego.core.ports.WorkersDirectoryMode) -> Unit = {},
-    r2Content: (@Composable () -> Unit)? = null) {
+    r2Content: (@Composable () -> Unit)? = null, kvContent: (@Composable () -> Unit)? = null, d1Content: (@Composable () -> Unit)? = null) {
     var filter by remember { mutableStateOf<ResourceKind?>(null) }
     Column {
         Row(
@@ -227,6 +227,14 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
         }
         if (state.resourceKind == ResourceKind.R2 && r2Content != null) {
             Box(Modifier.weight(1f)) { r2Content() }
+            return@Column
+        }
+        if (state.resourceKind == ResourceKind.KV && kvContent != null) {
+            Box(Modifier.weight(1f)) { kvContent() }
+            return@Column
+        }
+        if (state.resourceKind == ResourceKind.D1 && d1Content != null) {
+            Box(Modifier.weight(1f)) { d1Content() }
             return@Column
         }
         if (state.productLoading && state.resourceKind == ResourceKind.WORKER) Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceEvenly) {

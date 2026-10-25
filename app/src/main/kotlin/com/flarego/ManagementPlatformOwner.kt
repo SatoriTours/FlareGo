@@ -8,6 +8,8 @@ import com.flarego.core.application.operations.OperationClock
 import com.flarego.core.cloudflare.HttpTransport
 import com.flarego.core.cloudflare.identity.TokenAuthorityIssuer
 import com.flarego.core.cloudflare.identity.R2TokenAuthorityIssuer
+import com.flarego.core.cloudflare.identity.KvTokenAuthorityIssuer
+import com.flarego.core.cloudflare.identity.D1TokenAuthorityIssuer
 import com.flarego.core.cloudflare.protocol.CloudflareGateway
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
@@ -23,7 +25,7 @@ import kotlinx.coroutines.sync.withLock
 data class ManagementCredentialStamp(val connectionId:String,val accountId:String,val revision:Long,val generation:Long)
 class ManagementCredentialTransition internal constructor(internal val id:String)
 class ManagementCredentialBundle internal constructor(val stamp:ManagementCredentialStamp,val gateway:CloudflareGateway,
-    val transfers:TransferPort,val issuer:TokenAuthorityIssuer,val r2Issuer:R2TokenAuthorityIssuer)
+    val transfers:TransferPort,val issuer:TokenAuthorityIssuer,val r2Issuer:R2TokenAuthorityIssuer,val kvIssuer:KvTokenAuthorityIssuer,val d1Issuer:D1TokenAuthorityIssuer)
 class ManagementPlatformBorrower internal constructor(internal val id:String)
 class ManagedDocumentLease internal constructor(internal val id:String,val file:DnsFileRef?,val target:DnsExportTarget?,val jobOwned:Boolean)
 
@@ -72,7 +74,7 @@ class ManagementPlatformOwner private constructor(application:Application) {
         }
     }
     private data class Credential(val connection:Connection,val stamp:ManagementCredentialStamp,
-        var active:Boolean,var issuer:TokenAuthorityIssuer?=null,var r2Issuer:R2TokenAuthorityIssuer?=null,
+        var active:Boolean,var issuer:TokenAuthorityIssuer?=null,var r2Issuer:R2TokenAuthorityIssuer?=null,var kvIssuer:KvTokenAuthorityIssuer?=null,var d1Issuer:D1TokenAuthorityIssuer?=null,
         var transition:ManagementCredentialTransition?=null,var ioStarted:Boolean=false)
     private val credentials=mutableMapOf<String,Credential>()
     private val borrowers=java.util.Collections.newSetFromMap(IdentityHashMap<ManagementPlatformBorrower,Boolean>())
@@ -92,6 +94,8 @@ class ManagementPlatformOwner private constructor(application:Application) {
         if(active && !connection.demo) {
             entry.issuer=TokenAuthorityIssuer(connection,revision,{ credentialRevision(connection.id) },clock)
             entry.r2Issuer=R2TokenAuthorityIssuer(connection,revision,{ credentialRevision(connection.id) },clock)
+            entry.kvIssuer=KvTokenAuthorityIssuer(connection,revision,{ credentialRevision(connection.id) },clock)
+            entry.d1Issuer=D1TokenAuthorityIssuer(connection,revision,{ credentialRevision(connection.id) },clock)
         }
         return entry
     }
@@ -112,6 +116,8 @@ class ManagementPlatformOwner private constructor(application:Application) {
         if(old?.transition!=null) throw credentialFailure()
         old?.issuer?.invalidate(connection.id)
         old?.r2Issuer?.invalidate(connection.id)
+        old?.kvIssuer?.invalidate(connection.id)
+        old?.d1Issuer?.invalidate(connection.id)
         val next=fresh(connection,(old?.stamp?.revision ?: 0)+1,(old?.stamp?.generation ?: 0)+1,false)
         val change=ManagementCredentialTransition(UUID.randomUUID().toString());next.transition=change;credentials[connection.id]=next;change
     }
@@ -154,14 +160,14 @@ class ManagementPlatformOwner private constructor(application:Application) {
                 val transport=jsonForToken(token);requireActive(entry)
                 val transfer=transfersForToken(token);requireActive(entry)
                 val bundle=ManagementCredentialBundle(entry.stamp,CloudflareGateway(transport,nowMs={ clock.nowMs() },parseHttpDate=CloudflareHttpDates::parse),transfer,
-                    entry.issuer ?: throw credentialFailure(),entry.r2Issuer ?: throw credentialFailure())
+                    entry.issuer ?: throw credentialFailure(),entry.r2Issuer ?: throw credentialFailure(),entry.kvIssuer ?: throw credentialFailure(),entry.d1Issuer ?: throw credentialFailure())
                 synchronized(lock) { requireActive(entry);bundles.add(bundle) };bundle
             }
         } catch(cancel:CancellationException) { throw cancel }
         catch(error:Exception) { throw credentialFailure() }
     }
     fun requireCurrent(bundle:ManagementCredentialBundle) { synchronized(lock) {
-        if(bundle !in bundles || credentials[bundle.stamp.connectionId]?.let { it.active && it.stamp==bundle.stamp && it.issuer===bundle.issuer && it.r2Issuer===bundle.r2Issuer }!=true) throw credentialFailure()
+        if(bundle !in bundles || credentials[bundle.stamp.connectionId]?.let { it.active && it.stamp==bundle.stamp && it.issuer===bundle.issuer && it.r2Issuer===bundle.r2Issuer && it.kvIssuer===bundle.kvIssuer && it.d1Issuer===bundle.d1Issuer }!=true) throw credentialFailure()
     } }
     /** No external callback while holding the Owner monitor: Picker.current may query this owner. */
     private fun checkSelection(borrower:ManagementPlatformBorrower,selection:DnsDocumentSelection) {
