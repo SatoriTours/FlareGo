@@ -46,7 +46,9 @@ class OAuthFlow(
         config.requireConfigured()
         val random = SecureRandom()
         fun nonce() = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(random::nextBytes))
-        val request = Pending(nonce(), nonce(), nowMs())
+        // Reopening the browser must not invalidate the page the user already has open.
+        val request = pending?.takeIf { nowMs() - it.createdMs in 0..600_000L }
+            ?: Pending(nonce(), nonce(), nowMs())
         pending = request
         val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
             MessageDigest.getInstance("SHA-256").digest(request.verifier.toByteArray(Charsets.US_ASCII)))
@@ -66,13 +68,21 @@ class OAuthFlow(
         return url.scheme == expected.scheme && url.host == expected.host && url.port == expected.port &&
             url.encodedPath == expected.encodedPath && url.username.isEmpty() && url.password.isEmpty() && url.fragment == null
     }
+    @Synchronized fun matchesPendingCallback(value: String): Boolean {
+        if (!matchesCallback(value)) return false
+        val request = pending ?: return false
+        val states = value.toHttpUrlOrNull()?.queryParameterValues("state") ?: return false
+        val state = states.singleOrNull() ?: return false
+        return MessageDigest.isEqual(state.toByteArray(Charsets.UTF_8), request.state.toByteArray(Charsets.UTF_8))
+    }
     suspend fun complete(callback: String): OAuthTokens {
-        if (!matchesCallback(callback)) throw oauthFailure()
-        val request = synchronized(this) { pending.also { pending = null } } ?: throw oauthFailure()
+        val request = synchronized(this) {
+            // An unrelated/stale callback cannot consume a newer authorization.
+            if (!matchesPendingCallback(callback)) throw oauthFailure()
+            pending.also { pending = null }
+        } ?: throw oauthFailure()
         val uri = callback.toHttpUrlOrNull() ?: throw oauthFailure()
-        val states = uri.queryParameterValues("state")
-        if (states.size != 1 || !MessageDigest.isEqual(states.single()?.toByteArray(), request.state.toByteArray()) ||
-            nowMs() - request.createdMs !in 0..600_000L) throw oauthFailure()
+        if (nowMs() - request.createdMs !in 0..600_000L) throw oauthFailure()
         val errors = uri.queryParameterValues("error")
         if (errors.isNotEmpty()) throw CloudException("Cloudflare 授权未完成或已取消，请重新授权")
         val code = uri.queryParameterValues("code").singleOrNull()?.takeIf { it.isNotBlank() && it.length <= 4096 } ?: throw oauthFailure()

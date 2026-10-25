@@ -38,6 +38,7 @@ internal fun OAuthConnectionDialog(onDismiss: () -> Unit, draft: ConnectionDraft
                     enabled = oauth.configured && !state.busy && !saving,
                     onClick = {
                         error = null
+                        if (!state.waiting) draft.accountId = ""
                         try { browser.openUri(oauth.begin()) }
                         catch (_: Exception) { oauth.launchFailed() }
                     },
@@ -58,7 +59,10 @@ internal fun OAuthConnectionDialog(onDismiss: () -> Unit, draft: ConnectionDraft
                             modifier = Modifier.fillMaxWidth().testTag("oauth-account-${account.id}"),
                         ) { Text("${account.name}\n${account.id}") }
                     }
-                    if (state.hasMore) TextButton(enabled = !state.busy && !saving, onClick = oauth::loadMore) { Text("发现更多账号") }
+                    if (state.discoveryFailed || state.hasMore) TextButton(
+                        enabled = !state.busy && !saving, onClick = oauth::loadMore,
+                        modifier = Modifier.testTag("oauth-discover"),
+                    ) { Text(if (state.discoveryFailed) "重试发现账号" else "发现更多账号") }
                     OutlinedTextField(draft.name, { draft.name = it }, label = { Text("账号名称（可选）") },
                         enabled = !state.busy && !saving, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(draft.accountId, { draft.accountId = it; error = null }, label = { Text("Account ID") },

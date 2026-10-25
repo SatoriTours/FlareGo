@@ -22,11 +22,21 @@ flarego.oauthScopes=account.read
 
 Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建只显示配置说明及 Token 备用入口。
 
+### Client ID 与回调地址的安全边界
+
+Client ID 是应用的公开标识，可以包含在 APK 中。它本身不能代表用户访问云资源。移动客户端采用 `token_endpoint_auth_method=none`，以每次请求独立生成的 PKCE verifier 交换授权码；verifier 不放在授权 URL 中。需要保密的是 verifier、授权码、access token 与 refresh token，而不是 Client ID。`state` 校验用于将回调绑定到本次请求，不能用公开 Client ID 代替这些校验。
+
+本实现使用 Android HTTPS App Links，不能用 `http://localhost` 或 `http://127.0.0.1` 作为回调。需要维护者能够管理且设备可访问的 HTTPS 域名，并发布包含包名、实际签名证书指纹的 `/.well-known/assetlinks.json`。这不要求搭建保存令牌的后端：授权码交换和加密保存都由手机完成，站点只提供域名关联文件及无敏感日志的回调落地页。其他 OAuth 客户端的 loopback 方案不代表本 App 已支持，也不代表 Cloudflare 已接受相应回调注册。
+
+未注册客户端时，本地测试用隔离 HTTP 服务替代令牌端点、用测试回调触发真实校验逻辑；这些测试不能证明 Cloudflare 同意页、域名关联或浏览器回跳已经可用。
+
 ## 安全与兼容
 
 - 只在系统浏览器打开固定 Cloudflare 授权入口，不使用嵌入式 WebView。
 - verifier、state、未保存的授权只驻留 ViewModel 内存。Activity 重建可继续；进程退出后必须重新授权，不从陌生回调创建连接。
 - 精确校验 HTTPS 主机、端口和路径，无 fragment/用户名/密码；state 单值匹配，授权码单值，十分钟有效，一次消费。拒绝/错误正文不直接显示，令牌对象不生成含密钥的字符串。
+- 等待期间重新打开授权页会复用仍有效的 state 与 PKCE 请求；超过十分钟重新生成，取消则立即失效。旧授权或不匹配 state 的回调不会消耗当前请求，匹配的拒绝/错误回调仍为一次性处理。
+- 账号发现失败后可在原授权下重试，也可手填 Account ID 验证；翻页失败保留已有列表及待重试页。主动重新授权会清除旧的账号选择。取消或重新开始后，迟到的续期响应不会恢复旧凭据或继续验证旧账号。
 - 令牌端点固定 `https://dash.cloudflare.com/oauth2/token`，禁止重定向/自动重试，响应最多 64 KiB。只有令牌请求重签；业务 401、写入未知结果都不自动重放。
 - access/refresh token 和过期时间一起存入原有 TokenVault 密文。旧 API Token 格式不变，无自动迁移；显式重新连接同一 Account ID 才替换凭据。
 - 续期、替换和删除由应用级逐连接锁串行处理；缓存会话逐请求读取当前令牌，并检查原有凭据代次，避免恢复过期 token 或已断开的连接。
@@ -48,3 +58,4 @@ ANDROID_HOME=<SDK路径> SCHEMA_FILE=<固定公开OpenAPI路径> ./gradlew :andr
 - https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/
 - https://developers.cloudflare.com/fundamentals/oauth/integrate-with-cloudflare/
 - https://developers.cloudflare.com/api/resources/iam/subresources/oauth_scopes/methods/list/
+- https://developer.android.com/training/app-links/configure-assetlinks

@@ -11,6 +11,7 @@ data class OAuthConnectionState(
     val accounts: List<AccountSummary> = emptyList(),
     val hasMore: Boolean = false,
     val error: String? = null,
+    val discoveryFailed: Boolean = false,
 )
 
 interface OAuthConnection {

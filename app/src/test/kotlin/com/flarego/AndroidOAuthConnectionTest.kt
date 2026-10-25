@@ -18,6 +18,83 @@ class AndroidOAuthConnectionTest {
     private val account = "a".repeat(32)
     private val config = OAuthConfig("client", "https://login.example.org/cloudflare/callback", listOf("account.read"))
 
+    @Test fun reopenAndStaleCallbackLeaveActiveBrowserAuthorizationUsable() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val paths = mutableListOf<String>()
+                val owner = AndroidOAuthConnection(scope, config, { identity(it, paths) },
+                    { _, _, _ -> error("must not persist") }, endpoint(server))
+                val first = owner.begin().toHttpUrl()
+                assertEquals(first.toString(), owner.begin())
+                assertTrue(owner.acceptCallback(config.redirectUri + "?code=stale&state=unrelated"))
+                assertEquals(OAuthConnectionState(waiting = true), owner.state.value)
+                assertEquals(0, server.requestCount)
+                server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=current&state=" + first.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.authorized && !it.busy } }
+                assertEquals(listOf(account), owner.state.value.accounts.map { it.id })
+                assertEquals(1, server.requestCount)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun failedAccountDiscoveryCanRetryWithoutAnotherBrowserGrant() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val paths = mutableListOf<String>()
+                var attempts = 0
+                val owner = AndroidOAuthConnection(scope, config, { token ->
+                    if (attempts++ == 0) throw CloudException("network unavailable")
+                    identity(token, paths)
+                }, { _, _, _ -> error("must not persist") }, endpoint(server))
+                val auth = owner.begin().toHttpUrl()
+                server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=code&state=" + auth.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.authorized && !it.busy } }
+                assertNotNull(owner.state.value.error)
+                owner.loadMore()
+                withTimeout(3_000) { owner.state.first { it.accounts.isNotEmpty() && !it.busy } }
+                assertNull(owner.state.value.error)
+                assertEquals(listOf(account), owner.state.value.accounts.map { it.id })
+                assertEquals(1, server.requestCount)
+                assertEquals(2, attempts)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun cancellingWhileConnectRefreshesCannotRestoreTokensOrVerifyOldAccount() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val paths = mutableListOf<String>()
+                val owner = AndroidOAuthConnection(scope, config, { identity(it, paths) },
+                    { _, _, _ -> error("cancelled connection must not persist") }, endpoint(server))
+                val auth = owner.begin().toHttpUrl()
+                val shortLived = """{"access_token":"access-fixture","refresh_token":"refresh-fixture","token_type":"bearer","expires_in":1}"""
+                server.enqueue(MockResponse().setBody(shortLived))
+                server.enqueue(MockResponse().setBody(shortLived))
+                owner.acceptCallback(config.redirectUri + "?code=code&state=" + auth.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.authorized && !it.busy } }
+                repeat(2) { assertNotNull(server.takeRequest(2, java.util.concurrent.TimeUnit.SECONDS)) }
+                server.enqueue(response().setBodyDelay(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                val connecting = async(start = CoroutineStart.UNDISPATCHED) {
+                    assertFailsWith<CloudException> { owner.connect("", account) }
+                }
+                assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(2, java.util.concurrent.TimeUnit.SECONDS) })
+                owner.cancel()
+                owner.begin()
+                withTimeout(3_000) { connecting.await() }
+                assertEquals(OAuthConnectionState(waiting = true), owner.state.value)
+                assertEquals(listOf("/accounts?page=1&per_page=50"), paths)
+            } finally { scope.cancel() }
+        }
+    }
+
     @Test fun callbackDiscoversButDoesNotPersistUntilExplicitVerifiedAccountSelection() = runBlocking {
         MockWebServer().use { server ->
             server.start()

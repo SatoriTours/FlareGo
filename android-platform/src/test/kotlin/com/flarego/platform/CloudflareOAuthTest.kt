@@ -16,6 +16,40 @@ import org.junit.Test
 class CloudflareOAuthTest {
     private val config = OAuthConfig("test-client", "https://login.example.org/cloudflare/callback", listOf("account.read"))
 
+    @Test fun reopeningPendingAuthorizationPreservesPkceUntilExpiryOrExplicitCancellation() {
+        var now = 0L
+        val flow = OAuthFlow(config, nowMs = { now })
+        val first = flow.begin()
+        now = 600_000L
+        assertEquals(first, flow.begin())
+        now++
+        val renewed = flow.begin()
+        assertNotEquals(first, renewed)
+        flow.cancel()
+        assertNotEquals(renewed, flow.begin())
+    }
+
+    @Test fun unrelatedStateCannotConsumePendingAuthorization() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val flow = OAuthFlow(config, endpoint(server))
+            val auth = flow.begin().toHttpUrl()
+            for (invalid in listOf(
+                config.redirectUri + "?code=other&state=unrelated",
+                callback(auth) + "&state=duplicate",
+                config.redirectUri + "?code=other",
+            )) {
+                assertFailsWith<CloudException> { flow.complete(invalid) }
+            }
+            assertEquals(0, server.requestCount)
+            server.enqueue(tokenResponse())
+            assertEquals("access-fixture", flow.complete(callback(auth)).accessToken)
+            assertEquals(1, server.requestCount)
+            assertFailsWith<CloudException> { flow.complete(callback(auth)) }
+            Unit
+        }
+    }
+
     @Test fun authorizationUsesPkceAndNeverSendsAClientSecret() = runBlocking {
         MockWebServer().use { server ->
             server.start()

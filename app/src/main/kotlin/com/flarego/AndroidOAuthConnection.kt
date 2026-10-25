@@ -44,7 +44,7 @@ internal class AndroidOAuthConnection(
     private var job: Job? = null
 
     override fun begin(): String {
-        cancel()
+        if (!state.value.waiting) cancel()
         val url = flow.begin()
         mutable.value = OAuthConnectionState(waiting = true)
         return url
@@ -62,7 +62,7 @@ internal class AndroidOAuthConnection(
     fun acceptCallback(value: String): Boolean {
         if (!flow.matchesCallback(value)) return false
         // An unsolicited/replayed callback must not cancel an already accepted exchange.
-        if (!state.value.waiting || state.value.busy) return true
+        if (!state.value.waiting || state.value.busy || !flow.matchesPendingCallback(value)) return true
         val expected = generation
         mutable.value = OAuthConnectionState(busy = true)
         job = scope.launch {
@@ -79,16 +79,18 @@ internal class AndroidOAuthConnection(
         }
         return true
     }
-    private suspend fun freshTokens(): OAuthTokens {
+    private suspend fun freshTokens(expected: Long): OAuthTokens {
+        if (generation != expected) throw CloudException("授权已变化，请重新连接")
         val current = tokens ?: throw CloudException("请先完成 Cloudflare 授权")
         if (current.expiresAtMs > System.currentTimeMillis() + 30_000) return current
         val refresh = current.refreshToken ?: throw CloudException("授权已过期，请重新授权")
         val renewed = endpoint.refresh(config, refresh, System.currentTimeMillis())
+        if (generation != expected || tokens !== current) throw CloudException("授权已变化，请重新连接")
         return OAuthTokens(renewed.accessToken, renewed.refreshToken ?: refresh, renewed.expiresAtMs).also { tokens = it }
     }
     private suspend fun discover(expected: Long, page: PageToken?) {
         try {
-            val result = identity(freshTokens().accessToken).discover(PageRequest(token = page))
+            val result = identity(freshTokens(expected).accessToken).discover(PageRequest(token = page))
             if (generation != expected) return
             next = result.next
             mutable.value = OAuthConnectionState(authorized = true,
@@ -97,12 +99,13 @@ internal class AndroidOAuthConnection(
                 error = if (result.items.isEmpty() && page == null) "未发现可用账号，可手填 Account ID 验证；请核对账号读取权限" else null)
         } catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) {
-            if (generation == expected) mutable.value = state.value.copy(busy = false, authorized = true,
+            if (generation == expected) mutable.value = state.value.copy(busy = false, authorized = true, discoveryFailed = true,
                 error = "无法发现账号，可手填 Account ID 验证；请核对账号读取权限")
         }
     }
     override fun loadMore() {
-        val page = next ?: return
+        val page = next
+        if (page == null && !state.value.discoveryFailed) return
         if (state.value.busy || !state.value.authorized) return
         val expected = generation
         mutable.value = state.value.copy(busy = true, error = null)
@@ -115,7 +118,7 @@ internal class AndroidOAuthConnection(
         val expected = generation
         mutable.value = state.value.copy(busy = true, error = null)
         try {
-            val granted = freshTokens()
+            val granted = freshTokens(expected)
             val verified = identity(granted.accessToken).verifyAccount(account)
             val label = name.trim().ifBlank { verified.name }
             if (label.length !in 1..80) throw CloudException("账号名称长度应为 1–80 字符")
