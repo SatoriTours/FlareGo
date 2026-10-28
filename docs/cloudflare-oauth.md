@@ -2,7 +2,22 @@
 
 ## 当前边界
 
-代码提供 Android 的 Authorization Code + PKCE S256 授权、HTTPS App Link 回调、账号发现/验证、Keystore 加密保存及 refresh token 续期。API Token 保持兼容，不接受 Global API Key。尚未注册真实 OAuth 客户端，也未验证真实云授权或设备回跳；缺少配置时按钮禁用，不模拟授权成功。
+代码提供 Android 的 Authorization Code + PKCE S256 授权、HTTPS App Link 回调、账号发现/验证、Keystore 加密保存及 refresh token 续期。API Token 保持兼容，不接受 Global API Key。维护者已提供 OAuth Client ID，Android Actions 工作流会在构建前注入公开客户端配置；真实云授权和设备回跳仍未验证。缺少配置的其他构建会禁用按钮，不模拟授权成功。
+
+## GitHub Actions 官方构建配置
+
+`.github/workflows/android.yml` 的 `Configure public Cloudflare OAuth` 步骤在所有 Gradle 构建前追加以下公开配置到该次 CI checkout 的 `gradle.properties`，Debug 检查和签名 Release 构建均使用它们；无需修改本机 Gradle 用户配置，也不读取 Client Secret：
+
+```properties
+flarego.oauthClientId=9bd1b2bf245bd1b78506a7c0b6fbc11a
+flarego.oauthRedirectUri=https://satori.tours/flarego/cloudflare/callback
+flarego.oauthScopes=account.read
+```
+
+关联文件已部署在 `https://satori.tours/.well-known/assetlinks.json`，包名为 `com.flarego`，仅包含 GitHub Actions 正式签名证书 SHA-256：
+`C1:ED:85:DB:A0:F4:F7:40:82:A7:AA:48:D0:E8:3C:BD:87:C1:AB:32:65:C5:E6:38:1F:73:19:43:62:71:2A:B1`。
+
+这是签名证书指纹，不是 APK 文件哈希；只要 Actions 使用同一签名密钥，常规提交和重新构建无需更新服务器文件。更换签名或分发渠道时需核实实际证书。调试包使用不同证书，不能用它证明正式包的 App Links 已通过。服务器文件就绪和构建注入也不代表真实授权已验收，仍须验证实际 Actions APK 的 manifest、设备域名关联、授权与续期。Cloudflare 客户端默认 private，仅所属账号成员可授权；对外开放仍须官方域名验证及 public 设置。
 
 ## 维护者配置（不是每个 App 用户都要做）
 
@@ -18,7 +33,7 @@ flarego.oauthRedirectUri=https://<已验证域名>/cloudflare/callback
 flarego.oauthScopes=account.read
 ```
 
-默认只有 `account.read`，足够测试账号读取，不表示已授权资源管理。App 会另请求 `offline_access` 供续期；注册客户端也须允许它。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
+默认只有 `account.read`，足够测试账号读取，不表示已授权资源管理。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
 
 Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建只显示配置说明及 Token 备用入口。
 

@@ -63,7 +63,7 @@
 3. 未配置 OAuth 或需要 API Token：点击「高级：使用 API Token 连接」→「获取 API Token」，浏览器打开 [Cloudflare API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)。选择 `Create Token` → `Create Custom Token`，按需配置权限并限定账号和 Zone 范围；不要使用 Global API Key。返回 App 填写账号名称、Account ID 和 API Token，验证后保存。
 4. 点击闪电 Logo，从抽屉选择对应账号，再进入域名、资源或账单页。
 
-**OAuth 当前为待配置接入能力，不代表已上线可用**：仓库不含真实 Client ID 或已验证回调域名。未配置的构建会禁用授权按钮，Token 备用路径和已有账号不受影响。浏览器授权、域名 App Links、真实 API 权限兼容性尚需配置后在设备验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
+**OAuth 已配置 Actions 构建参数，但不代表真实授权已验收**：Android Actions 工作流会注入维护者提供的公开 Client ID 和 `https://satori.tours/flarego/cloudflare/callback`，关联文件已部署；只有包含该配置的新构建才会启用授权入口，历史 APK 不会自动更新。缺少配置的其他构建仍禁用授权按钮，Token 备用路径和已有账号不受影响。浏览器授权、设备 App Links、真实 API 权限兼容性尚需实际 Actions APK 验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
 
 Account ID 是 32 位十六进制字符串。建议从读取权限开始：账号访问可使用 `Account Settings Read`，域名列表需要 Zone 读取权限；修改 DNS 时再添加 DNS 写权限。Workers、R2、D1、KV 按需授予对应读取权限。权限名称和范围以 [Cloudflare 权限文档](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) 及 [账号接口要求](https://developers.cloudflare.com/api/resources/accounts/methods/get/) 为准。
 
