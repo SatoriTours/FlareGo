@@ -10,7 +10,7 @@ from publish_policy import requested_channel
 channel = requested_channel(os.environ.get("GITHUB_EVENT_NAME"), os.environ.get("GITHUB_REF_TYPE"),
                             os.environ.get("GITHUB_REF_NAME", ""), os.environ.get("INPUT_PUBLISH_SNAPSHOT", "false"))
 if channel is None:
-    raise SystemExit("Publication requires an explicit version tag push or manual snapshot request")
+    raise SystemExit("Publication requires a main push, version tag push, or manual snapshot request")
 
 repo = os.environ["GITHUB_REPOSITORY"]
 value = json.loads(Path("dist/build-metadata.json").read_text())

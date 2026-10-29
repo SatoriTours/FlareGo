@@ -107,7 +107,7 @@ jobs:
 
   publish:
     needs: build
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.publish_snapshot && github.ref == 'refs/heads/main')
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_snapshot && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -118,7 +118,7 @@ jobs:
         with:
           name: flarego-signed-android-${{ github.run_number }}
           path: dist/
-      - name: Publish explicitly requested version
+      - name: Publish main snapshot or requested version
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_PUBLISH_SNAPSHOT: ${{ inputs.publish_snapshot }}

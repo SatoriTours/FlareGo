@@ -42,9 +42,9 @@
 
 **提交构建**：打开 [Android Actions](https://github.com/SatoriTours/FlareGo/actions/workflows/android.yml)，选择成功的分支构建，在 Artifacts 下载 `flarego-signed-android-<运行编号>`，解压后安装 APK。下载 Actions artifact 需要登录 GitHub，产物默认保留 30 天。
 
-**已发布版本**：在 [Releases](https://github.com/SatoriTours/FlareGo/releases) 下载 APK。正式版附件为 `flarego-<版本号>.apk`；明确发布的测试版位于 `latest`，附件为 `flarego-latest.apk`。
+**已发布版本**：在 [Releases](https://github.com/SatoriTours/FlareGo/releases) 下载 APK。正式版附件为 `flarego-<版本号>.apk`；main 成功构建后自动发布的测试版位于 `latest`，附件为 `flarego-latest.apk`。
 
-普通提交只生成签名构建产物，**不会创建或移动 Tag，也不会发布 Release**。正式版和测试版发布均需要明确触发，见 [构建与发布](#构建与发布)。
+推送 `main` 后会自动构建并发布 `latest` 测试版；其他分支只生成签名构建产物。正式版仍需明确创建并推送版本 Tag，见 [构建与发布](#构建与发布)。
 
 运行要求：Android 8.0 / API 26 或更高。提交构建和发布构建共用同一签名证书，可在版本号更高时覆盖安装；本地 Debug 使用不同证书。
 
@@ -200,18 +200,18 @@ python3 -m http.server 4173 --bind 127.0.0.1
 | 触发方式 | 结果 |
 | --- | --- |
 | Pull request | 单元测试、lint 和 Debug 编译；不使用发布密钥 |
-| 分支提交，包括 main | 检查、签名 APK、元数据和 SHA-256；上传 Actions artifact |
-| 手动运行，保持默认选项 | 同普通提交，仅生成构建产物 |
+| main 提交 | 检查、签名 APK、元数据和 SHA-256；上传 Actions artifact，成功后自动更新 `latest` 测试版 |
+| 其他分支提交、默认手动运行 | 检查并上传签名 Actions artifact，不发布 Release |
 | 明确创建并推送 `vMAJOR.MINOR.PATCH` Tag | 构建签名 APK并发布同名正式 Release |
 | main 手动运行并明确勾选 `publish_snapshot` | 发布测试版到 `latest`，创建或移动该滚动 Tag |
 
-**日常开发只提交代码。打 Tag 和发布版本是单独的操作，需要明确决定。** 已发布的正式版本不会被重跑覆盖；旧 main 提交不能替换较新的测试发布。
+**日常提交到 main 会自动发布测试版；正式版本 Tag 和正式 Release 仍是单独的操作，需要明确决定。** 已发布的正式版本不会被重跑覆盖；旧 main 提交不能替换较新的测试发布。
 
-构建签名使用 GitHub Actions Secrets 中的独立发布密钥，普通构建任务只有仓库读取权限。发布任务单独申请写权限，并在脚本中再次验证明确的发布意图。签名配置、版本规则和维护步骤见 [发布说明](docs/releases.md)。
+构建签名使用 GitHub Actions Secrets 中的独立发布密钥，普通构建任务只有仓库读取权限。发布任务单独申请写权限，并在脚本中再次验证 main push、版本 Tag 或明确的手动测试发布请求。签名配置、版本规则和维护步骤见 [发布说明](docs/releases.md)。
 
 ## 应用内更新
 
-「账号 → 应用更新」默认检查正式版本，可切换到「最新提交」测试通道。测试通道读取最后一次**明确发布**到 `latest` 的构建；普通提交 artifact 不会自动成为 App 更新。
+「账号 → 应用更新」默认检查正式版本，可切换到「最新提交」测试通道。测试通道读取最后一次成功发布到 `latest` 的构建；main 提交构建成功后会自动更新该测试版。其他分支 artifact 不进入 App 更新；要接收自动测试版，请将更新通道切换为「最新提交」。
 
 自动检查间隔六小时，偏好和上次尝试时间跨进程保存；手动检查不受间隔限制。公开 GitHub 更新无需 GitHub Token，也不会发送云服务 Token。
 
