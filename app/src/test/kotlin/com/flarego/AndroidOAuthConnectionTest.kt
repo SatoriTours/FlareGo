@@ -16,7 +16,7 @@ import kotlin.test.*
 
 class AndroidOAuthConnectionTest {
     private val account = "a".repeat(32)
-    private val config = OAuthConfig("client", "https://login.example.org/cloudflare/callback", listOf("account.read"))
+    private val config = OAuthConfig("client", "https://login.example.org/cloudflare/callback", listOf("account-settings.read"))
 
     @Test fun reopenAndStaleCallbackLeaveActiveBrowserAuthorizationUsable() = runBlocking {
         MockWebServer().use { server ->
@@ -152,6 +152,23 @@ class AndroidOAuthConnectionTest {
                 assertTrue(paths.isEmpty())
             } finally { scope.cancel() }
         }
+    }
+
+    @Test fun providerScopeRejectionIsActionableAndNeverEchoesCallbackContent() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val owner = AndroidOAuthConnection(scope, config, { error("must not discover") },
+                { _, _, _ -> error("must not save") })
+            val auth = owner.begin().toHttpUrl()
+            owner.acceptCallback(config.redirectUri + "?state=" + auth.queryParameter("state") +
+                "&error=invalid_scope&error_description=secret-fixture")
+            withTimeout(3_000) { owner.state.first { it.error != null } }
+            assertTrue(owner.state.value.error!!.contains("invalid_scope"))
+            assertTrue(owner.state.value.error!!.contains("维护者"))
+            assertFalse(owner.state.value.error!!.contains("secret-fixture"))
+            assertFalse(owner.state.value.authorized)
+            assertTrue(owner.begin().isNotBlank())
+        } finally { scope.cancel() }
     }
 
     private fun identity(token: String, paths: MutableList<String>): CloudflareIdentityClient {

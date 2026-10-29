@@ -7,6 +7,13 @@ import unittest
 
 
 class OAuthBuildConfigTest(unittest.TestCase):
+    def test_local_default_matches_registered_client_account_settings_scope(self):
+        build = (Path(__file__).resolve().parents[3] / "app/build.gradle.kts").read_text()
+        self.assertIn(
+            'providers.gradleProperty("flarego.oauthScopes").orElse("account-settings.read")',
+            build,
+        )
+
     def test_actions_injects_public_oauth_properties_without_replacing_existing_config(self):
         workflow = (Path(__file__).resolve().parents[3] / ".github/workflows/android.yml").read_text()
         step = re.search(
@@ -38,5 +45,5 @@ class OAuthBuildConfigTest(unittest.TestCase):
             values["flarego.oauthRedirectUri"],
             "https://satori.tours/flarego/cloudflare/callback",
         )
-        self.assertEqual(values["flarego.oauthScopes"], "account.read")
+        self.assertEqual(values["flarego.oauthScopes"], "account-settings.read")
         self.assertFalse(any("secret" in key.lower() for key in values))

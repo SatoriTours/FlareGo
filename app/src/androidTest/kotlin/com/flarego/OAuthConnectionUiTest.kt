@@ -73,11 +73,27 @@ class OAuthConnectionUiTest {
         compose.onNodeWithTag("oauth-authorize").performClick()
         compose.onNodeWithTag("oauth-error").assertIsDisplayed()
         screenshot("browser-failure")
-        compose.onNodeWithText("验证并连接").assertIsNotEnabled()
+        compose.onNodeWithText("验证并连接").assertDoesNotExist()
         compose.onNodeWithTag("oauth-token-fallback").performScrollTo().assertIsEnabled()
         screenshot("browser-failure-fallback")
         compose.runOnIdle { assertNull(auth.saved) }
     }
+    @Test fun scopeFailureAndPrivacyDetailsAreVisibleWithoutDeadConnectAction() {
+        val auth = Authorization(true)
+        auth.mutable.value = OAuthConnectionState(error =
+            "授权权限配置不匹配（invalid_scope）。请联系维护者核对 OAuth 客户端允许的权限与 App 请求的 scope；重复授权无法解决。")
+        compose.setContent {
+            FlareGoTheme { ConnectionDialog({}, { _, _, _ -> error("must not submit") }, oauthConnection = auth) }
+        }
+        compose.onNodeWithTag("oauth-error").performScrollTo().assertTextContains("invalid_scope", substring = true)
+        compose.onNodeWithText("验证并连接").assertDoesNotExist()
+        screenshot("scope-failure")
+        compose.onNodeWithText("权限与隐私说明").performScrollTo().performClick()
+        compose.onNodeWithText("仅请求此构建配置的权限，不代表已开通全部功能。凭据仅加密保存在本机，不会显示在此页。")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().assertIsEnabled()
+    }
+
     @Test fun discoveredAccountRequiresExplicitConnectAndNeverDisplaysTokenInput() {
         val id = "a".repeat(32)
         val auth = Authorization(true)
@@ -131,7 +147,7 @@ class OAuthConnectionUiTest {
         }
         compose.onNodeWithTag("oauth-authorize").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("", draft.accountId); assertEquals(1, opened.size); assertNull(auth.saved) }
-        compose.onNodeWithText("验证并连接").assertIsNotEnabled()
+        compose.onNodeWithText("验证并连接").assertDoesNotExist()
         screenshot("waiting")
         compose.onNodeWithText("正在等待浏览器授权。完成后将返回 App；若进程已退出，请重新授权。").performScrollTo()
         screenshot("waiting-help")

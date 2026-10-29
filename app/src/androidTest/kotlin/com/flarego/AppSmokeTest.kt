@@ -114,6 +114,23 @@ class AppSmokeTest {
     }
 
     @Test
+    fun authorizationAllowsScreenshotsButTokenEntryRemainsProtected() {
+        compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.runOnIdle {
+            assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+        }
+        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertTrue(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+        }
+        compose.onNodeWithText("改用 Cloudflare 官方授权").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+        }
+        compose.onNodeWithText("取消").performClick()
+    }
+
+    @Test
     fun connectionDraftSurvivesActivityRecreationAndIsClearedOnCancel() {
         val secret = "fixture-recreation-token-not-real"
         compose.onNodeWithTag("nav-accounts").performClick()

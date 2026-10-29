@@ -9,7 +9,7 @@ fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\
 val oauthClientId = providers.gradleProperty("flarego.oauthClientId").orElse("").get()
 val oauthRedirect = providers.gradleProperty("flarego.oauthRedirectUri")
     .orElse("https://oauth-unconfigured.invalid/cloudflare/callback").get()
-val oauthScopes = providers.gradleProperty("flarego.oauthScopes").orElse("account.read").get()
+val oauthScopes = providers.gradleProperty("flarego.oauthScopes").orElse("account-settings.read").get()
 val oauthUri = URI(oauthRedirect)
 require(oauthUri.scheme == "https" && oauthUri.host != null && oauthUri.rawQuery == null &&
     oauthUri.rawFragment == null && oauthUri.rawUserInfo == null && (oauthUri.port == -1 || oauthUri.port == 443) &&

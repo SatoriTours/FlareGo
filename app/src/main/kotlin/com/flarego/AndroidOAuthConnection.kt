@@ -73,8 +73,10 @@ internal class AndroidOAuthConnection(
                 mutable.value = OAuthConnectionState(authorized = true, busy = true)
                 discover(expected, null)
             } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) {
-                if (generation == expected) mutable.value = OAuthConnectionState(error = "Cloudflare 授权未完成，请重新授权；不会保存未验证的连接")
+            catch (failure: Exception) {
+                if (generation == expected) mutable.value = OAuthConnectionState(error =
+                    (failure as? CloudException)?.publicMessage
+                        ?: "Cloudflare 授权未完成，请检查网络后重新授权；不会保存未验证的连接")
             }
         }
         return true

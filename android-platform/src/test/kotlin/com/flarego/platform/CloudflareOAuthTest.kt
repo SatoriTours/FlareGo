@@ -14,7 +14,7 @@ import org.junit.Test
 
 /** Real flow, real PKCE and real HTTP; only the Cloudflare server and encrypted disk boundary are substituted. */
 class CloudflareOAuthTest {
-    private val config = OAuthConfig("test-client", "https://login.example.org/cloudflare/callback", listOf("account.read"))
+    private val config = OAuthConfig("test-client", "https://login.example.org/cloudflare/callback", listOf("account-settings.read"))
 
     @Test fun reopeningPendingAuthorizationPreservesPkceUntilExpiryOrExplicitCancellation() {
         var now = 0L
@@ -59,7 +59,7 @@ class CloudflareOAuthTest {
             assertEquals("/oauth2/auth", url.encodedPath)
             assertEquals("code", url.queryParameter("response_type"))
             assertEquals("S256", url.queryParameter("code_challenge_method"))
-            assertEquals("account.read offline_access", url.queryParameter("scope"))
+            assertEquals("account-settings.read offline_access", url.queryParameter("scope"))
             assertTrue(url.queryParameter("state")!!.length >= 43)
             assertNull(url.queryParameter("client_secret"))
             assertNull(url.queryParameter("code_verifier"))
@@ -125,6 +125,19 @@ class CloudflareOAuthTest {
                 assertFalse(assertFailsWith<CloudException> { flow.complete(callback(auth)) }.message.orEmpty().contains("secret-fixture"))
             }
         }
+    }
+
+    @Test fun scopeDenialExplainsClientConfigurationWithoutEchoingProviderText() = runBlocking {
+        val flow = OAuthFlow(config)
+        val auth = flow.begin().toHttpUrl()
+        val failure = assertFailsWith<CloudException> {
+            flow.complete(config.redirectUri + "?state=" + auth.queryParameter("state") +
+                "&error=invalid_scope&error_description=secret-fixture")
+        }
+        assertTrue(failure.publicMessage.contains("invalid_scope"))
+        assertTrue(failure.publicMessage.contains("维护者"))
+        assertFalse(failure.publicMessage.contains("secret-fixture"))
+        Unit
     }
 
     @Test fun tokenEndpointDoesNotFollowRedirects() = runBlocking {
@@ -212,5 +225,5 @@ class CloudflareOAuthTest {
     private fun callback(auth: okhttp3.HttpUrl, code: String = "code") =
         config.redirectUri + "?code=$code&state=" + auth.queryParameter("state")
     private fun tokenResponse(access: String = "access-fixture", refresh: String = "refresh-fixture") =
-        MockResponse().setBody("""{"access_token":"$access","refresh_token":"$refresh","token_type":"bearer","expires_in":900,"scope":"account.read offline_access"}""")
+        MockResponse().setBody("""{"access_token":"$access","refresh_token":"$refresh","token_type":"bearer","expires_in":900,"scope":"account-settings.read offline_access"}""")
 }

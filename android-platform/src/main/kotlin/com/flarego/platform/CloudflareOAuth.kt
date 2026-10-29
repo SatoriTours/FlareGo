@@ -22,7 +22,7 @@ class OAuthConfig(val clientId: String, val redirectUri: String, val scopes: Lis
         return clientId.isNotBlank() && clientId.none(Char::isWhitespace) && uri.scheme == "https" &&
             uri.username.isEmpty() && uri.password.isEmpty() && uri.query == null && uri.fragment == null &&
             uri.port == 443 && uri.encodedPath != "/" && !uri.host.endsWith(".invalid") &&
-            scopes.isNotEmpty() && scopes.all { it.matches(Regex("[a-z][a-z0-9_.]*")) }
+            scopes.isNotEmpty() && scopes.all { it.matches(Regex("[a-z][a-z0-9_.-]*")) }
     }
     internal fun requireConfigured() {
         if (!configured) throw CloudException("此构建尚未配置 Cloudflare OAuth，请使用 API Token 或联系维护者")
@@ -84,7 +84,8 @@ class OAuthFlow(
         val uri = callback.toHttpUrlOrNull() ?: throw oauthFailure()
         if (nowMs() - request.createdMs !in 0..600_000L) throw oauthFailure()
         val errors = uri.queryParameterValues("error")
-        if (errors.isNotEmpty()) throw CloudException("Cloudflare 授权未完成或已取消，请重新授权")
+        // Provider descriptions can contain arbitrary/secret-bearing text. Only map known codes.
+        if (errors.isNotEmpty()) throw authorizationFailure(errors.singleOrNull())
         val code = uri.queryParameterValues("code").singleOrNull()?.takeIf { it.isNotBlank() && it.length <= 4096 } ?: throw oauthFailure()
         return endpoint.exchange(config, code, request.verifier, nowMs())
     }
@@ -180,5 +181,14 @@ class OAuthCredentials(
     }.toString()
     companion object { private const val PREFIX = "flarego-oauth-v1:" }
 }
+
+private fun authorizationFailure(code: String?) = CloudException(when (code) {
+    "invalid_scope" -> "授权权限配置不匹配（invalid_scope）。请联系维护者核对 OAuth 客户端允许的权限与 App 请求的 scope；重复授权无法解决。"
+    "access_denied" -> "已取消或拒绝 Cloudflare 授权，可重新授权或使用 API Token。"
+    "invalid_client", "unauthorized_client" -> "OAuth 客户端配置不匹配，请联系维护者核对 Client ID、客户端可见范围与授权方式。"
+    "invalid_request", "unsupported_response_type" -> "授权请求配置不匹配，请联系维护者核对回调地址与授权方式。"
+    "server_error", "temporarily_unavailable" -> "Cloudflare 授权服务暂不可用，请稍后重新授权。"
+    else -> "Cloudflare 授权未完成，请重新授权；不会保存未验证的连接。"
+})
 
 private fun oauthFailure() = CloudException("Cloudflare 授权无效、已过期或续期失败，请重新连接；不会自动重试云端操作")

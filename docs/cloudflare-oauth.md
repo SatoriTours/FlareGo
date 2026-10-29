@@ -11,13 +11,27 @@
 ```properties
 flarego.oauthClientId=9bd1b2bf245bd1b78506a7c0b6fbc11a
 flarego.oauthRedirectUri=https://satori.tours/flarego/cloudflare/callback
-flarego.oauthScopes=account.read
+flarego.oauthScopes=account-settings.read
 ```
 
 关联文件已部署在 `https://satori.tours/.well-known/assetlinks.json`，包名为 `com.flarego`，仅包含 GitHub Actions 正式签名证书 SHA-256：
 `C1:ED:85:DB:A0:F4:F7:40:82:A7:AA:48:D0:E8:3C:BD:87:C1:AB:32:65:C5:E6:38:1F:73:19:43:62:71:2A:B1`。
 
 这是签名证书指纹，不是 APK 文件哈希；只要 Actions 使用同一签名密钥，常规提交和重新构建无需更新服务器文件。更换签名或分发渠道时需核实实际证书。调试包使用不同证书，不能用它证明正式包的 App Links 已通过。服务器文件就绪和构建注入也不代表真实授权已验收，仍须验证实际 Actions APK 的 manifest、设备域名关联、授权与续期。Cloudflare 客户端默认 private，仅所属账号成员可授权；对外开放仍须官方域名验证及 public 设置。
+
+## 授权立即回跳并失败的排查
+
+2026-10-29 对上述公开构建配置做无登录、无令牌的授权入口检查，Cloudflare 返回
+`invalid_scope`，说明该 Client ID 当时不允许请求 `account.read`。
+这证明请求在同意页之前已被服务端拒绝，不是 App Links 未回跳，也不能靠重试解决。
+
+维护者随后提供的客户端范围截图确认，已允许的是 `account-settings.read`（Account Settings Read）及 `offline_access`，不是 `account.read`。已将 Actions 配置、本地默认值和测试样例同步为 `account-settings.read`，并修正本地 scope 校验遗漏连字符的问题；不需要为此增加云端权限。
+
+不要猜 scope、移除全部 scope 碰运气或一次勾选全部读写。修正后的新构建仍需实际浏览器同意、账号发现及续期验收；旧 APK 不会自动更换 scope。
+App 将已知错误码映射为明确提示，不显示原始 `error_description`、授权 URL 或凭据。
+
+授权说明/账号选择页不显示密钥，允许截图；只有切换到 API Token 输入页才开启截图保护，
+其他敏感资源编辑器的保护不受影响。
 
 ## 维护者配置（不是每个 App 用户都要做）
 
@@ -30,10 +44,10 @@ flarego.oauthScopes=account.read
 ```properties
 flarego.oauthClientId=<已注册的Client-ID>
 flarego.oauthRedirectUri=https://<已验证域名>/cloudflare/callback
-flarego.oauthScopes=account.read
+flarego.oauthScopes=account-settings.read
 ```
 
-默认只有 `account.read`，足够测试账号读取，不表示已授权资源管理。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
+默认只有 `account-settings.read`，与维护者确认的 Account Settings Read 范围一致；实际账号发现/验证能力仍须真实授权后核验，不表示已授权资源管理。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
 
 Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建只显示配置说明及 Token 备用入口。
 

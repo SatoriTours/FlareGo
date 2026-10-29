@@ -146,8 +146,11 @@ fun FlareGoApp(
         }
     }
     LaunchedEffect(searchOpen) { if (searchOpen) focus.requestFocus() }
-    DisposableEffect(dialog is DialogState.Connect) {
-        sensitiveScreen(dialog is DialogState.Connect)
+    // OAuth UI contains no credentials. Protect only the manual token form, not its entry page.
+    val connectionShowsSecrets = dialog is DialogState.Connect &&
+        (oauthConnection == null || connectionDraft.manualToken)
+    DisposableEffect(connectionShowsSecrets) {
+        sensitiveScreen(connectionShowsSecrets)
         onDispose { sensitiveScreen(false) }
     }
     val navPage =
