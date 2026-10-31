@@ -13,15 +13,30 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.flarego.core.application.d1.*
 import com.flarego.core.model.*
+import com.flarego.ui.AppBackHandler
 
 @Composable
-fun D1BrowserHost(browser: D1Browser, account: AccountScope?) {
+fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boolean = true) {
     val state by browser.state.collectAsState()
     val private by browser.content.state.collectAsState()
     LaunchedEffect(account) { browser.refreshContext() }
     DisposableEffect(browser) { onDispose { browser.background() } }
     if (state.context?.account != account || account == null) { Text("请先选择当前账号"); return }
     val protected = private.secure && browser.content.secureNow()
+    AppBackHandler(backEnabled && (state.writing || private.resultReady || state.editor != null || private.secure || state.database != null)) {
+        if (!state.writing) when {
+            private.resultReady -> {
+                browser.content.closeResult()
+                // Browse filters and pending exports are drafts too, even without
+                // an editor. Only retire a genuinely idle private session.
+                if (state.editor == null && !private.exportReady && !browser.content.hasDraftInput())
+                    browser.content.withdraw()
+            }
+            state.editor != null -> { browser.cancel(); browser.content.withdraw() }
+            private.secure -> browser.content.withdraw()
+            else -> browser.back()
+        }
+    }
     if (protected) DisposableEffect(private.surface) { val surface = private.surface; onDispose { browser.content.surfaceRemoved(surface) } }
     LazyColumn(Modifier.fillMaxSize().testTag("d1-content"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("D1 数据库", style = MaterialTheme.typography.headlineSmall); Text("任意 SQL 均按潜在写入处理；写入不自动重试。导入、导出、恢复及删除恢复的生产入口因官方证据不足保持关闭。") }

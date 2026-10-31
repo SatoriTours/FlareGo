@@ -5,6 +5,18 @@ import kotlinx.serialization.json.*
 /** Presentation only. The trusted Task1 validator remains the authority for writes. */
 internal data class DnsFormField(val path: String, val kind: String, val choices: List<String>)
 
+internal fun dnsFieldLabel(path: String, type: String): String = when (path) {
+    "content" -> if (type == "TXT") "TXT 内容" else "记录内容"
+    "ttl" -> "TTL（秒）"
+    "priority", "data.priority" -> "优先级"
+    "data.port" -> "端口"
+    "data.weight" -> "权重"
+    "data.order" -> "排序序号"
+    "data.preference" -> "优先顺序"
+    "comment" -> "备注"
+    else -> path
+}
+
 internal class DnsFormSchema(private val root: JsonObject) {
     private fun parts(node: JsonObject, depth: Int = 0): List<JsonObject> {
         require(depth < 32) { "无法展示此字段结构" }
@@ -80,11 +92,11 @@ internal fun DnsFormDraft.payload(specs: List<DnsFormField>, complete: Boolean):
             "string" -> JsonPrimitive(text) // TXT, quotes and newlines must remain exact.
             "number", "integer" -> if (text.isBlank()) null else {
                 require(Regex("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?").matches(text.trim())) {
-                    "$path 请输入有效数字；不会自动转换为 0"
+                    "${dnsFieldLabel(path, type)}请输入有效数字；不会自动转换为 0"
                 }
                 val number = try { Json.parseToJsonElement(text) as? JsonPrimitive } catch (_: Exception) { null }
                 require(number != null && !number.isString && number.doubleOrNull?.isFinite() == true) {
-                    "$path 请输入有效数字；不会自动转换为 0"
+                    "${dnsFieldLabel(path, type)}请输入有效数字；不会自动转换为 0"
                 }
                 number
             }

@@ -79,6 +79,48 @@ class DnsManagementUiTest {
         }
     }
 
+    @Test fun numericDoneDismissesFocusWithoutPreviewingOrSubmitting() {
+        form(DnsFormDraft(type = "MX", fields = obj("""{"content":"mx.example.com","priority":10}""")))
+        compose.onNodeWithTag("dns-priority").performScrollTo().performClick()
+        screenshot("dns-numeric-keyboard")
+        compose.onNodeWithTag("dns-priority").performImeAction()
+        compose.onNodeWithTag("dns-priority").assertIsNotFocused()
+        compose.runOnIdle { assertTrue(previews.isEmpty()); assertEquals(0, confirmed) }
+    }
+
+    @Test fun invalidNumericEditHasImmediateFieldFeedbackAndKeepsDraft() {
+        form(DnsFormDraft(fields = obj("""{"content":"192.0.2.1"}""")))
+        edit("dns-ttl", "not-a-number")
+        compose.onNodeWithTag("dns-ttl").assert(
+            SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Error))
+        compose.runOnIdle {
+            assertEquals("not-a-number", latest.edits["ttl"])
+            assertTrue(previews.isEmpty())
+        }
+        screenshot("dns-numeric-invalid")
+        edit("dns-ttl", "60")
+        compose.onNodeWithTag("dns-ttl").assert(
+            SemanticsMatcher.keyNotDefined(androidx.compose.ui.semantics.SemanticsProperties.Error))
+        preview()
+        compose.runOnIdle { assertEquals(60, previews.single().fields["ttl"]!!.jsonPrimitive.int) }
+    }
+
+    @Test fun nestedNumericErrorsUseReadableFieldNamesWithoutChangingDraftOrSubmitting() {
+        form(DnsFormDraft(type = "SRV", name = "_sip._tcp"))
+        edit("dns-data-port", "invalid")
+        compose.onNodeWithText("端口请输入有效数字；不会自动转换为 0").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals("invalid", latest.edits["data.port"]); assertTrue(previews.isEmpty()) }
+        screenshot("dns-port-error")
+        preview()
+        compose.onNodeWithTag("dns-form-error").performScrollTo()
+            .assertTextEquals("端口请输入有效数字；不会自动转换为 0")
+        compose.runOnIdle { assertTrue(previews.isEmpty()) }
+        edit("dns-data-port", "")
+        compose.onNodeWithTag("dns-data-port").assert(
+            SemanticsMatcher.keyNotDefined(androidx.compose.ui.semantics.SemanticsProperties.Error))
+        compose.runOnIdle { assertEquals("", latest.edits["data.port"]); assertTrue(previews.isEmpty()) }
+    }
+
     @Test fun all21TrustedTypesAndFiveQuickFormsRemainAvailable() {
         form()
         DnsSchemas.types.forEach { type -> compose.onNodeWithTag("dns-type-$type").assertExists() }

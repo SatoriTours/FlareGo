@@ -19,8 +19,9 @@ fun ZonePage(
     state: ZonePageState,
     onIntent: (ZoneIntent) -> Unit,
     modifier: Modifier = Modifier,
+    query: String = "",
     dnsContent: @Composable (ZoneDetails) -> Unit = {},
- ) = ZonePageContent(state,onIntent,modifier,null,dnsContent)
+ ) = ZonePageContent(state,onIntent,modifier,null,query,dnsContent)
 
 /** Required slots keep the original trailing-lambda overload source-compatible. */
 @Composable
@@ -29,13 +30,14 @@ fun ZonePage(
     onIntent:(ZoneIntent)->Unit,
     slots:ZoneManagementSlots,
     modifier:Modifier=Modifier,
+    query:String="",
     dnsContent:@Composable (ZoneDetails)->Unit = {},
-) = ZonePageContent(state,onIntent,modifier,slots,dnsContent)
+) = ZonePageContent(state,onIntent,modifier,slots,query,dnsContent)
 
 @Composable
 private fun ZonePageContent(
     state:ZonePageState,onIntent:(ZoneIntent)->Unit,modifier:Modifier,
-    slots:ZoneManagementSlots?,dnsContent:@Composable (ZoneDetails)->Unit,
+    slots:ZoneManagementSlots?,query:String,dnsContent:@Composable (ZoneDetails)->Unit,
 ) {
     val account = state.account
     val editorMode = state.editorMode
@@ -97,13 +99,20 @@ private fun ZonePageContent(
                     ZoneTaskSummary(task, onIntent)
                     Button(onClick = { onIntent(ZoneIntent.BeginCreate) }, enabled = !blocked && !state.loading,
                         modifier = Modifier.fillMaxWidth().testTag("zone-create")) { Text("创建 Zone") }
-                    state.zones.filter { it.ref.account == account }.forEach { zone ->
+                    val matchingZones = state.zones.filter { it.ref.account == account && it.name.contains(query.trim(), true) }
+                    if (query.isNotBlank()) Text("已加载域名中匹配 ${matchingZones.size} 个")
+                    matchingZones.forEach { zone ->
                         OutlinedButton(onClick = { onIntent(ZoneIntent.Open(zone.ref)) },
                             modifier = Modifier.fillMaxWidth().testTag("zone-row-${zone.ref.zoneId}")) {
                             Column(Modifier.fillMaxWidth()) { Text(zone.name); Text("${zone.status} · ${zone.type}") }
                         }
                     }
-                    if (state.zones.none { it.ref.account == account }) Text("当前账号尚无 Zone；可刷新或检查 Zone Read 权限。")
+                    if (matchingZones.isEmpty() && !state.loading) {
+                        if (query.isNotBlank()) {
+                            Text("没有匹配的域名")
+                            Text("尝试其他关键词或清空搜索；搜索范围为已加载的域名。")
+                        } else Text("当前账号尚无 Zone；可刷新或检查 Zone Read 权限。")
+                    }
                     if (state.next != null) OutlinedButton(onClick = { onIntent(ZoneIntent.LoadMore) }, enabled = !state.loading,
                         modifier = Modifier.fillMaxWidth().testTag("zone-load-more")) { Text("加载更多 Zone") }
                     OutlinedButton(onClick = { onIntent(ZoneIntent.Load(account)) }, enabled = !state.loading,

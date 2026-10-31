@@ -25,6 +25,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -193,6 +194,13 @@ class R2CManagementUiTest {
         }
         compose.waitUntil(10000) { model?.controller?.state?.value?.connections?.none { it.id !in initial } != false }
         compose.runOnIdle { owner.clear() }
+    }
+
+    @Test fun systemBackClosesJobsWithoutSubmitting() {
+        install(); openC("r2-c-jobs")
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("r2-c-jobs").assertIsDisplayed()
+        compose.runOnIdle { assertFalse(model!!.r2Browser.c.state.value.open); assertTrue(writes().isEmpty()) }
     }
 
     @Test

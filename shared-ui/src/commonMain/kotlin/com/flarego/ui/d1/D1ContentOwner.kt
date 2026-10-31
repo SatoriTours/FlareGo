@@ -9,6 +9,11 @@ import kotlinx.serialization.json.*
 
 enum class D1Field { SQL, PARAMS, JSON, TABLES, TABLE, FILTER_COLUMN, FILTER_VALUE, SORT_COLUMN, BOOKMARK, TIMESTAMP, PREVIOUS_BOOKMARK, TYPED }
 enum class D1InputKind { SQL_TEXT, SQL_JSON, IMPORT_SQL }
+private val draftFields = setOf(
+    D1Field.SQL, D1Field.PARAMS, D1Field.JSON, D1Field.TABLES, D1Field.TABLE,
+    D1Field.FILTER_COLUMN, D1Field.FILTER_VALUE, D1Field.SORT_COLUMN,
+    D1Field.BOOKMARK, D1Field.TIMESTAMP,
+)
 data class D1ContentState(
     val revision: Long = 0, val secure: Boolean = false, val surface: Long? = null, val revealed: Boolean = false,
     val inputKind: D1InputKind? = null, val inputBytes: Long? = null, val resultReady: Boolean = false,
@@ -60,6 +65,9 @@ class D1ContentOwner(private val store: D1ContentStore, private val window: () -
         if (field != D1Field.TYPED) changed()
         return true
     }
+    /** Expose only draft presence; plaintext stays inside the protected owner. */
+    fun hasDraftInput(): Boolean = secureNow() &&
+        (input != null || fields.any { (field, value) -> field in draftFields && value.isNotEmpty() })
     fun field(field: D1Field): String? = if (secureNow()) fields[field].orEmpty() else null
     fun confirmation(): D1ConfirmationView? = if (secureNow()) confirmation else null
     fun confirm(view: D1ConfirmationView?) { requireSecure(); confirmation = view; fields.remove(D1Field.TYPED); publish() }

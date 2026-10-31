@@ -188,6 +188,20 @@ class ExtendedManagementUiTest {
         compose.onNodeWithTag("management-back").performClick();compose.onNodeWithTag("zone-tab-security").assertIsSelected()
         compose.onNodeWithTag("zone-tab-settings").performClick();click("management-open-ZONE_SETTINGS");visible("zs-current-value")
     }
+    @Test fun systemBackReleasesPanelAndKeepsZoneAndTab() {
+        val h = install(app = true); openDns(h)
+        click("management-open-FILES"); visible("df-header")
+        val lease = h.active
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("management-host").assertDoesNotExist()
+        compose.onNodeWithTag("zone-tab-dns").assertIsSelected()
+        compose.runOnIdle {
+            assertEquals(h.scope, h.zones.state.value.selected?.ref)
+            assertTrue(h.exits.contains(lease))
+            assertNull(h.active)
+            assertTrue(h.confirms().isEmpty())
+        }
+    }
     @Test fun appWithoutActualContextCannotNavigateFromPanelState() {
         val h=UiOwner();h.actual.value=h.actual.value.copy(scope=ZoneScope(h.scope.account,"different"));install(h,app=true);openDns(h)
         compose.onNodeWithTag("management-open-FILES").performScrollTo().assertIsNotEnabled()

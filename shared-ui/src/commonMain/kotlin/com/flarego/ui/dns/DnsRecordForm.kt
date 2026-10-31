@@ -3,12 +3,16 @@ package com.flarego.ui.dns
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import com.flarego.core.application.dns.validateDnsInput
 import com.flarego.core.cloudflare.generated.DnsSchemas
 import com.flarego.core.model.*
@@ -115,20 +119,33 @@ fun DnsRecordForm(
                             if (!proxyAllowed) Text("此类型或当前约束不支持代理", style = MaterialTheme.typography.bodySmall)
                         }
                     } else {
+                        val numeric = spec.kind == "number" || spec.kind == "integer"
+                        val fieldLabel = dnsFieldLabel(spec.path, draft.type)
+                        // Reuse draft parsing for syntax feedback; the trusted validator still
+                        // enforces record/schema/range constraints before any preview.
+                        val fieldError = remember(spec, value, fieldLabel, spec.path in draft.edits) {
+                            if (numeric && spec.path in draft.edits)
+                                runCatching {
+                                    DnsFormDraft(edits = mapOf(spec.path to value)).payload(listOf(spec), complete = false)
+                                }.exceptionOrNull()?.let { "${fieldLabel}请输入有效数字；不会自动转换为 0" }
+                            else null
+                        }
                         OutlinedTextField(
                             value = value,
                             onValueChange = { edit(spec.path, it) },
-                            label = { Text(when (spec.path) {
-                                "content" -> if (draft.type == "TXT") "TXT 内容" else "记录内容"
-                                "ttl" -> "TTL（秒）"
-                                "priority" -> "优先级 priority"
-                                "comment" -> "备注 comment"
-                                else -> spec.path
-                            }) },
+                            label = { Text(fieldLabel) },
                             modifier = Modifier.fillMaxWidth().testTag(tag),
                             minLines = if (spec.path == "content" && draft.type == "TXT") 3 else 1,
-                            maxLines = 4,
-                            supportingText = if (spec.kind == "array") ({ Text("仅编辑此字段的 JSON 数组，例如 [\"team:dns\"]") })
+                            maxLines = if (numeric) 1 else 4,
+                            singleLine = numeric,
+                            isError = fieldError != null,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text,
+                                imeAction = if (numeric) ImeAction.Done else ImeAction.Default,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                            supportingText = if (fieldError != null) ({ Text(fieldError) })
+                                else if (spec.kind == "array") ({ Text("仅编辑此字段的 JSON 数组，例如 [\"team:dns\"]") })
                                 else if (spec.path == "content" && draft.type == "TXT") ({ Text("保留空格、引号和换行") })
                                 else if (spec.choices.isNotEmpty()) ({ Text("允许值：${spec.choices.joinToString()}") })
                                 else null,

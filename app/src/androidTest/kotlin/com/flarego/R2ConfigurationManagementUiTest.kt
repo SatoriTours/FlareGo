@@ -252,6 +252,18 @@ class R2ConfigurationManagementUiTest {
         localUploadsEnabled = true
     }
 
+    @Test fun systemBackClosesConfigurationWithoutLeavingResources() {
+        install(allowWrites = true)
+        compose.onNodeWithTag("rb-config-$bucket").performScrollTo().performClick()
+        compose.waitUntil(10000) { model!!.r2Browser.configuration.state.value.open && !model!!.r2Browser.configuration.state.value.loading }
+        Espresso.pressBack()
+        compose.onNodeWithTag("rb-config-$bucket").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertFalse(model!!.r2Browser.configuration.state.value.open)
+            assertTrue(requests.all { it.method == "GET" })
+        }
+    }
+
     @Test
     fun realFlowOpenBucketConfigurationLoadsCorsAndAllowsAddingRuleAndPreviewAndConfirm() {
         install(allowWrites = true)

@@ -3,13 +3,21 @@ package com.flarego.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.safeMessage
 import com.flarego.core.application.validateDns
@@ -44,6 +52,8 @@ fun ConnectionDialog(
     var accountInvalid by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var readBusy by remember { mutableStateOf(false) }
+    val accountFocus = remember { FocusRequester() }
+    val tokenFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     val dismiss = {
@@ -87,6 +97,8 @@ fun ConnectionDialog(
         title = { Text("连接 Cloudflare") },
         text = {
             FormBody {
+                val focusManager = LocalFocusManager.current
+                val keyboard = LocalSoftwareKeyboardController.current
                 if (oauthConnection != null) TextButton(onClick = { draft.token = ""; draft.manualToken = false }) {
                     Text("改用 Cloudflare 官方授权")
                 }
@@ -108,6 +120,8 @@ fun ConnectionDialog(
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { accountFocus.requestFocus() }),
                 )
                 OutlinedTextField(
                     draft.accountId,
@@ -121,8 +135,10 @@ fun ConnectionDialog(
                     isError = accountInvalid,
                     supportingText =
                         if (accountInvalid) ({ Text("请输入 32 位十六进制 Account ID") }) else null,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(accountFocus),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false, imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { tokenFocus.requestFocus() }),
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Muted("Account ID 是 32 位账号标识，不是 Zone ID。可在域名概览的 API 区域复制。")
@@ -143,8 +159,13 @@ fun ConnectionDialog(
                     label = { Text("API Token") },
                     enabled = !busy,
                     visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    }),
                 )
                 Muted(
                     "Token 仅显示一次，请创建后及时复制；不要使用 Global API Key。Token 将加密保存在本机。"
@@ -480,7 +501,7 @@ fun CreateResourceDialog(onDismiss: () -> Unit, openConsole: () -> Unit) {
         title = { Text("创建云资源") },
         text = {
             FormBody {
-                Text("首版支持查看 Workers、R2、D1 和 KV。创建和部署请在 Cloudflare 控制台完成，完成后回到 App 刷新列表。")
+                Text("R2 存储桶、D1 数据库和 KV 命名空间可前往「资源」页，选择对应类型后创建；是否可操作取决于当前账号权限。Workers 部署请打开 Cloudflare 控制台，完成后回到 App 刷新列表。")
                 ResourceKind.entries.forEach {
                     Text("• ${it.name} · ${it.label}", style = MaterialTheme.typography.bodyMedium)
                 }

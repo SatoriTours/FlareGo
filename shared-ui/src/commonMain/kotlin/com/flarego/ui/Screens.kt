@@ -147,7 +147,8 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit) {
         }
         if (domains.isEmpty())
             item {
-                EmptyState(if (query.isBlank()) "暂无域名" else "没有匹配域名", "可刷新列表或检查账号的 Zone Read 权限")
+                EmptyState(if (query.isBlank()) "暂无域名" else "没有匹配域名",
+                    if (query.isBlank()) "可刷新列表或检查账号的 Zone Read 权限" else "尝试其他关键词或清空搜索")
             }
         items(domains, key = { it.id }) { domain ->
             Surface(
@@ -241,7 +242,8 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
             TextButton(onClick = { selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.MODERN) }) { Text("Workers 现代目录") }
             TextButton(onClick = { selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.LEGACY) }) { Text("Workers 旧目录") }
         }
-        if (state.productLoading) ProductStatus(state.products[state.resourceKind.product()],refresh,more)
+        val product = state.products[state.resourceKind.product()]
+        if (state.productLoading) ProductStatus(product,refresh,more)
         val resources =
             state.inventory.resources.filter {
                 (if (state.productLoading) it.kind == state.resourceKind else (filter == null || it.kind == filter)) && it.name.contains(query, true)
@@ -250,8 +252,20 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
             contentPadding = ListPadding,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (resources.isEmpty())
-                item { EmptyState(if (query.isBlank()) "暂无云资源" else "没有匹配资源", "尝试其他类型或刷新列表") }
+            if (resources.isEmpty() && (!state.productLoading ||
+                    (product?.observedAtMs != null && !product.loading && product.error == null)))
+                item { EmptyState(when {
+                    query.isNotBlank() -> "没有匹配资源"
+                    state.productLoading && product?.allPagesLoaded == false -> "当前页面没有资源"
+                    else -> "暂无云资源"
+                }, when {
+                        state.productLoading && product?.allPagesLoaded == false ->
+                            "仅搜索已加载资源；可清空搜索或加载更多"
+                        query.isNotBlank() -> "尝试其他关键词或清空搜索"
+                        else -> "尝试其他类型或刷新列表"
+                    }) }
+            else if (resources.isEmpty() && state.productLoading && product?.loading != true && product?.error == null)
+                item { EmptyState("尚未读取资源", "点击刷新当前产品读取列表") }
             items(resources, key = { "${it.kind}:${it.id}" }) {
                 ResourceRow(it, state.selected?.demo == true) { open(it) }
             }
@@ -262,18 +276,20 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
 
 @Composable
 fun DnsScreen(state: AppState, query: String, edit: (DnsRecord) -> Unit) {
+    val records = state.dns.filter { "${it.name} ${it.content} ${it.type}".contains(query, true) }
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("解析记录", style = MaterialTheme.typography.titleMedium)
-                Pill("${state.dns.size} 条")
+                Pill(if (query.isBlank()) "${records.size} 条" else "${records.size} / ${state.dns.size} 条")
             }
         }
         if (state.dnsLoading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        if (state.dns.isEmpty() && !state.dnsLoading)
-            item { EmptyState("暂无解析记录", "点击标题栏右侧 + 添加；读取失败可刷新重试") }
+        if (records.isEmpty() && !state.dnsLoading)
+            item { EmptyState(if (query.isBlank()) "暂无解析记录" else "没有匹配的解析记录",
+                if (query.isBlank()) "点击标题栏右侧 + 添加；读取失败可刷新重试" else "尝试其他关键词或清空搜索") }
         items(
-            state.dns.filter { "${it.name} ${it.content} ${it.type}".contains(query, true) },
+            records,
             key = { it.id },
         ) { record ->
             SectionCard(Modifier.fillMaxWidth()) {
@@ -525,18 +541,25 @@ fun AccountsScreen(
 @Composable
 fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
-    var checking by remember { mutableStateOf<String?>(null) }
-    var checkError by remember { mutableStateOf<String?>(null) }
-    val tasks = state.tasks.filter { it.connectionId == state.selected?.id && (it.actionKey.contains(query,true) || taskLabel(it.state).contains(query,true)) }
-    val operations =
-        state.operations.filter {
-            it.connectionId == state.selected?.id && it.title.contains(query, true)
-        }
+    var checking by remember(state.selected?.id) { mutableStateOf<String?>(null) }
+    var checkError by remember(state.selected?.id) { mutableStateOf<String?>(null) }
+    val search = query.trim()
+    val accountTasks = state.tasks.filter { it.connectionId == state.selected?.id }
+    val taskIds = accountTasks.map { it.id }.toSet()
+    val summaries = state.operations.filter { it.connectionId == state.selected?.id }.associateBy { it.id }
+    fun title(task: OperationTask) = summaries[task.id]?.title ?: "云资源任务"
+    val tasks = accountTasks.filter { task ->
+        listOf(title(task), task.actionKey, task.safeDetail, taskLabel(task.state), summaries[task.id]?.detail.orEmpty()).any { it.contains(search, true) }
+    }
+    // A task and its legacy summary are one visible result; filter after joining them.
+    val operations = summaries.values.filter { op ->
+        op.id !in taskIds && listOf(op.title, op.detail, op.status.label).any { it.contains(search, true) }
+    }
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Muted("当前账号的最近 200 条本机操作") }
         checkError?.let { item { Notice(it) } }
         items(tasks,key = { "task:${it.id}" }) { task -> SectionCard {
-            Text("DNS 任务",style = MaterialTheme.typography.titleMedium)
+            Text(title(task),style = MaterialTheme.typography.titleMedium)
             Pill(taskLabel(task.state),task.state != TaskState.SUCCEEDED)
             Text(task.safeDetail,style = MaterialTheme.typography.bodyMedium)
             if (reconcile != null && task.state !in listOf(TaskState.SUCCEEDED,TaskState.FAILED))
@@ -550,8 +573,10 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
                     }
                 }) { Text(if (checking == task.id) "核对中" else "只读核对") }
         } }
-        if (operations.isEmpty() && tasks.isEmpty()) item { EmptyState("暂无操作记录", "DNS 变更及模拟注册结果会显示在这里") }
-        items(operations.filter { op -> state.tasks.none { it.id == op.id } }, key = { it.id }) { op ->
+        if (operations.isEmpty() && tasks.isEmpty()) item { EmptyState(
+            if (query.isBlank()) "暂无操作记录" else "没有匹配的操作记录",
+            if (query.isBlank()) "当前账号的云资源操作结果会显示在这里" else "尝试其他关键词或清空搜索") }
+        items(operations, key = { "operation:${it.id}" }) { op ->
             SectionCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
@@ -575,8 +600,11 @@ private fun loadedLabel(states: List<ProductLoadState>): String {
 @Composable
 fun ProductStatus(state: ProductLoadState?, refresh: () -> Unit, more: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp,vertical = 6.dp),verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (state?.loading == true) LinearProgressIndicator(Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceBetween,verticalAlignment = Alignment.CenterVertically) {
-            Muted(if (state?.observedAtMs == null) "未加载" else "已加载 ${state.content.count()} · ${if (state.allPagesLoaded) "全部" else "尚未完整"}")
+            Muted(if (state?.observedAtMs == null) {
+                if (state?.loading == true) "正在读取…" else "未加载"
+            } else "已加载 ${state.content.count()} · ${if (state.allPagesLoaded) "全部" else "尚未完整"}")
             TextButton(enabled = state?.loading != true,onClick = refresh) { Text("刷新当前产品") }
         }
         state?.error?.let { Notice(it.publicMessage,refresh) }

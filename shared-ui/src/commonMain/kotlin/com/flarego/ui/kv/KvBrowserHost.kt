@@ -16,9 +16,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.flarego.core.application.kv.*
 import com.flarego.core.model.*
+import com.flarego.ui.AppBackHandler
 
 @Composable
-fun KvBrowserHost(browser:KvBrowser,account:AccountScope?) {
+fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=true) {
     val s by browser.state.collectAsState()
     val private by browser.content.state.collectAsState()
     var failedOpen by remember(browser){mutableStateOf(false)}
@@ -27,6 +28,13 @@ fun KvBrowserHost(browser:KvBrowser,account:AccountScope?) {
     DisposableEffect(browser){onDispose{browser.close()}}
     val surface=private.surface
     DisposableEffect(browser,surface){onDispose{browser.content.surfaceRemoved(surface)}}
+    AppBackHandler(backEnabled && account != null && s.context?.account == account &&
+        (s.writing || s.editor != null || private.secure || s.namespace != null)) {
+        if (!s.writing) {
+            if (s.editor != null || private.secure) browser.cancel()
+            else browser.backToNamespaces()
+        }
+    }
     Column(Modifier.fillMaxSize().testTag("kv-browser")){
         if(s.context?.account!=account||account==null){Text("正在绑定当前账号的 KV…",Modifier.padding(16.dp));return@Column}
         if(s.loading||s.writing)LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -181,7 +189,7 @@ internal fun KvConfirmationDialog(p:KvConfirmationView,busy:Boolean,cancel:()->U
     var text by remember(p.handle){mutableStateOf("")}
     var page by remember(p.handle){mutableStateOf(0)}
     val stage=p.handle.stage
-    Dialog(cancel,properties=DialogProperties(usePlatformDefaultWidth=false,dismissOnClickOutside=false)){
+    Dialog(cancel,properties=DialogProperties(usePlatformDefaultWidth=false,dismissOnClickOutside=false,dismissOnBackPress=!busy)){
         Surface(Modifier.fillMaxWidth(.94f).fillMaxHeight(.92f).widthIn(max=640.dp),shape=MaterialTheme.shapes.large){Column(Modifier.padding(16.dp)){
             Text(when(stage){KvConfirmationStage.RISK->"KV 风险核对";KvConfirmationStage.TYPED->"KV 身份核对";KvConfirmationStage.FINAL->"KV 最终确认"},style=MaterialTheme.typography.titleLarge,modifier=Modifier.testTag("kv-confirm-title"))
             LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("kv-confirm-scroll"),verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=12.dp)){

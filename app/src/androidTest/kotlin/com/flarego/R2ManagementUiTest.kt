@@ -252,6 +252,15 @@ class R2ManagementUiTest {
             assertTrue(requests.all { it.method == "GET" })
         }
     }
+    @Test fun systemBackFromObjectListReturnsToBucketsWithoutCloudMutation() {
+        install(); openBucket()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("rb-open-my-bucket").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertNull(model!!.r2Browser.state.value.objects)
+            assertTrue(requests.all { it.method == "GET" })
+        }
+    }
     @Test fun resourceR2TabMountsRealBrowserAndLongSlashKey() {
         install(); openBucket()
         compose.onNodeWithText("dir/sub/file.txt").performScrollTo().assertIsDisplayed()

@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -171,11 +170,6 @@ class MainActivity : ComponentActivity() {
                     current.pendingInstall = request
                     installOrAuthorize(current)
                 }
-            }
-            BackHandler(
-                enabled = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS)
-            ) {
-                current.controller.back()
             }
             FlareGoApp(
                 current.controller,

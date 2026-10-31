@@ -79,6 +79,69 @@ class AppSmokeTest {
     }
 
     @Test
+    fun submittedSearchStaysVisibleAndCanBeCleared() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput(" media ")
+        compose.onNodeWithTag("search-field").performImeAction()
+        compose.onNodeWithTag("search-field").assertIsDisplayed()
+        compose.onNodeWithText("media-assets").assertIsDisplayed()
+        compose.onNodeWithText("api-gateway").assertDoesNotExist()
+        screenshot("search-submitted")
+        compose.onNodeWithContentDescription("清空搜索").performClick()
+        compose.onNodeWithTag("search-field").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        compose.onNodeWithText("api-gateway").assertIsDisplayed()
+    }
+
+    @Test
+    fun dnsNoMatchesExplainsFilterAndClearRestoresRecords() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-domains").performClick()
+        compose.onNodeWithText("flarego.dev").performClick()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput("no-such-record")
+        compose.onNodeWithTag("search-field").performImeAction()
+        compose.onNodeWithText("没有匹配的解析记录").assertIsDisplayed()
+        compose.onNodeWithContentDescription("清空搜索").performClick()
+        compose.onNodeWithText("192.0.2.10").assertIsDisplayed()
+        compose.onNodeWithTag("search-field").performTextInput(" 192.0.2.10 ")
+        compose.onNodeWithText("192.0.2.10").assertIsDisplayed()
+    }
+
+    @Test
+    fun systemBackClosesDrawerThenSearchWithoutLeavingResources() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput("media")
+        compose.onNodeWithTag("search-field").performImeAction()
+        compose.onNodeWithContentDescription("切换云账号").performClick()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("search-field").assertIsDisplayed()
+        compose.onNodeWithText("media-assets").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("search-field").assertDoesNotExist()
+        // Clearing search preserves the list scroll position; the restored item
+        // may be outside a 320dp viewport and must remain reachable.
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("api-gateway"))
+        compose.onNodeWithText("api-gateway").assertIsDisplayed()
+    }
+
+    @Test
+    fun connectionKeyboardMovesToNextFieldWithoutSubmitting() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-accounts").performClick()
+        compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.onNodeWithText("账号名称").performScrollTo().performClick().performImeAction()
+        compose.onNodeWithText("Account ID").assertIsFocused().performImeAction()
+        compose.onNodeWithText("API Token", substring = false).assertIsFocused().performImeAction()
+        compose.onNodeWithText("API Token", substring = false).assertIsNotFocused()
+        compose.onNodeWithText("验证并连接").assertIsDisplayed().assertIsNotEnabled()
+    }
+
+    @Test
     fun compactNavigationSearchAndDrawer() {
         installDemoFixture()
         compose.onNodeWithTag("nav-resources").performClick()

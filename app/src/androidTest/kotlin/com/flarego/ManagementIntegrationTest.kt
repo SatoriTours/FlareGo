@@ -29,6 +29,15 @@ class ManagementIntegrationTest {
     private var initialIds=emptySet<String>()
     private val accountId="d4".repeat(16)
     private val writes=AtomicInteger()
+    private fun screenshot(name: String) {
+        compose.waitForIdle()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val folder = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            java.io.File(folder, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+    }
     private val requests=java.util.Collections.synchronizedList(mutableListOf<HttpRequest>())
     private var row=Json.parseToJsonElement("""{"id":"record","type":"A","name":"www.runtime.example.com","content":"192.0.2.1","ttl":60,"proxied":false,"comment":"old"}""").jsonObject
     private val zone="""{"id":"runtime-zone","name":"runtime.example.com","account":{"id":"$accountId"},"status":"pending","paused":false,"type":"full","name_servers":["example.ns.cloudflare.com"]}"""
@@ -68,6 +77,35 @@ class ManagementIntegrationTest {
         compose.waitUntil(10000) { model?.controller?.state?.value?.connections?.none { it.id !in initialIds && !it.demo }!=false }
         compose.runOnIdle { owner.clear() }
     }
+    @Test fun appSearchFiltersProductionZonesAndSystemBackReturnsToList() {
+        val m = create(true)
+        compose.runOnIdle { m.onManagementResume() }
+        compose.setContent { FlareGoApp(m.controller, m::connect, m::disconnect, {}, management = m.management) }
+        compose.onNodeWithTag("nav-domains").performClick()
+        compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput("missing.example")
+        compose.onNodeWithTag("search-field").performImeAction()
+        compose.onNodeWithTag("zone-row-runtime-zone").assertDoesNotExist()
+        compose.onNodeWithText("没有匹配的域名").assertIsDisplayed()
+        screenshot("zones-search-empty")
+        compose.onNodeWithContentDescription("清空搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput(" RUNTIME.EXAMPLE ")
+        compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
+        compose.onNodeWithContentDescription("取消搜索").performClick()
+        compose.onNodeWithTag("zone-row-runtime-zone").performClick()
+        compose.onNodeWithTag("zone-detail-name").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.waitUntil(10000) { m.management.zones.state.value.selected == null && !m.management.zones.state.value.loading }
+        compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
+        compose.onNodeWithTag("zone-create").performClick()
+        compose.onNodeWithTag("zone-create-name").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
+        screenshot("zones-returned")
+        compose.runOnIdle { assertEquals(0, writes.get()) }
+    }
+
     @Test fun productionVmUsesFreshOwnerAndDeltaPatchAfterExplicitConfirmation() {
         val m=create(true)
         val connection=m.controller.state.value.selected!!

@@ -145,7 +145,6 @@ fun FlareGoApp(
             }
         }
     }
-    LaunchedEffect(searchOpen) { if (searchOpen) focus.requestFocus() }
     // OAuth UI contains no credentials. Protect only the manual token form, not its entry page.
     val connectionShowsSecrets = dialog is DialogState.Connect &&
         (oauthConnection == null || connectionDraft.manualToken)
@@ -161,13 +160,48 @@ fun FlareGoApp(
             Page.JOBS -> Page.OVERVIEW
             else -> state.page
         }
-    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null
+    val zoneEditing = management != null && state.page in setOf(Page.DOMAINS, Page.DNS) &&
+        (zonePageState.editorMode != null || zonePageState.preparedChange != null)
+    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null || zoneEditing
+    val searchQuery = query.trim()
     val searchEnabled =
         activeModule == null && state.selected != null &&
+            !(management != null && (state.page == Page.DNS || (state.page == Page.DOMAINS &&
+                (managementZone != null || zonePageState.editorMode != null || zonePageState.preparedChange != null)))) &&
             !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
             !(kvBrowser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.KV) &&
             !(d1Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.D1) &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
+    LaunchedEffect(searchOpen, searchEnabled) {
+        if (searchOpen && searchEnabled) focus.requestFocus()
+    }
+    fun closeSearch() {
+        searchOpen = false
+        query = ""
+        searched = false
+        keyboard?.hide()
+        focusManager.clearFocus()
+    }
+    fun navigateBack() {
+        keyboard?.hide()
+        focusManager.clearFocus()
+        if (activeModule != null) clearPanel()
+        else if (zoneEditing && management != null) {
+            if (!zonePageState.loading) management.zones.onIntent(
+                if (zonePageState.preparedChange != null) ZoneIntent.BackToDraft else ZoneIntent.Cancel)
+        }
+        else if (managementZone != null && account != null && management != null) {
+            management.dns.onIntent(DnsIntent.Clear)
+            management.batch?.onIntent(DnsBatchIntent.Clear)
+            management.zones.onIntent(ZoneIntent.Clear)
+            management.zones.onIntent(ZoneIntent.Load(account))
+        } else controller.back()
+    }
+    AppBackHandler(enabled = dialog == null && (drawer.isOpen || detail || (searchOpen && searchEnabled))) {
+        if (drawer.isOpen) scope.launch { drawer.close() }
+        else if (searchOpen && searchEnabled) closeSearch()
+        else navigateBack()
+    }
     val dismiss = {
         if (dialog is DialogState.Connect) { oauthConnection?.cancel(); connectionDraft.clear() }
         dialog = null
@@ -287,16 +321,7 @@ fun FlareGoApp(
                         ) {
                             if (detail)
                                 IconButton(
-                                    onClick = {
-                                        keyboard?.hide()
-                                        if (activeModule != null) clearPanel()
-                                        else if (managementZone != null && account != null && management != null) {
-                                            management.dns.onIntent(DnsIntent.Clear)
-                                            management.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
-                                            management.zones.onIntent(ZoneIntent.Clear)
-                                            management.zones.onIntent(ZoneIntent.Load(account))
-                                        } else controller.back()
-                                    },
+                                    onClick = ::navigateBack,
                                     modifier = Modifier.size(40.dp),
                                 ) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
@@ -354,10 +379,7 @@ fun FlareGoApp(
                                 IconButton(
                                     onClick = {
                                         if (searchOpen) {
-                                            searchOpen = false
-                                            query = ""
-                                            searched = false
-                                            keyboard?.hide()
+                                            closeSearch()
                                         } else searchOpen = true
                                     },
                                     modifier = Modifier.size(40.dp),
@@ -381,7 +403,10 @@ fun FlareGoApp(
                                     }) {
                                         Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
                                     }
-                                Page.RESOURCES -> if (r2Browser == null || state.resourceKind != ResourceKind.R2)
+                                Page.RESOURCES -> if (!(
+                                    (r2Browser != null && state.resourceKind == ResourceKind.R2) ||
+                                    (kvBrowser != null && state.resourceKind == ResourceKind.KV) ||
+                                    (d1Browser != null && state.resourceKind == ResourceKind.D1)))
                                     IconButton(onClick = { dialog = DialogState.Create }) {
                                         Icon(Icons.Default.Add, "创建资源")
                                     }
@@ -408,7 +433,7 @@ fun FlareGoApp(
                                     }
                             }
                         }
-                        if (searchOpen && activeModule==null)
+                        if (searchOpen && searchEnabled)
                             OutlinedTextField(
                                 query,
                                 { query = it },
@@ -435,20 +460,23 @@ fun FlareGoApp(
                                 keyboardActions =
                                     KeyboardActions(
                                         onSearch = {
-                                            searchOpen = false
                                             searched = true
                                             keyboard?.hide()
+                                            focusManager.clearFocus()
                                         }
                                     ),
                                 trailingIcon = {
-                                    IconButton(
-                                        onClick = {
-                                            searchOpen = false
+                                    Row {
+                                        if (query.isNotEmpty()) IconButton(onClick = {
+                                            query = ""
+                                            searched = false
+                                            focus.requestFocus()
+                                        }) { Icon(Icons.Default.Close, "清空搜索") }
+                                        if (state.page == Page.BUY) IconButton(onClick = {
                                             searched = true
                                             keyboard?.hide()
-                                        }
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, "提交搜索")
+                                            focusManager.clearFocus()
+                                        }) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "提交搜索") }
                                     }
                                 },
                             )
@@ -536,20 +564,20 @@ fun FlareGoApp(
                                         managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
                                     else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
-                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),dnsContent)
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
                                 else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
                                     settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
                                     security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
-                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),dnsContent)
+                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
                             } else Column {
                                 if (state.productLoading) ProductStatus(state.products[ProductKey.ZONES],controller::refresh,{controller.loadMore(ProductKey.ZONES)})
-                                DomainsScreen(state, query, controller::openDomain)
+                                DomainsScreen(state, searchQuery, controller::openDomain)
                             }
                             Page.RESOURCES ->
-                                ResourcesScreen(state, query, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
-                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account) }) },
-                                    kvContent = kvBrowser?.let { browser -> ({ com.flarego.ui.kv.KvBrowserHost(browser, account) }) },
-                                    d1Content = d1Browser?.let { browser -> ({ com.flarego.ui.d1.D1BrowserHost(browser, account) }) })
+                                ResourcesScreen(state, searchQuery, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
+                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account, drawer.isClosed && dialog == null) }) },
+                                    kvContent = kvBrowser?.let { browser -> ({ com.flarego.ui.kv.KvBrowserHost(browser, account, drawer.isClosed && dialog == null) }) },
+                                    d1Content = d1Browser?.let { browser -> ({ com.flarego.ui.d1.D1BrowserHost(browser, account, drawer.isClosed && dialog == null) }) })
                             Page.DNS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->
                                     if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {
@@ -563,12 +591,12 @@ fun FlareGoApp(
                                         managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
                                     else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
-                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),dnsContent)
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
                                 else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
                                     settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
                                     security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
-                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),dnsContent)
-                            } else DnsScreen(state, query) {
+                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
+                            } else DnsScreen(state, searchQuery) {
                                     state.domain?.let { domain ->
                                         dialog = DialogState.Edit(domain, it)
                                     }
@@ -596,7 +624,7 @@ fun FlareGoApp(
                                     { dialog = DialogState.Disconnect(it) },
                                     { updater?.let { UpdatePanel(it) } },
                                 )
-                            Page.JOBS -> JobsScreen(state, query, reconcileTask)
+                            Page.JOBS -> JobsScreen(state, searchQuery, reconcileTask)
                             Page.BUY ->
                                 PurchaseScreen(
                                     query,

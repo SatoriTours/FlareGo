@@ -38,6 +38,7 @@ class KvManagementUiTest {
     private var allowWrites=true
     private var partial=false
     private var unknown=false
+    private var afterValueWrite: (suspend () -> Unit)? = null
     private val binary=byteArrayOf(0,-1,-128,65)
     private fun envelope(result:String)="""{"success":true,"errors":[],"messages":[],"result":$result}"""
     private fun transport()=HttpTransport {r->
@@ -61,6 +62,7 @@ class KvManagementUiTest {
                 try{while(true){val n=stream.source.read(buffer);if(n<0)break;check(n>0);out.write(buffer,0,n)}}finally{stream.source.close()}
                 bodies+=out.toByteArray().decodeToString()
                 (payload as? HttpBody.Multipart)?.parts?.forEach{(it.body as? HttpBody.SensitiveJson)?.let{body->bodies+=body.consumeBytes().decodeToString()}}
+                afterValueWrite?.invoke()
                 "null"
             }
             r.path=="$path/bulk/get"->error("Bulk read uses transfer port")
@@ -125,6 +127,22 @@ class KvManagementUiTest {
         waitFor{browser.state.value.namespaces.isNotEmpty()}
         if(open)openNamespace()
     }
+    @Test fun systemBackCancelsEditorBeforeReturningToNamespaceDirectory() {
+        install()
+        compose.onNodeWithContentDescription("切换云账号").performClick()
+        androidx.test.espresso.Espresso.pressBack()
+        assertNotNull(browser.state.value.namespace)
+        click("kv-new-value")
+        hideKeyboard()
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { browser.state.value.editor == null }
+        assertNotNull(browser.state.value.namespace)
+        assertFalse(browser.content.state.value.secure)
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { browser.state.value.namespace == null }
+        scroll("kv-ns-$ns").assertIsDisplayed()
+        assertTrue(requests.none { it.method in setOf("PUT", "POST", "PATCH", "DELETE") })
+    }
     private fun openNamespace(){click("kv-ns-$ns");waitFor{browser.state.value.keys.isNotEmpty()}}
     private fun prepare(){click("kv-prepare");waitFor{browser.state.value.confirmation!=null}}
     private fun hideKeyboard(){
@@ -146,7 +164,7 @@ class KvManagementUiTest {
         compose.onNodeWithTag("kv-confirm-scroll").performScrollToIndex(0)
         capture(name)
     }
-    private fun stages(name:String,keys:Boolean=false){
+    private fun stages(name:String,keys:Boolean=false, afterSend: (() -> Unit)? = null){
         waitFor{browser.state.value.confirmation!=null}
         if(browser.state.value.confirmation!!.handle.stage==KvConfirmationStage.RISK){
             scopeTop("$name-risk");if(keys)keyPages("$name-risk")
@@ -164,6 +182,7 @@ class KvManagementUiTest {
         compose.onNodeWithTag("kv-confirm-title").assertIsDisplayed()
         compose.onNodeWithTag("kv-cancel-confirm").assertIsDisplayed()
         compose.onNodeWithTag("kv-final-send").assertIsDisplayed().performClick()
+        afterSend?.invoke()
         waitFor{!browser.state.value.writing&&browser.state.value.tasks.isNotEmpty()&&browser.state.value.confirmation==null}
         // A state transition precedes Android removing the old Dialog Window. A real tap
         // on the Activity must wait for that Window to regain focus, not just Compose state.
@@ -285,6 +304,29 @@ class KvManagementUiTest {
         waitFor{compose.onAllNodes(isDialog()).fetchSemanticsNodes().size==1}
         capture("partial-failed-keys-before-scroll");compose.onNodeWithText("1. key-11").performScrollTo().assertIsDisplayed();capture("partial-failed-keys")
     }
+    @Test fun systemBackDuringWriteKeepsConfirmationAndCompletesOnlyOnce(){
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        afterValueWrite = { started.complete(Unit); release.await() }
+        install(); click("kv-new-value"); input("kv-key-input", "back-in-flight"); input("kv-value-input", "synthetic-value")
+        click("kv-overwrite")
+        prepare()
+        try {
+            stages("back-in-flight", afterSend = {
+                waitFor { started.isCompleted }
+                androidx.test.espresso.Espresso.pressBack()
+                compose.runOnIdle {
+                    assertTrue(browser.state.value.writing)
+                    assertNotNull(browser.state.value.confirmation)
+                    assertNotNull(browser.state.value.namespace)
+                }
+                release.complete(Unit)
+            })
+            assertEquals(1, requests.count { it.method == "PUT" })
+            assertEquals(TaskState.ACCEPTED, browser.state.value.tasks.single().state)
+        } finally { release.complete(Unit) }
+    }
+
     @Test fun bulkDeleteCurrentPostAndUnknownResultBlockFurtherWrites(){
         unknown=true;install();importBulk(true);stages("bulk-delete",true)
         assertEquals(1,requests.count{it.method=="POST"&&it.path=="$path/bulk/delete"})

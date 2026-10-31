@@ -139,6 +139,19 @@ class D1ManagementUiTest {
         waitFor { browser.state.value.databases.isNotEmpty() }
         if (open) { click("d1-db-$uuid"); waitFor { browser.state.value.database != null } }
     }
+    @Test fun systemBackCancelsPrivateEditorBeforeReturningToDatabaseDirectory() {
+        install()
+        click("d1-open-SQL")
+        hideKeyboard()
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { browser.state.value.editor == null }
+        assertNotNull(browser.state.value.database)
+        assertFalse(browser.content.state.value.secure)
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { browser.state.value.database == null }
+        scroll("d1-db-$uuid").assertIsDisplayed()
+        assertTrue(requests.none { it.method in setOf("PUT", "POST", "PATCH", "DELETE") })
+    }
     private fun hideKeyboard() {
         compose.runOnUiThread {
             android.view.inspector.WindowInspector.getGlobalWindowViews().firstOrNull { it.hasWindowFocus() }?.let { view ->
@@ -252,7 +265,76 @@ class D1ManagementUiTest {
         click("d1-reveal"); scroll("d1-result-page").assertTextContains("private-result-",substring = true); capture("result-revealed",false)
         click("d1-result-next"); capture("result-next",false)
         assertFalse(browser.state.value.toString().contains("private-")); assertFalse(browser.state.value.tasks.toString().contains("private-"))
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { !browser.content.state.value.resultReady }
+        compose.runOnIdle { assertFalse(browser.content.state.value.secure) }
+        assertNotNull(browser.state.value.database)
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { browser.state.value.database == null }
+        assertEquals(1, requests.count { it.path.endsWith("/query") })
     }
+    @Test fun systemBackClosesResultButKeepsActiveSqlDraftProtected() {
+        install(); click("d1-details"); waitFor { browser.content.state.value.resultReady }
+        click("d1-open-SQL"); input("d1-sql", "SELECT 'draft-kept';")
+        hideKeyboard()
+        compose.waitUntil(5000) {
+            !compose.activity.window.decorView.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime())
+        }
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { !browser.content.state.value.resultReady }
+        compose.runOnIdle {
+            assertTrue(browser.content.state.value.secure)
+            assertEquals(D1Editor.SQL, browser.state.value.editor)
+            assertEquals("SELECT 'draft-kept';", browser.content.field(D1Field.SQL))
+        }
+        assertTrue(requests.none { it.method in setOf("POST", "PUT", "PATCH", "DELETE") })
+    }
+
+    @Test fun systemBackFromBrowseResultRetainsPrivateFiltersWithoutWriting() {
+        install(); click("d1-private-begin"); input("d1-table", "private-table")
+        input("d1-filter-column", "id"); input("d1-filter-value", "keep-filter")
+        click("d1-browse-ROWS"); waitFor { browser.content.state.value.resultReady }
+        hideKeyboard()
+        compose.waitUntil(5000) {
+            !compose.activity.window.decorView.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime())
+        }
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { !browser.content.state.value.resultReady }
+        compose.runOnIdle {
+            assertTrue(browser.content.state.value.secure)
+            assertNull(browser.state.value.editor)
+            assertEquals("private-table", browser.content.field(D1Field.TABLE))
+            assertEquals("keep-filter", browser.content.field(D1Field.FILTER_VALUE))
+            assertNotNull(browser.state.value.database)
+            assertTrue(browser.state.value.tasks.isEmpty())
+        }
+        // Controlled ROWS browsing legitimately uses a read-only POST /query.
+        assertEquals(1, requests.count { it.method == "POST" && it.path.endsWith("/query") })
+        assertTrue(requests.none { it.method in setOf("PUT", "PATCH", "DELETE") ||
+            (it.method == "POST" && !it.path.endsWith("/query")) })
+    }
+
+    @Test fun systemBackFromDetailsRetainsPendingExportAndDoesNotExportAgain() {
+        install(); click("d1-open-EXPORT"); prepare(); stages("export-pending-back")
+        compose.runOnIdle {
+            assertTrue(browser.content.state.value.exportReady)
+            assertFalse(browser.content.hasDraftInput())
+            assertNull(browser.state.value.editor)
+        }
+        click("d1-details"); waitFor { browser.content.state.value.resultReady }
+        androidx.test.espresso.Espresso.pressBack()
+        waitFor { !browser.content.state.value.resultReady }
+        compose.runOnIdle {
+            assertTrue(browser.content.state.value.secure)
+            assertTrue(browser.content.state.value.exportReady)
+            assertNotNull(browser.state.value.database)
+        }
+        assertEquals(1, requests.count { it.method == "POST" && it.path == "$path/export" })
+        click("d1-download-export"); waitFor { browser.content.state.value.resultReady }
+        assertEquals(exportSql.encodeToByteArray().size.toLong(), browser.content.state.value.resultBytes)
+        assertEquals(1, requests.count { it.method == "POST" && it.path == "$path/export" })
+    }
+
     @Test fun controlledBrowseAndRawBatchKeepTypesAndDoNotTurnCustomSqlIntoRead() {
         install(); click("d1-private-begin"); input("d1-table","private-table"); input("d1-filter-column","id"); input("d1-filter-value","private-filter"); input("d1-sort-column","id")
         for (kind in D1BrowseKind.entries) { val before = requests.size; click("d1-browse-${kind.name}"); waitFor { requests.size > before && !browser.state.value.loading }; assertTrue(browser.state.value.tasks.isEmpty()) }

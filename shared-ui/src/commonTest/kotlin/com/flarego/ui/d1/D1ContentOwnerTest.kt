@@ -38,6 +38,32 @@ internal class D1UiMemoryStore : D1ContentStore {
 }
 
 class D1ContentOwnerTest {
+    @Test fun draftPresenceIncludesBrowseFiltersButNotConfirmationTextOrCompletedSql() = runTest {
+        val p = KvOwnerSecurePort(); val o = D1ContentOwner(D1UiMemoryStore(), { p }, {})
+        assertFalse(o.hasDraftInput()); assertTrue(o.begin()); assertFalse(o.hasDraftInput())
+        o.set(D1Field.TYPED, "confirmed-name"); assertFalse(o.hasDraftInput())
+        o.set(D1Field.PREVIOUS_BOOKMARK, "provider-issued-bookmark"); assertFalse(o.hasDraftInput())
+        o.set(D1Field.FILTER_VALUE, " "); assertTrue(o.hasDraftInput())
+        o.set(D1Field.FILTER_VALUE, ""); assertFalse(o.hasDraftInput())
+        o.set(D1Field.SQL, "SELECT 1;"); o.set(D1Field.PARAMS, "[]"); assertTrue(o.hasDraftInput())
+        o.clearInput(); assertFalse(o.hasDraftInput())
+    }
+    @Test fun importedDraftIsPendingUntilClearedButResultAloneIsNotDraft() = runTest {
+        val store = D1UiMemoryStore(); val p = KvOwnerSecurePort(); val o = D1ContentOwner(store, { p }, {})
+        o.begin(); val source = store.content("SELECT 1;".encodeToByteArray())
+        o.importInput(source.openVerified(), D1InputKind.SQL_TEXT); source.close()
+        assertTrue(o.hasDraftInput())
+        o.acceptResult(store.content("private-result".encodeToByteArray()))
+        o.clearInput(); assertFalse(o.hasDraftInput()); assertTrue(o.state.value.resultReady)
+        o.withdraw(); assertTrue(store.live.isEmpty())
+    }
+    @Test fun revokedWindowCannotReportOrRetainPrivateDrafts() = runTest {
+        var p = KvOwnerSecurePort(); val o = D1ContentOwner(D1UiMemoryStore(), { p }, {})
+        o.begin(); o.set(D1Field.TABLE, "private-table"); assertTrue(o.hasDraftInput())
+        p = KvOwnerSecurePort(2)
+        assertFalse(o.hasDraftInput()); assertFalse(o.state.value.secure)
+        assertNull(o.field(D1Field.TABLE))
+    }
     @Test fun missingWindowRejectsInputAndClosesUnclaimedResult() = runTest {
         val store = D1UiMemoryStore(); val owner = D1ContentOwner(store, { null }, {})
         assertFalse(owner.begin()); assertFalse(owner.set(D1Field.SQL, "secret-sql"))

@@ -10,10 +10,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.flarego.core.model.AccountScope
 import com.flarego.core.application.r2.R2WriteRuntime
+import com.flarego.ui.AppBackHandler
 
 /** Integration only: drafts, confirmation ownership and task evidence stay in the browser/runtime. */
 @Composable
-fun R2BrowserHost(browser: R2Browser, account: AccountScope?) {
+fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boolean = true) {
     val state by browser.state.collectAsState()
     val tasks by browser.writeTasks.collectAsState()
     val configState by browser.configuration.state.collectAsState()
@@ -22,6 +23,33 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?) {
     var cBucketMenu by remember(browser, account) { mutableStateOf(false) }
     LaunchedEffect(browser, account) { browser.refreshContext() }
     val current = state.context?.account == account && account != null
+    val busy = state.writing || configState.writing || configState.sippy.writing || cState.writing
+    AppBackHandler(backEnabled && current && (busy || cState.open || configState.open ||
+        state.preview != null || state.objects != null || state.buckets.pendingDeleteName != null ||
+        state.buckets.editingBucketName != null)) {
+        // Consume Back while a write is in flight; leaving the surface must not cancel it.
+        if (!busy) when {
+            cState.open -> browser.c.hide()
+            configState.open -> browser.onConfigurationIntent(when {
+                configState.preview != null -> R2ConfigurationIntent.CancelPreview
+                configState.deleteRequested -> R2ConfigurationIntent.CancelDeleteConfiguration
+                configState.domainDeleteRequested -> R2ConfigurationIntent.CancelDeleteCustomDomain
+                configState.sippy.disableRequested -> R2ConfigurationIntent.CancelDisableSippy
+                configState.sippy.secureReady -> R2ConfigurationIntent.EndSippySecureEditing
+                else -> R2ConfigurationIntent.Close
+            })
+            state.preview != null -> browser.cancelPreview()
+            state.objects != null -> browser.onObjectIntent(when {
+                state.objects!!.pendingDeleteKey != null -> R2ObjectIntent.CancelDelete
+                state.objects!!.pendingBulkDelete -> R2ObjectIntent.CancelBulkDelete
+                state.stagedUpload != null -> R2ObjectIntent.CancelUpload
+                state.objects!!.selected.isNotEmpty() -> R2ObjectIntent.ClearSelection
+                else -> R2ObjectIntent.BackToBuckets
+            })
+            state.buckets.pendingDeleteName != null -> browser.onBucketIntent(R2BucketIntent.CancelDelete)
+            else -> browser.onBucketIntent(R2BucketIntent.CancelStorageClassEdit)
+        }
+    }
     if (cState.open) {
         // The batch C surface takes over the route while it is open (its own back button closes it).
         R2CScreen(browser.c, cState, account?.accountId ?: "-")
