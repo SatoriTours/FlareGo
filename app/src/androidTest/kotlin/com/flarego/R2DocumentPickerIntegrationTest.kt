@@ -193,6 +193,7 @@ class R2DocumentPickerIntegrationTest {
     private fun ownedName(kind: String) = "flarego-r2-picker-$kind-${UUID.randomUUID()}.bin".also { ownedFiles += it }
     private fun uploadPicker() {
         compose.onNodeWithTag("ro-upload-key").performScrollTo().performTextInput("dir/new.bin")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("ro-upload-btn").performScrollTo().performClick()
         waitPicker()
     }

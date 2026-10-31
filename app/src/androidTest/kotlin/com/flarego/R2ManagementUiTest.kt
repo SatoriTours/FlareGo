@@ -121,7 +121,9 @@ class R2ManagementUiTest {
         compose.onNodeWithTag("rb-create-mode-put").performScrollTo().performClick()
         compose.onNodeWithTag("rb-location-hint-none").assertDoesNotExist()
         compose.onNodeWithTag("rb-create-name").performScrollTo().performTextInput("put-bucket")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("rb-storage-class-InfrequentAccess").performScrollTo().performClick()
+        compose.onNodeWithTag("rb-storage-class-InfrequentAccess").assertIsSelected()
         compose.onNodeWithTag("rb-create-mode-put").performScrollTo()
         captureBucketEvidence("put-mode")
         compose.onNodeWithTag("rb-create-submit").performScrollTo().performClick()
@@ -273,6 +275,7 @@ class R2ManagementUiTest {
         compose.onNodeWithTag("rb-delete-confirm").assertIsNotEnabled()
         compose.onNodeWithTag("rb-delete-input").performTextInput("my-bucket")
         compose.runOnIdle { assertEquals("my-bucket", model!!.r2Browser.state.value.buckets.typedDeleteName) }
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         // The real IME changes the viewport; scroll the target into view before tapping.
         compose.onNodeWithTag("rb-delete-confirm").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
         compose.waitUntil(10000) { model!!.r2Browser.state.value.preview != null }
@@ -286,6 +289,7 @@ class R2ManagementUiTest {
     private fun previewObjectDelete() {
         compose.onNodeWithTag("ro-delete-dir/sub/file.txt").performScrollTo().performClick()
         compose.onNodeWithTag("ro-delete-input").performTextInput("dir/sub/file.txt")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("ro-delete-confirm").performScrollTo().performClick()
         compose.waitUntil(5000) { model!!.r2Browser.state.value.preview != null }
         compose.runOnIdle { assertTrue(requests.all { it.method == "GET" }) }
@@ -342,6 +346,7 @@ class R2ManagementUiTest {
     @Test fun uploadChooserCancellationPreservesDraftAndDoesNotUpload() {
         install(); openBucket()
         compose.onNodeWithTag("ro-upload-key").performScrollTo().performTextInput("dir/new.txt")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("ro-upload-btn").performScrollTo().performClick()
         compose.runOnIdle {
             val m = model!!
@@ -358,6 +363,7 @@ class R2ManagementUiTest {
     @Test fun switchingAwayWhileFilePickerIsPendingRejectsItsResult() {
         install(); openBucket()
         compose.onNodeWithTag("ro-upload-key").performScrollTo().performTextInput("stale.txt")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("ro-upload-btn").performScrollTo().performClick()
         compose.runOnIdle {
             val m = model!!

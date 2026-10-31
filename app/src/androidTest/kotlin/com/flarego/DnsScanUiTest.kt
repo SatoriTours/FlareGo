@@ -153,6 +153,7 @@ class DnsScanUiTest {
     }
     @Test fun invalidNumericTextStaysVisibleAndInvalidatesWithoutZeroOrPreview() {
         val h=install(settings=true);edit("dz-ns_ttl","oops");compose.onNodeWithTag("dz-ns_ttl").assertTextContains("oops")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
         compose.onNodeWithTag("dz-preview").performScrollTo().assertIsNotEnabled();shown("dz-validation")
         edit("dz-ns_ttl","");compose.onNodeWithTag("dz-preview").performScrollTo().assertIsNotEnabled()
         compose.runOnIdle { assertTrue(h.settingIntents.any { it is DnsZoneSettingsPanelIntent.DraftInvalidated });assertTrue(h.settingIntents.none { it is DnsZoneSettingsPanelIntent.Preview }) };noConfirm(h)

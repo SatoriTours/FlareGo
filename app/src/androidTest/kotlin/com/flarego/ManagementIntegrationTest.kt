@@ -91,6 +91,7 @@ class ManagementIntegrationTest {
         screenshot("zones-search-empty")
         compose.onNodeWithContentDescription("清空搜索").performClick()
         compose.onNodeWithTag("search-field").performTextInput(" RUNTIME.EXAMPLE ")
+        compose.onNodeWithTag("search-field").performImeAction()
         compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
         compose.onNodeWithContentDescription("取消搜索").performClick()
         compose.onNodeWithTag("zone-row-runtime-zone").performClick()

@@ -46,11 +46,11 @@ class AppSmokeTest {
     @Test
     fun freshInstallGuidesServiceAndKeySetupAcrossTabs() {
         compose.onNodeWithText("添加你的第一个云服务").assertIsDisplayed()
-        compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
+        compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("api-gateway").assertDoesNotExist()
         listOf("domains", "resources", "billing", "accounts").forEach { tab ->
             compose.onNodeWithTag("nav-$tab").performClick()
-            compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
+            compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
         }
         compose.onNodeWithText("添加 Cloudflare 服务").performClick()
         compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
@@ -92,6 +92,8 @@ class AppSmokeTest {
         compose.onNodeWithContentDescription("清空搜索").performClick()
         compose.onNodeWithTag("search-field").assert(
             SemanticsMatcher.expectValue(SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        // Restoring the full list retains its scroll offset, including on compact screens.
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("api-gateway"))
         compose.onNodeWithText("api-gateway").assertIsDisplayed()
     }
 
@@ -105,6 +107,8 @@ class AppSmokeTest {
         compose.onNodeWithTag("search-field").performImeAction()
         compose.onNodeWithText("没有匹配的解析记录").assertIsDisplayed()
         compose.onNodeWithContentDescription("清空搜索").performClick()
+        // Clear keeps search editable; restored rows must be reachable within the resized viewport.
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("192.0.2.10"))
         compose.onNodeWithText("192.0.2.10").assertIsDisplayed()
         compose.onNodeWithTag("search-field").performTextInput(" 192.0.2.10 ")
         compose.onNodeWithText("192.0.2.10").assertIsDisplayed()
@@ -256,7 +260,7 @@ class AppSmokeTest {
         instrumentation.addMonitor(monitor)
         try {
             compose.onNodeWithText("Cloudflare 授权帮助").performClick()
-            compose.onNodeWithText("添加 Cloudflare 服务").assertIsDisplayed()
+            compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
             compose.onNodeWithTag("nav-accounts").performClick()
             compose.onNodeWithContentDescription("连接账号").performClick()
             compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
