@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -66,14 +68,11 @@ private sealed interface DialogState {
 @Composable
 fun FlareGoApp(
     controller: AppController,
-    connect: suspend (String, String, String) -> Unit,
     disconnect: (Connection) -> Unit,
     openConsole: (Page) -> Unit,
     sensitiveScreen: (Boolean) -> Unit = {},
     updater: UpdateController? = null,
     connectionDraft: ConnectionDraft = remember { ConnectionDraft() },
-    discoverAccounts: (suspend (String, PageRequest) -> CloudPage<AccountSummary>)? = null,
-    verifyToken: (suspend (String, TokenKind, String?) -> TokenVerification)? = null,
     reconcileTask: (suspend (String) -> Unit)? = null,
     management: com.flarego.core.application.management.CloudflareManagement? = null,
     panelPorts: com.flarego.ui.management.ManagementPanelPorts? = null,
@@ -145,11 +144,9 @@ fun FlareGoApp(
             }
         }
     }
-    // OAuth UI contains no credentials. Protect only the manual token form, not its entry page.
-    val connectionShowsSecrets = dialog is DialogState.Connect &&
-        (oauthConnection == null || connectionDraft.manualToken)
-    DisposableEffect(connectionShowsSecrets) {
-        sensitiveScreen(connectionShowsSecrets)
+    // The connection flow never displays credentials. Other sensitive editors own their protection.
+    DisposableEffect(Unit) {
+        sensitiveScreen(false)
         onDispose { sensitiveScreen(false) }
     }
     val navPage =
@@ -230,7 +227,7 @@ fun FlareGoApp(
                             Icon(
                                 Icons.Default.Bolt,
                                 null,
-                                tint = Forest,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(32.dp),
                             )
                             Text("云账号", style = MaterialTheme.typography.titleLarge)
@@ -315,63 +312,51 @@ fun FlareGoApp(
                     ) {
                         Row(
                             Modifier.fillMaxWidth()
-                                .heightIn(min = 58.dp)
+                                .heightIn(min = if (detail) 48.dp else 56.dp)
                                 .padding(horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             if (detail)
                                 IconButton(
                                     onClick = ::navigateBack,
-                                    modifier = Modifier.size(40.dp),
+                                    modifier = Modifier.size(48.dp),
                                 ) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
                                 }
-                            IconButton(
-                                onClick = {
-                                    keyboard?.hide()
-                                    scope.launch { drawer.open() }
+                            Text(
+                                when (state.page) {
+                                    Page.DNS -> state.domain?.name ?: state.page.title
+                                    Page.DOMAINS -> managementZone?.name ?: state.page.title
+                                    Page.RESOURCE -> state.resource?.name ?: state.page.title
+                                    Page.RESOURCES -> "资源"
+                                    Page.BILLING -> "账单"
+                                    Page.ACCOUNTS -> "账号"
+                                    else -> state.page.title
                                 },
-                                modifier = Modifier.size(40.dp),
+                                modifier = Modifier.weight(1f).padding(start = if (detail) 0.dp else 12.dp)
+                                    .then(if (managementZone != null) Modifier.testTag("zone-detail-name") else Modifier),
+                                style = if (detail) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(
+                                onClick = { keyboard?.hide(); scope.launch { drawer.open() } },
+                                modifier = Modifier.widthIn(max = if (detail) 88.dp else 110.dp)
+                                    .semantics { contentDescription = "切换云账号" },
+                                contentPadding = PaddingValues(horizontal = 4.dp),
                             ) {
-                                Icon(
-                                    Icons.Default.Bolt,
-                                    "切换云账号",
-                                    tint = Lime,
-                                    modifier =
-                                        Modifier.size(30.dp)
-                                            .background(Forest, RoundedCornerShape(8.dp))
-                                            .padding(4.dp),
-                                )
-                            }
-                            Column(Modifier.weight(1f).padding(start = 7.dp)) {
-                                Text(
-                                    when (state.page) {
-                                        Page.DNS -> state.domain?.name ?: state.page.title
-                                        Page.DOMAINS -> managementZone?.name ?: state.page.title
-                                        Page.RESOURCE -> state.resource?.name ?: state.page.title
-                                        else -> state.page.title
-                                    },
-                                    style = MaterialTheme.typography.titleLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if(activeModule==null) Text(
-                                    state.selected?.let { "Cloudflare · ${it.name}" } ?: "添加服务 · 绑定密钥",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Text(state.selected?.name ?: "云账号", maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(Icons.Default.ExpandMore, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (updateState?.available != null)
                                 IconButton(
                                     onClick = { controller.navigate(Page.ACCOUNTS) },
-                                    modifier = Modifier.size(40.dp),
+                                    modifier = Modifier.size(48.dp),
                                 ) {
                                     Icon(
                                         Icons.Default.SystemUpdate,
                                         "发现应用更新",
-                                        tint = Forest,
+                                        tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(21.dp),
                                     )
                                 }
@@ -382,7 +367,7 @@ fun FlareGoApp(
                                             closeSearch()
                                         } else searchOpen = true
                                     },
-                                    modifier = Modifier.size(40.dp),
+                                    modifier = Modifier.size(48.dp),
                                 ) {
                                     Icon(
                                         if (searchOpen) Icons.Default.Close
@@ -400,7 +385,7 @@ fun FlareGoApp(
                                     IconButton(onClick = {
                                         if (management != null) management.zones.onIntent(ZoneIntent.BeginCreate)
                                         else controller.navigate(Page.BUY)
-                                    }) {
+                                    }, modifier = Modifier.testTag("zone-create")) {
                                         Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
                                     }
                                 Page.RESOURCES -> if (!(
@@ -485,47 +470,16 @@ fun FlareGoApp(
                     }
                 },
                 bottomBar = {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        tonalElevation = 0.dp,
-                        modifier = Modifier.heightIn(min = 68.dp),
-                    ) {
-                        listOf(
-                                Triple(Page.OVERVIEW, Icons.Default.GridView, "overview"),
-                                Triple(Page.DOMAINS, Icons.Default.Language, "domains"),
-                                Triple(Page.RESOURCES, Icons.Default.Inventory2, "resources"),
-                                Triple(Page.BILLING, Icons.Default.CreditCard, "billing"),
-                                Triple(Page.ACCOUNTS, Icons.Default.CloudQueue, "accounts"),
-                            )
-                            .forEach { (page, icon, tag) ->
-                                NavigationBarItem(
-                                    selected = navPage == page,
-                                    onClick = {
-                                        keyboard?.hide()
-                                        clearPanel()
-                                        management?.let { pages ->
-                                            pages.dns.onIntent(DnsIntent.Clear)
-                                            pages.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
-                                            pages.zones.onIntent(ZoneIntent.Clear)
-                                            if (page == state.page && page == Page.DOMAINS && account != null) pages.zones.onIntent(ZoneIntent.Load(account))
-                                        }
-                                        controller.navigate(page)
-                                    },
-                                    icon = { Icon(icon, null, modifier = Modifier.size(21.dp)) },
-                                    label = {
-                                        Text(
-                                            when (page) {
-                                                Page.BILLING -> "账单"
-                                                Page.RESOURCES -> "资源"
-                                                Page.ACCOUNTS -> "账号"
-                                                else -> page.title
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    },
-                                    modifier = Modifier.testTag("nav-$tag"),
-                                )
-                            }
+                    AppNavigation(navPage) { page ->
+                        keyboard?.hide()
+                        clearPanel()
+                        management?.let { pages ->
+                            pages.dns.onIntent(DnsIntent.Clear)
+                            pages.batch?.onIntent(DnsBatchIntent.Clear)
+                            pages.zones.onIntent(ZoneIntent.Clear)
+                            if (page == state.page && page == Page.DOMAINS && account != null) pages.zones.onIntent(ZoneIntent.Load(account))
+                        }
+                        controller.navigate(page)
                     }
                 },
             ) { padding ->
@@ -550,6 +504,7 @@ fun FlareGoApp(
                                     controller::navigate,
                                     { dialog = DialogState.Create },
                                     controller::refreshAllProducts,
+                                    openResource = { kind -> controller.selectResourceKind(kind); controller.navigate(Page.RESOURCES) },
                                 )
                             Page.DOMAINS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->
@@ -639,7 +594,7 @@ fun FlareGoApp(
             }
         }
         when (val modal = dialog) {
-            DialogState.Connect -> ConnectionDialog(dismiss, connect, connectionDraft, discoverAccounts, verifyToken, oauthConnection)
+            DialogState.Connect -> ConnectionDialog(dismiss, oauthConnection)
             DialogState.Create ->
                 CreateResourceDialog(dismiss) {
                     dialog = null

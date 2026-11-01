@@ -52,20 +52,20 @@
 
 ### 添加 Cloudflare 服务
 
-首次安装后显示添加服务引导，不预置测试账号或云资源。点击「添加 Cloudflare 服务」进入连接页，优先使用官方 OAuth 授权，也可选择高级 API Token 方式。目前支持 Cloudflare，其他云厂商仍在规划中。
+首次安装后显示添加服务引导，不预置测试账号或云资源。点击「连接 Cloudflare」进入全屏连接页，仅使用 Cloudflare 官方 OAuth 跳转授权。目前支持 Cloudflare，其他云厂商仍在规划中。
 
 连接成功后加载真实账号数据，重启会恢复本机已保存的连接。断开最后一个账号后回到添加服务引导；演示数据仅供设计展示和隔离测试使用。
 
 ### 连接 Cloudflare
 
 1. 打开 FlareGo 的「账号」，点击「连接 Cloudflare 账号」或标题栏的 `+`。
-2. 已配置 OAuth 的构建：点击「使用 Cloudflare 官方授权」，在系统浏览器确认权限，返回 App 后选择账号并「验证并连接」。无需填写 API Token；账号发现失败时可手填 Account ID 验证。
-3. 未配置 OAuth 或需要 API Token：点击「高级：使用 API Token 连接」→「获取 API Token」，浏览器打开 [Cloudflare API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)。选择 `Create Token` → `Create Custom Token`，按需配置权限并限定账号和 Zone 范围；不要使用 Global API Key。返回 App 填写账号名称、Account ID 和 API Token，验证后保存。
-4. 点击闪电 Logo，从抽屉选择对应账号，再进入域名、资源或账单页。
+2. 点击「前往 Cloudflare 授权」，在系统浏览器确认权限，返回 App 后自动读取账号、验证并保存连接。只有一个账号时无需其他操作；多个账号时按名称点选即可。
+3. 无需填写账号名称、Account ID 或 API Token。读取失败可「重新读取账号」或重新授权；没有手动 Token 备用模式。
+4. 点击标题栏的账号名称，从账号菜单选择对应账号，再进入域名、资源或账单页。
 
-**OAuth 已配置 Actions 构建参数，但不代表真实授权已验收**：Android Actions 工作流会注入维护者提供的公开 Client ID 和 `https://satori.tours/flarego/cloudflare/callback`，关联文件已部署；只有包含该配置的新构建才会启用授权入口，历史 APK 不会自动更新。缺少配置的其他构建仍禁用授权按钮，Token 备用路径和已有账号不受影响。浏览器授权、设备 App Links、真实 API 权限兼容性尚需实际 Actions APK 验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account-settings.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
+**OAuth 已配置 Actions 构建参数，但不代表真实授权已验收**：Android Actions 工作流会注入维护者提供的公开 Client ID 和 `https://satori.tours/flarego/cloudflare/callback`，关联文件已部署；只有包含该配置的新构建才会启用授权入口，历史 APK 不会自动更新。缺少配置的其他构建仍禁用授权按钮，不会退回手动输入；已有账号继续保留。浏览器授权、设备 App Links、真实 API 权限兼容性尚需实际 Actions APK 验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account-settings.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
 
-Account ID 是 32 位十六进制字符串。建议从读取权限开始：账号访问可使用 `Account Settings Read`，域名列表需要 Zone 读取权限；修改 DNS 时再添加 DNS 写权限。Workers、R2、D1、KV 按需授予对应读取权限。权限名称和范围以 [Cloudflare 权限文档](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) 及 [账号接口要求](https://developers.cloudflare.com/api/resources/accounts/methods/get/) 为准。
+账号编号由 App 自动获取。资源访问仍受实际授权范围限制：连接成功不代表所有模块都可读写。维护者应根据实际能力配置请求权限，用户无需自行创建 Token 或查找编号。
 
 每项资源独立处理权限不足。账单默认使用账号历史，用户级旧历史需显式选择。P2 扩展写操作还需当前凭据的 verify／Token details／完整 permission-group catalog 与实际 Zone owner 证据；只有成功读取或本机风险确认不足以授予云写权限。aux 读取本身缺权限或条件无法解释时保持 unknown／只读，不自动增加 Token 权限。
 
@@ -75,7 +75,7 @@ Account ID 是 32 位十六进制字符串。建议从读取权限开始：账�
 
 | 功能 | 当前实现 |
 | --- | --- |
-| 云账号 | 显式发现、Token 类型验证、连接、切换、断开多个 Cloudflare 账号；本机加密保存 Token |
+| 云账号 | 官方授权后自动发现并连接账号，多账号按名称选择；支持切换、断开，本机加密保存授权凭据 |
 | 域名 | Zone 列表／详情／创建／单字段编辑／完整名称确认删除／activation；显示 nameservers 与 pending，区别于域名注册 |
 | DNS | 21 类型领域表单、列表／详情／过滤／分页；差量 PATCH、独立 PUT、批量预览确认与只读核对；未知 raw 保留只读 |
 | DNS 文件与扫描 | 系统文档授权的 BIND 导入／原字节导出、扫描触发／候选审核／usage／DNS Settings；导入未知或部分结果不重放 |
@@ -96,8 +96,8 @@ P1 主线的账号发现、现代／显式旧 Workers、两种账单来源与历
 
 - API Token 及 OAuth access/refresh token 使用 Android Keystore 与 AES/GCM 加密保存，不进入 SQL 数据库、Bundle 或应用日志；APK 不包含 Client Secret。
 - OAuth 使用 Authorization Code + PKCE S256，state／精确 HTTPS 回调／十分钟有效期／一次性消费校验。访问令牌过期前续期；不因 401 自动重放业务请求。断开只删除本机凭据；撤销云端 OAuth 授权需在 Cloudflare 官方授权管理页操作。
-- 账号元数据和操作记录保存在本机 SQLDelight 数据库；Token 输入页禁止系统截图，系统备份与设备迁移已禁用。
-- 未提交的连接草稿只暂存在内存，Activity 重建后仍可继续填写；取消或验证成功后清空，进程结束后不会恢复未提交的 Token。
+- 账号元数据和操作记录保存在本机 SQLDelight 数据库；授权页不显示凭据，其他敏感资源编辑器保留截图保护；系统备份与设备迁移已禁用。
+- 未完成的授权状态只暂存在 ViewModel 内存，Activity 重建后可继续；取消后清理，进程结束后需重新授权，不恢复未保存的授权凭据。
 - 云请求固定发送到 Cloudflare HTTPS API，不携带 Token 跟随重定向。
 - 写请求禁止自动重试。出现超时或断连时保留待核对结果，再读取云端状态，避免重复提交。
 - DNS 变更先预览再确认；切换账号后，旧请求结果不会覆盖新账号的数据。

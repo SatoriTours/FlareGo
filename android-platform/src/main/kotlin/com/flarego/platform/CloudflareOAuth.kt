@@ -25,7 +25,7 @@ class OAuthConfig(val clientId: String, val redirectUri: String, val scopes: Lis
             scopes.isNotEmpty() && scopes.all { it.matches(Regex("[a-z][a-z0-9_.-]*")) }
     }
     internal fun requireConfigured() {
-        if (!configured) throw CloudException("此构建尚未配置 Cloudflare OAuth，请使用 API Token 或联系维护者")
+        if (!configured) throw CloudException("此版本暂不支持 Cloudflare 授权，请联系维护者获取已配置授权的版本")
     }
 }
 
@@ -184,7 +184,7 @@ class OAuthCredentials(
 
 private fun authorizationFailure(code: String?) = CloudException(when (code) {
     "invalid_scope" -> "授权权限配置不匹配（invalid_scope）。请联系维护者核对 OAuth 客户端允许的权限与 App 请求的 scope；重复授权无法解决。"
-    "access_denied" -> "已取消或拒绝 Cloudflare 授权，可重新授权或使用 API Token。"
+    "access_denied" -> "已取消或拒绝 Cloudflare 授权，可重新前往 Cloudflare 授权。"
     "invalid_client", "unauthorized_client" -> "OAuth 客户端配置不匹配，请联系维护者核对 Client ID、客户端可见范围与授权方式。"
     "invalid_request", "unsupported_response_type" -> "授权请求配置不匹配，请联系维护者核对回调地址与授权方式。"
     "server_error", "temporarily_unavailable" -> "Cloudflare 授权服务暂不可用，请稍后重新授权。"

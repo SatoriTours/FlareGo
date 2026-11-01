@@ -80,7 +80,7 @@ class ManagementIntegrationTest {
     @Test fun appSearchFiltersProductionZonesAndSystemBackReturnsToList() {
         val m = create(true)
         compose.runOnIdle { m.onManagementResume() }
-        compose.setContent { FlareGoApp(m.controller, m::connect, m::disconnect, {}, management = m.management) }
+        compose.setContent { FlareGoApp(m.controller, m::disconnect, {}, management = m.management) }
         compose.onNodeWithTag("nav-domains").performClick()
         compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         compose.onNodeWithContentDescription("搜索").performClick()
@@ -168,7 +168,7 @@ class ManagementIntegrationTest {
             m.controller.reloadConnections(m.controller.state.value.connections+com.flarego.core.demo.demoConnections)
             m.controller.selectConnection(m.controller.state.value.connections.first { it.id=="demo-production" })
         }
-        compose.setContent { FlareGoTheme { FlareGoApp(m.controller,{_,_,_->},{},{},management=m.management) } }
+        compose.setContent { FlareGoTheme { FlareGoApp(m.controller,{},{},management=m.management) } }
         compose.onNodeWithTag("nav-domains").performClick()
         compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         compose.onNodeWithTag("zone-demo-notice").assertExists()

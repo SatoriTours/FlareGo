@@ -173,7 +173,6 @@ class MainActivity : ComponentActivity() {
             }
             FlareGoApp(
                 current.controller,
-                current::connect,
                 current::disconnect,
                 { page ->
                     val account = state.selected?.takeUnless { it.demo }?.accountId
@@ -190,16 +189,13 @@ class MainActivity : ComponentActivity() {
                         Intent(Intent.ACTION_VIEW, Uri.parse("https://dash.cloudflare.com$path"))
                     )
                 },
-                // Pre-existing purpose (the connect/token dialog). It shares the one owner with the
-                // Sippy credential editor, so this callback can no longer clear the other purpose's
-                // flag and releasing it never clears a FLAG_SECURE this owner did not set.
+                // Authorization displays no secrets. Releasing the legacy connection purpose must
+                // never clear protection owned by a resource credential editor.
                 sensitiveScreen = { sensitive ->
                     secureWindow.setPurpose(SecurePurpose.CONNECTION_TOKEN, sensitive)
                 },
                 updater = current.updater,
                 connectionDraft = current.connectionDraft,
-                discoverAccounts = current::discoverAccounts,
-                verifyToken = current::verifyDraftToken,
                 reconcileTask = current::reconcileTask,
                 management = current.management,
                 panelPorts = current.panelPorts,

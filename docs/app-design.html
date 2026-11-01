@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FlareGo · 全页面设计</title><style>*{box-sizing:border-box}
+body{margin:0;background:#e9ece6;color:#293a2d;font-family:system-ui,-apple-system,"Noto Sans CJK SC","Microsoft YaHei",sans-serif;font-size:14px}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer}
+button:disabled{cursor:default;opacity:.42}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #df9256;outline-offset:2px}
+input:focus,textarea:focus,select:focus{outline:2px solid #7d9864;outline-offset:1px}
+svg{width:22px;height:22px;flex-shrink:0}
+button{touch-action:manipulation}
+a{color:inherit}
+.studio-head{height:76px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #ccd5c9;background:#f3f5ef;gap:20px}
+.studio-head strong{font-size:22px;letter-spacing:-.5px}
+.studio-head span{font-size:12px;color:#657661;margin-left:18px}
+.tools{display:flex;gap:8px;flex-wrap:wrap}
+.tools button,.tools select{border:1px solid #cbd5c7;background:#fff;color:#344b39;border-radius:8px;padding:8px 12px;font-size:12px}
+.tools button[aria-pressed=true]{background:#315b42;color:white}
+.workspace{display:grid;grid-template-columns:248px minmax(400px,1fr) 290px;min-height:calc(100vh - 76px)}
+.catalog{padding:24px 16px;max-height:calc(100vh - 76px);overflow:auto;position:sticky;top:0;border-right:1px solid #ccd5c9}
+.catalog-search{font-size:12px;color:#52674f;display:block}
+.catalog-search input{display:block;margin-top:8px;width:100%;padding:11px;background:#f7f9f3;border:1px solid #c6d0c2;border-radius:8px}
+#page-count{margin:14px 2px;font-size:11px;color:#6d7e67}
+.catalog details{margin-bottom:12px}
+.catalog summary{font-size:12px;font-weight:650;cursor:pointer;padding:8px 2px}
+.catalog summary span{float:right;color:#84927e}
+.catalog nav button{display:block;text-align:left;width:100%;border:0;background:transparent;border-radius:7px;padding:9px 12px;color:#52634c;font-size:12px;line-height:1.5}
+.catalog nav button.active{background:#dce7d2;color:#254631;font-weight:650}
+#stage{padding:28px;display:flex;flex-direction:column;align-items:center;gap:18px}
+.stage-label{width:360px;display:flex;justify-content:space-between;gap:14px;font-size:12px;color:#667760}
+.stage-label span:last-child{font-size:10px}
+.inspector-card{padding:30px 22px;border-bottom:1px solid #ccd5c9;line-height:1.8}
+.inspector-card h2{font-size:16px;margin:0 0 12px}
+.inspector-card h3{font-size:12px;margin:20px 0 8px}
+.inspector-card p{font-size:12px;color:#5e7058;margin:8px 0}
+.inspector-card ul{font-size:12px;color:#5e7058;padding-left:17px}
+.inspector-card code{font-size:11px;overflow-wrap:anywhere}
+.inspector-card button{background:none;border:1px solid #bccbb5;padding:9px 12px;border-radius:8px;width:100%;margin-top:10px;color:#315b42}
+.tag{display:inline-block;padding:3px 8px;background:#dde7d5;border-radius:6px;font-size:10px;color:#3f5e39}
+.tag.warn{background:#f2dfc4;color:#885c2e}
+.phone{--bg:#15201a;--surface:#202d24;--soft:#1b2820;--text:#e8eee4;--muted:#abb8a8;--line:#344639;--primary:#d2ee98;--onprimary:#25402c;--warning:#edb07c;--error:#f1a19a;--dangerbg:#392822;--radius:14px;width:360px;height:var(--phone-height,800px);display:flex;flex-direction:column;background:var(--bg);color:var(--text);box-shadow:0 0 0 1px #34463933,0 16px 40px #24392712;overflow:hidden;flex-shrink:0;font-size:15px;position:relative}
+.light .phone{--bg:#f5f6f2;--surface:#fff;--soft:#edf1e7;--text:#29352c;--muted:#66745f;--line:#dce4d5;--primary:#315b42;--onprimary:#fff;--warning:#875320;--error:#ac3930;--dangerbg:#fff0e8}
+.phone button{color:inherit}
+.status{height:24px;flex-shrink:0;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600}
+.status .system{display:flex;align-items:center;gap:5px}
+.status svg{width:13px;height:13px}
+.battery{width:16px;height:8px;border:1px solid currentColor;border-radius:2px;position:relative}
+.battery:after{content:"";position:absolute;inset:1px;background:currentColor}
+.topbar{height:56px;flex-shrink:0;display:flex;align-items:center;padding:0 8px;gap:6px}
+.topbar h1{font-size:18px;font-weight:600;line-height:1.3;flex:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.icon-button{width:44px;height:48px;display:grid;place-items:center;flex-shrink:0;background:none;border:0;border-radius:10px}
+.top-action{font-size:13px;background:none;border:0;color:var(--primary)!important;padding:12px 8px;min-height:48px}
+.scroll{flex:1;min-height:0;overflow:auto;padding:16px 20px 24px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.scroll:focus{outline:none}
+.context{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;font-size:11px;color:var(--muted);gap:8px}
+.context button{border:0;background:none;color:var(--muted);font-size:11px;padding:6px 0;text-align:left}
+.section{margin:26px 0 12px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.section:first-child{margin-top:0}
+.section button{font-size:12px;background:none;border:0;color:var(--primary);padding:6px 0}
+.muted{color:var(--muted);font-size:13px;line-height:1.65;margin:8px 0}
+.tiny{font-size:11px;line-height:1.6;color:var(--muted)}
+.hero{font-size:30px;font-weight:600;letter-spacing:-.8px;margin:6px 0 12px;line-height:1.3}
+.hero small{font-size:13px;letter-spacing:0;font-weight:400}
+.number-panel{background:var(--surface);border-radius:16px;padding:20px}
+.number-panel .hero{font-size:28px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.metric{padding:15px 0;border-top:1px solid var(--line)}
+.metric strong{font-size:23px;font-weight:550;display:block;margin-top:5px}
+.row{width:100%;border:0;border-bottom:1px solid var(--line);background:none;display:flex;align-items:center;gap:12px;padding:17px 0;text-align:left;min-height:66px}
+.row .label{flex:1;min-width:0;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.row .sub{display:block;font-size:11px;color:var(--muted);line-height:1.6;margin-top:4px;overflow-wrap:anywhere}
+.row .value{max-width:48%;text-align:right;font-size:13px;overflow-wrap:anywhere;color:var(--muted)}
+.row svg{width:16px;height:16px;color:var(--muted)}
+button.row:hover{background:var(--soft)}
+.badge{font-size:10px;padding:3px 7px;border-radius:5px;background:var(--soft);color:var(--primary);white-space:nowrap;max-width:100%}
+.badge.warn{color:var(--warning)}
+.badge.danger{color:var(--error)}
+.tabs{display:flex;gap:6px;overflow-x:auto;flex-shrink:0;margin:0 0 16px;padding:2px 0 8px;scrollbar-width:none}
+.tabs button{flex-shrink:0;min-height:40px;border:0;border-radius:20px;background:transparent;font-size:13px;padding:8px 14px;color:var(--muted)}
+.tabs button.active{background:var(--surface);color:var(--primary)}
+.search{display:flex;align-items:center;gap:10px;background:var(--surface);border-radius:12px;padding:0 14px;margin:0 0 18px;min-height:46px}
+.search svg{width:18px;height:18px;color:var(--muted)}
+.search input{min-width:0;flex:1;background:none;border:0;padding:12px 0;color:var(--text);font-size:13px;width:100%}
+.search input::placeholder{color:var(--muted)}
+.bottom-nav{height:68px;display:flex;flex-shrink:0;border-top:1px solid var(--line);padding:5px 8px 0}
+.bottom-nav button{flex:1;min-width:0;background:none;border:0;display:flex;flex-direction:column;gap:3px;align-items:center;justify-content:center;color:var(--muted);font-size:10px}
+.bottom-nav .navicon{width:54px;height:30px;display:grid;place-items:center;border-radius:18px}
+.bottom-nav svg{width:21px;height:21px}
+.bottom-nav button.selected{color:var(--primary)}
+.bottom-nav button.selected .navicon{background:var(--surface)}
+.gesture{height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.gesture:after{content:"";width:108px;height:4px;border-radius:4px;background:var(--text);opacity:.55}
+.primary,.secondary,.danger-action{width:100%;min-height:48px;padding:12px 18px;border:0;border-radius:25px;font-size:13px;font-weight:600;background:var(--primary);color:var(--onprimary)!important;line-height:1.5;text-align:center;display:block}
+.secondary{background:transparent;border:1px solid var(--line);color:var(--primary)!important}
+.danger-action{background:var(--dangerbg);color:var(--error)!important;border:1px solid var(--error)}
+.link{background:none;border:0;color:var(--primary)!important;min-height:44px;padding:10px 8px;font-size:13px;line-height:1.5}
+.footer{padding:12px 20px 8px;flex-shrink:0;background:var(--bg)}
+.footer:empty{display:none}
+.footer .split{grid-template-columns:1fr 1fr}
+.footer .link{width:100%}
+.focus{margin:auto 0;padding:0 4px 60px;width:100%}
+.focus h2{font-size:24px;font-weight:600;line-height:1.4;margin:0 0 12px}
+.focus .primary,.focus .secondary{margin-top:28px;font-size:15px}
+.center-content{display:flex;flex-direction:column;padding:28px 20px}
+.progress-title{display:flex;align-items:center;gap:12px}
+.progress-title h2{margin:0}
+.spinner{display:inline-block;width:22px;height:22px;border:2px solid var(--line);border-top-color:var(--primary);border-right-color:var(--primary);border-radius:50%;flex-shrink:0}
+.field{display:block;margin:0 0 20px;font-size:13px;color:var(--muted);line-height:1.5}
+.field>span{display:block;margin-bottom:8px}
+.field input,.field select,.field textarea{display:block;width:100%;border:1px solid var(--line);border-radius:10px;padding:13px 12px;background:var(--soft);color:var(--text);min-height:48px;line-height:1.5;font-size:15px}
+.field textarea{min-height:110px;resize:vertical}
+.field small{font-size:11px;line-height:1.6;display:block;margin-top:6px}
+.field.invalid input{border-color:var(--error)}
+.field.invalid small{color:var(--error)}
+.field input[type=checkbox]{width:20px;min-height:20px;display:inline-block}
+.switch-row{display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--line);padding:15px 0;min-height:62px}
+.switch-row span{flex:1;font-size:15px;line-height:1.5}
+.switch-row input{appearance:none;width:42px;height:26px;border-radius:20px;background:var(--line);position:relative;flex-shrink:0;margin:0}
+.switch-row input:after{content:"";position:absolute;width:18px;height:18px;left:4px;top:4px;border-radius:50%;background:var(--muted)}
+.switch-row input:checked{background:var(--primary)}
+.switch-row input:checked:after{left:20px;background:var(--onprimary)}
+.check-row{display:flex;align-items:flex-start;gap:10px;line-height:1.65;font-size:13px;margin:18px 0}
+.check-row input{width:18px;height:18px;flex-shrink:0;margin-top:3px;accent-color:#719853}
+.notice{border-left:2px solid var(--warning);padding:8px 0 8px 12px;font-size:13px;line-height:1.7;margin:18px 0;color:var(--muted)}
+.notice.error{border-color:var(--error)}
+.details{border-top:1px solid var(--line);padding:12px 0;margin-top:18px;font-size:13px;color:var(--muted)}
+.details summary{cursor:pointer;min-height:28px;line-height:1.7}
+.details p{font-size:12px;line-height:1.8}
+.privacy{margin:0;border:0;padding:0}
+.privacy summary{text-align:center;font-size:11px;list-style:none;min-height:40px;line-height:40px}
+.privacy p{max-height:140px;overflow:auto}
+.code{font-family:ui-monospace,monospace;font-size:12px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface);border-radius:10px;padding:16px;margin:14px 0;color:var(--text)}
+.table-wrap{overflow:auto;margin:16px 0}
+.phone table{font-size:12px;border-collapse:collapse;width:100%}
+.phone th,.phone td{text-align:left;padding:12px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+.phone th{color:var(--muted);font-weight:500}
+.diff{margin:18px 0;border-top:1px solid var(--line);padding-top:14px}
+.diff .before{color:var(--muted);text-decoration:line-through;font-size:13px;margin:8px 0}
+.diff .after{color:var(--primary);font-size:15px;overflow-wrap:anywhere}
+.progress{height:4px;background:var(--line);border-radius:6px;margin:22px 0}
+.progress span{display:block;background:var(--primary);height:100%;border-radius:6px}
+.line-actions{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:14px 0}
+.line-actions .secondary{width:auto;flex:1}
+.skeleton{height:16px;background:var(--surface);border-radius:4px;margin:25px 0}
+.skeleton:nth-child(2n){width:66%}
+.danger-text{color:var(--error)!important}
+.big-divider{height:18px}
+.large .phone{font-size:23px}
+.large .topbar h1{font-size:25px}
+.large .topbar{height:64px}
+.large .row .label,.large .switch-row span,.large .field input,.large .field select,.large .field textarea{font-size:22px}
+.large .row .sub,.large .tiny,.large .context,.large .context button,.large .badge{font-size:16px}
+.large .muted,.large .row .value,.large .field,.large .field small,.large .primary,.large .secondary,.large .danger-action,.large .link,.large .tabs button,.large .section,.large .check-row,.large .notice,.large .details,.large .details p{font-size:20px}
+.large .focus h2{font-size:34px}
+.large .focus .primary{font-size:23px}
+.large .bottom-nav{height:78px}
+.large .bottom-nav button{font-size:13px}
+.large .split{grid-template-columns:1fr}
+.large .footer .split{grid-template-columns:1fr 1fr}
+.large .phone table,.large .code{font-size:18px}
+.large .focus{padding-bottom:24px}
+.large .privacy summary{font-size:17px}
+.large .context{flex-wrap:wrap}
+.large .hero{font-size:36px}
+.large .search input{font-size:20px}
+.large .top-action{font-size:18px}
+.large .row{align-items:flex-start}
+.large .row .value{max-width:40%}
+.large .field small{font-size:17px}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#304b35;color:#fff;padding:13px 18px;border-radius:10px;z-index:20;font-size:13px;max-width:90vw;box-shadow:0 5px 20px #0002}
+#toast:empty{display:none}
+.gallery-mode .workspace{display:block}
+.gallery-mode .catalog,.gallery-mode #inspector{display:none}
+.gallery-mode #stage{display:block;padding:28px}
+.gallery-heading{display:flex;justify-content:space-between;align-items:center;max-width:1512px;margin:0 auto 24px;gap:16px}
+.gallery-heading h2{font-size:23px;margin:0}
+.gallery-heading p{font-size:12px;color:#64785c}
+.gallery-heading select{padding:10px;border:1px solid #bdcdb5;background:#fff;border-radius:9px}
+.sheet{display:grid;grid-template-columns:repeat(4,360px);gap:24px;margin:0 auto;max-width:1512px;overflow:auto}
+.sheet-item{width:360px}
+.sheet-label{font-size:12px;margin-bottom:12px;color:#52694b;display:flex;justify-content:space-between;gap:10px}
+.sheet-label button{font-size:11px;border:0;background:none;color:#315b42;padding:0}
+.sheet .phone{box-shadow:0 0 0 1px #34463922}
+.solo .studio-head,.solo .catalog,.solo #inspector,.solo .stage-label{display:none}
+.solo .workspace{display:block}
+.solo #stage{padding:0;display:block}
+.solo .phone{box-shadow:none}
+.solo{background:#15201a}
+.board-only .studio-head{display:none}
+.coverage{max-width:1100px;margin:auto}
+.coverage h2{font-size:24px}
+.coverage p{line-height:1.8;color:#617259}
+.coverage table{width:100%;border-collapse:collapse;font-size:12px}
+.coverage td,.coverage th{text-align:left;vertical-align:top;border-bottom:1px solid #c5d3bd;padding:14px 10px;line-height:1.8}
+.coverage td button{border:0;background:none;color:#315b42;padding:4px 6px;text-decoration:underline;cursor:pointer}
+.coverage code{word-break:break-word;font-size:11px}
+.coverage .coverage-note{padding:18px;border:1px solid #c2d0ba;border-radius:12px;margin:20px 0}
+@media(max-width:1100px){.workspace{grid-template-columns:210px minmax(360px,1fr)}
+#inspector{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr}
+.studio-head{height:auto;min-height:76px;padding:16px;flex-wrap:wrap}
+.sheet{grid-template-columns:repeat(4,360px)}
+}
+@media(max-width:650px){.workspace{display:block}
+.catalog{position:static;max-height:240px;border-bottom:1px solid #ccd5c9}
+.catalog details{margin-bottom:3px}
+.catalog-search{display:flex;align-items:center;gap:12px}
+.catalog-search input{margin:0;flex:1}
+#stage{padding:24px 0}
+.studio-head span{display:block;margin:4px 0}
+.tools{gap:4px}
+.tools button,.tools select{padding:8px;font-size:11px}
+#inspector{display:block}
+.gallery-mode #stage{padding:20px 14px}
+.gallery-heading{align-items:start;flex-direction:column}
+.coverage{padding:0 14px}
+.stage-label{max-width:calc(100vw - 24px)}
+.phone{max-width:100vw}
+.solo .phone{max-width:none}
+}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}
+}
+
+
+[hidden]{display:none!important}
+.row+.primary,.row+.secondary{margin-top:18px}
+.phone .scroll .primary+.link{width:100%}
+
+
+.sheet.five{grid-template-columns:repeat(5,360px);max-width:1896px}
+.gallery-heading:has(+ .five){max-width:1896px}
+
+</style><style>/* Shared visual system, applied to every page and state in the catalogue. */
+body{background:#e9ebe6;color:#25372e;font-family:Inter,Arial,"Noto Sans CJK SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+.studio-head{background:#eef0eb;border-color:#d6ddd2}.studio-head strong{font-size:19px}.studio-head span{color:#718074}
+.tools button,.tools select{border-radius:20px;background:transparent;border-color:#cbd3c7}.tools button[aria-pressed=true]{background:#263c30}
+.catalog{border-color:#d6ddd2}.catalog nav button.active{background:#dce5d8;color:#284a36}.catalog nav button{line-height:1.4}
+.catalog-search input{background:#f5f7f2;border-color:#d2dace;border-radius:10px}
+.phone{--bg:#131b18;--surface:#1b2520;--soft:#202b25;--text:#f0f3eb;--muted:#a1afa4;--faint:#8d9e91;--line:#2a362e;--primary:#c4dfaa;--onprimary:#131b18;--warning:#d9bf88;--error:#f0a8a0;--dangerbg:#31221f;--radius:16px;border-radius:28px;font-size:14px;color-scheme:dark;box-shadow:0 0 0 1px #1835230a,0 20px 45px -20px #213a2b40}
+.light .phone{--bg:#f8f9f6;--surface:#fff;--soft:#eff2ed;--text:#22352c;--muted:#626f66;--faint:#7b877d;--line:#e7ece5;--primary:#3a6c50;--onprimary:#f8f9f6;--warning:#906c31;--error:#ac4338;--dangerbg:#f8ebe7;color-scheme:light}
+.phone svg{stroke-width:1.65}.phone button{transition:background-color .12s ease}.phone button:hover{filter:brightness(1.04)}
+.status{height:36px;padding:12px 23px 0;align-items:flex-start;font-size:11px}.status .system{gap:6px}.battery{width:18px;height:9px;border-radius:3px}
+.topbar{height:48px;padding:0 10px;gap:3px}.topbar h1{font-size:16px;font-weight:500;letter-spacing:-.2px}.icon-button{height:44px;width:44px;border-radius:50%}.icon-button svg{width:20px;height:20px}
+.top-action{font-size:12px;min-height:44px;padding:10px 8px}.root-topbar{height:56px;padding:0 20px;gap:8px}.root-topbar h1{font-size:25px;font-weight:600;letter-spacing:-.7px}
+.account-chip{display:flex;align-items:center;gap:5px;white-space:nowrap;min-height:44px;font-size:11px;background:none;border:0;padding:0;color:var(--muted)!important}.account-chip svg{width:13px;height:13px}
+.add-action{background:var(--text);color:var(--bg)!important;width:36px;height:36px;min-width:36px;margin:4px}.add-action svg{width:18px;height:18px}
+.scroll{padding:8px 20px 18px;scrollbar-width:none}.scroll::-webkit-scrollbar{display:none}.root-phone .scroll{padding-top:4px}
+.section{margin:18px 0 8px;font-size:13px;color:var(--muted);font-weight:500;min-height:24px}.section:first-child{margin-top:8px}.section button{min-height:32px;font-size:12px;color:var(--muted)}
+.muted{font-size:12px;line-height:1.7;margin:8px 0}.tiny{font-size:11px;line-height:1.6}.context{font-size:11px;margin:0 0 12px}.context button{font-size:11px}
+.row{min-height:52px;padding:12px 0;gap:10px}.row:has(.sub){min-height:62px}.row .label{font-size:14px;line-height:1.5;font-weight:400}.row .sub{font-size:11px;line-height:1.55;margin-top:4px}.row .value{font-size:12px;color:var(--muted);max-width:48%;line-height:1.55}.row>svg{width:14px;height:14px;color:var(--faint)}
+.row:last-child{border-bottom:0}.row:hover{border-radius:0}.badge{border-radius:5px;padding:2px 5px;font-size:10px;background:transparent;color:var(--primary)}
+.resource-list{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.resource-entry{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:11px 2px;border:0;background:transparent;text-align:left}.resource-entry+.resource-entry{border-top:1px solid var(--line)}
+.resource-entry>svg:first-child{height:18px;width:18px;color:var(--muted)}.resource-entry>span{flex:1;font-size:14px}.resource-entry small{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:20px;text-align:right}.resource-entry>svg:last-child{height:13px;width:13px;color:var(--faint)}
+.pending-line{display:flex;align-items:center;gap:9px;width:100%;min-height:48px;margin-top:14px;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:none;color:var(--muted)!important;text-align:left;font-size:12px}.pending-line i{width:5px;height:5px;border-radius:50%;background:var(--warning)}.pending-line span{flex:1}.pending-line svg{width:15px;height:15px}
+.domain-list .row{min-height:72px;padding:14px 0}.domain-list .row .label{font-size:17px;letter-spacing:-.3px}.domain-list .sub{margin-top:6px;font-size:11px;letter-spacing:0}.domain-state{display:flex;gap:6px;align-items:center}.domain-state:before{content:"";width:5px;height:5px;border-radius:50%;background:var(--primary)}.domain-state.waiting:before{background:var(--warning)}
+.tabs{border-bottom:1px solid var(--line);border-radius:0;gap:22px;margin:0 0 4px;padding:0;min-height:46px;align-items:stretch}.tabs button{position:relative;min-height:46px;font-size:12px;padding:0;border-radius:0;color:var(--muted);background:none!important}.tabs button.active{font-weight:600;color:var(--text)}.tabs button.active:after{content:"";position:absolute;width:16px;height:2px;background:var(--primary);border-radius:2px;bottom:0;left:calc(50% - 8px)}
+.search-module{margin:0}.list-tools{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--line);margin:0 0 1px;min-height:46px}.list-tools .tabs{flex:1;min-width:0;margin:0;border:0}.list-tools .search-trigger{flex-shrink:0;margin-right:-10px;color:var(--muted)}.search-trigger svg{height:18px;width:18px}.search-trigger[aria-expanded=true]{color:var(--primary)}
+.search-editor{display:flex;align-items:center;gap:2px;margin:8px 0 6px}.search-editor .search{margin:0;flex:1;min-width:0}.search{background:var(--soft);min-height:44px;border-radius:12px;padding:0 12px}.search input{font-size:12px;padding:12px 0}.search svg{height:17px;width:17px}.close-search{margin-right:-10px;color:var(--muted)}.close-search svg{transform:rotate(45deg);height:19px;width:19px}.search-empty{text-align:center;padding:30px 0;color:var(--muted);font-size:13px}
+.form-group{border:1px solid var(--line);border-radius:16px;background:var(--surface);overflow:hidden;margin:10px 0 14px}.form-group>.field{margin:0 16px;padding:13px 0;border-bottom:1px solid var(--line)}.form-group>.field:last-child{border:0}.field{margin:0 0 14px;font-size:12px}.field>span{margin-bottom:7px;font-size:12px}.field input,.field select,.field textarea{font-size:14px;line-height:1.5;border-radius:10px;background:var(--surface);min-height:44px;padding:11px 12px;border-color:var(--line)}
+.form-group>.field input,.form-group>.field select,.form-group>.field textarea{border:0;background:transparent;border-radius:0;min-height:28px;padding:2px 0}.form-group>.field select{min-height:32px}.form-group>.field textarea{min-height:100px;padding-top:4px;line-height:1.7}.field small{font-size:11px;margin-top:6px;line-height:1.55}.field.invalid{border-bottom:1px solid var(--error)!important}.field.invalid input{border-bottom:1px solid var(--error)!important}
+.record-heading{display:flex;align-items:center;gap:12px;margin:4px 0 16px}.record-heading>span{display:grid;place-items:center;flex:none;width:43px;height:47px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--primary);font-size:18px}.record-heading strong{font-size:21px;font-weight:500;letter-spacing:-.6px;overflow-wrap:anywhere}.record-heading small{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.switch-row{min-height:56px;padding:12px 0;gap:12px}.switch-row span{font-size:13px}.switch-row input{height:23px;width:38px}.switch-row input:after{height:17px;width:17px;left:3px;top:3px}.switch-row input:checked:after{left:18px}
+.details{margin:12px 0 0;padding:12px 0;border-top:1px solid var(--line);font-size:12px}.details summary{min-height:28px;line-height:1.8;color:var(--muted)}.details p{font-size:12px;line-height:1.7}.details .form-group{margin-top:12px}.check-row{font-size:12px;line-height:1.75;margin:16px 0}.check-row input{accent-color:var(--primary)}
+.notice{font-size:12px;line-height:1.7;padding:10px 0 10px 12px;margin:14px 0;border-left-width:2px;color:var(--muted)}.notice.error{color:var(--error)}
+.primary,.secondary,.danger-action{font-size:13px;min-height:48px;border-radius:14px;padding:12px 16px;font-weight:500;line-height:1.6}.secondary{border-color:var(--line);color:var(--text)!important}.danger-action{border-color:var(--line);color:var(--error)!important}.link{font-size:12px;min-height:44px}.footer{padding:16px 20px 8px}.scroll>.footer{padding:16px 0 0;background:transparent}.footer .split{gap:10px}.row+.primary,.row+.secondary{margin-top:16px}
+.number-panel{background:transparent;border:0;border-bottom:1px solid var(--line);padding:16px 0;border-radius:0}.number-panel .hero{font-size:28px;font-weight:500;margin:8px 0;letter-spacing:-.6px}.hero{font-size:26px;font-weight:500;line-height:1.3}.hero small{font-size:12px}.metric strong{font-size:22px}
+.code{font-size:12px;line-height:1.75;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface);margin:12px 0}.table-wrap{margin:12px 0;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.phone th,.phone td{padding:11px 12px;font-size:12px}.phone th{background:var(--soft);font-weight:500}.phone tbody tr:last-child td{border-bottom:0}
+.diff{margin:16px 0;padding-top:12px}.diff .before{font-size:12px}.diff .after{font-size:14px}.line-actions{gap:8px;margin:12px 0}.line-actions .secondary{padding:10px;min-width:0}
+.center-content{padding:24px 20px;justify-content:center}.focus{padding:0 0 28px}.focus h2{font-size:23px;letter-spacing:-.4px;font-weight:500;line-height:1.45;margin-bottom:10px}.focus .primary,.focus .secondary{margin-top:24px;font-size:14px}.privacy{border:0;margin:0;padding:0}.privacy summary{font-size:11px;text-align:center}.spinner{width:20px;height:20px}.progress-title{gap:10px}.progress-title h2{margin:0}.skeleton{height:13px;margin:24px 0;background:var(--soft)}
+.bottom-nav{height:68px;align-items:center;padding:5px 12px 0}.bottom-nav button{position:relative;height:58px;font-size:10px;color:var(--faint);gap:5px}.bottom-nav .navicon{width:24px;height:24px;background:transparent!important}.bottom-nav svg{width:21px;height:21px}.bottom-nav button.selected{color:var(--primary)}.bottom-nav button.selected:before{content:"";position:absolute;top:-6px;left:calc(50% - 8px);width:16px;height:2px;border-radius:2px;background:var(--primary)}.gesture{height:22px}.gesture:after{width:90px;height:4px;opacity:.65}
+.sheet .phone{box-shadow:0 0 0 1px #1835230a,0 16px 30px -20px #213a2b40}.solo .phone{border-radius:0}.sheet-label{color:#596c5d}.gallery-heading p{color:#718074}.tag{background:#dce5d8;color:#284a36}.inspector-card button{border-radius:10px}.inspector-card{border-color:#d6ddd2}
+/* Larger text grows the content; it never shrinks controls or forces a fixed card. */
+.large .root-topbar h1{font-size:28px}.large .root-topbar{height:64px}.large .topbar h1{font-size:22px}.large .account-chip{font-size:12px}.large .top-action{font-size:15px}.large .row .label{font-size:20px}.large .row .sub,.large .row .value{font-size:16px}.large .resource-entry{min-height:56px}.large .resource-entry>span{font-size:19px}.large .resource-entry small{font-size:17px}.large .section{font-size:17px}.large .section button{font-size:15px}.large .tabs{gap:16px}.large .tabs button{font-size:17px;min-height:50px}.large .search input{font-size:17px}.large .field>span{font-size:17px}.large .field input,.large .field select,.large .field textarea{font-size:20px}.large .field small{font-size:15px}.large .switch-row span{font-size:19px}.large .muted,.large .notice,.large .check-row,.large .details,.large .details summary,.large .details p{font-size:17px}.large .primary,.large .secondary,.large .danger-action{font-size:18px}.large .link{font-size:17px}.large .record-heading strong{font-size:24px}.large .record-heading small{font-size:15px}.large .pending-line{font-size:16px}.large .focus h2{font-size:30px}.large .focus .primary{font-size:20px}.large .footer .split{grid-template-columns:1fr 1fr}.large .bottom-nav{height:78px}.large .bottom-nav button{font-size:12px}.large .domain-list .row .label{font-size:22px}.large .domain-list .sub{font-size:16px}
+@media(prefers-reduced-motion:reduce){.phone button{transition:none}}
+
+.loading-status{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);padding:14px 0}.large .loading-status{font-size:18px}
+</style></head>
+<body>
+<header class="studio-head"><div><strong>FlareGo</strong><span>全页面设计 · 仅预览</span></div><div class="tools"><select id="viewport" aria-label="参考屏幕"><option value="800">20:9 · 360 × 800</option><option value="640">短屏 · 360 × 640</option></select><button id="theme" aria-pressed="false">浅色</button><button id="font" aria-pressed="false">大字号</button><button id="gallery">页面总览</button></div></header>
+<div class="workspace"><aside class="catalog"><label class="catalog-search">查找页面<input id="filter" placeholder="名称 / 功能" type="search"></label><div id="page-count"></div><nav id="catalog" aria-label="设计稿目录"></nav></aside><main id="stage"></main><aside id="inspector"></aside></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>'use strict';
+// Local design prototype only. All names, values and results below are synthetic.
+const UI='shared-ui/src/commonMain/kotlin/com/flarego/ui/';
+const groups={home:'总览与导航',connect:'连接账号',zones:'域名管理',dns:'DNS 管理',security:'安全与站点设置',workers:'Workers',r2:'R2 存储',kv:'KV 存储',d1:'D1 数据库',billing:'账单',account:'账号与更新',tasks:'操作记录',states:'通用状态',demo:'演示与官方入口'};
+const sources={home:['Screens.kt','FlareGoApp.kt','ServiceSetup.kt'],connect:['OAuthConnectionDialog.kt','OAuthConnection.kt'],zones:['zones/ZonePage.kt','zones/ZoneForm.kt'],dns:['dns/DnsPage.kt','dns/DnsRecordForm.kt','dns/DnsBatchPanel.kt','dns/DnsFilesPanel.kt','dns/DnsScanPanel.kt','dns/DnsZoneSettingsPanel.kt'],security:['dns/DnssecPanel.kt','zones/ZoneSettingsPanel.kt'],workers:['Screens.kt'],r2:['r2/R2BrowserHost.kt','r2/R2BucketList.kt','r2/R2ObjectList.kt','r2/R2ConfigurationScreen.kt','r2/R2CScreen.kt'],kv:['kv/KvBrowserHost.kt'],d1:['d1/D1BrowserHost.kt'],billing:['Screens.kt'],account:['Screens.kt','UpdatePanel.kt','Forms.kt'],tasks:['Screens.kt','kv/KvBrowserHost.kt','d1/D1BrowserHost.kt'],states:['Components.kt','Screens.kt'],demo:['Purchase.kt','Forms.kt']};
+const paths={back:'<path d="M20 12H4m7-7-7 7 7 7"/>',chevron:'<path d="m9 6 6 6-6 6"/>',down:'<path d="m6 9 6 6 6-6"/>',search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',plus:'<path d="M12 5v14M5 12h14"/>',more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',grid:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z"/>',box:'<path d="m3 7 9-4 9 4v10l-9 4-9-4Zm0 0 9 4 9-4M12 11v10"/>',card:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18m-14 5h4"/>',cloud:'<path d="M6 18a5 5 0 1 1 .7-9.95A6.5 6.5 0 0 1 19.4 10 4 4 0 0 1 19 18Z"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',check:'<path d="m5 12 4 4L19 6"/>',external:'<path d="M14 4h6v6m0-6-9 9M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>',refresh:'<path d="M20 10a8 8 0 1 0-1 8M20 4v6h-6"/>',signal:'<path d="M4 19v-3m5 3v-7m5 7V8m5 11V4"/>'};
+paths.user='<circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>';
+paths.arrow='<path d="M5 12h14m-5-5 5 5-5 5"/>';
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const icon=n=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[n]||paths.chevron}</svg>`;
+const goAttr=id=>id?`data-go="${esc(id)}"`:'data-demo="此处为设计预览，不会向云端发送请求。"';
+const btn=(label,id,kind='primary')=>`<button class="${kind}" ${goAttr(id)}>${label}</button>`;
+const action=(label,id)=>({label,id});
+const row=(label,sub='',id='',right='')=>`<${id?'button':'div'} class="row" ${id?goAttr(id):''} ${id?`data-action-label="${esc(label)}"`:''}><span class="label">${label}${sub?`<span class="sub">${sub}</span>`:''}</span>${right?`<span class="value">${right}</span>`:''}${id?icon('chevron'):''}</${id?'button':'div'}>`;
+const badge=(s,cls='')=>`<span class="badge ${cls}">${s}</span>`;
+const section=(title,link='',id='')=>`<div class="section"><span>${title}</span>${link?`<button ${goAttr(id)}>${link}</button>`:''}</div>`;
+const muted=s=>`<p class="muted">${s}</p>`;
+const note=(s,cls='')=>`<div class="notice ${cls}">${s}</div>`;
+const details=(title,text)=>`<details class="details"><summary>${title}</summary><p>${text}</p></details>`;
+const field=(label,value='',type='text',hint='')=>`<label class="field"><span>${label}</span>${type==='textarea'?`<textarea spellcheck="false">${esc(value)}</textarea>`:type.startsWith('select:')?`<select>${type.slice(7).split('|').map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}</select>`:`<input type="${type}" value="${esc(value)}" autocomplete="off" spellcheck="false">`}${hint?`<small>${hint}</small>`:''}</label>`;
+const toggle=(label,on=false)=>`<label class="switch-row"><span>${label}</span><input aria-label="${label}" type="checkbox" role="switch" ${on?'checked':''}></label>`;
+const check=(label,gate=false)=>`<label class="check-row"><input type="checkbox" ${gate?'data-gate-check':''}><span>${label}</span></label>`;
+const table=(heads,rows)=>`<div class="table-wrap"><table><thead><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+const code=s=>`<pre class="code">${esc(s)}</pre>`;
+const tabs=(items,active)=>`<div class="tabs">${items.map(([label,id])=>`<button class="${id===active?'active':''}" ${goAttr(id)}>${label}</button>`).join('')}</div>`;
+const search=placeholder=>`<div class="search-module"><div class="search-editor" hidden><label class="search">${icon('search')}<input type="search" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" data-local-filter></label><button class="icon-button close-search" data-close-search aria-label="关闭搜索">${icon('plus')}</button></div><div class="list-tools"><button class="icon-button search-trigger" data-toggle-search aria-expanded="false" aria-label="${esc(placeholder)}">${icon('search')}</button></div></div>`;
+const context=(s='Jim 的账号')=>`<div class="context"><button data-go="account-switch">${s} ⌄</button><span>刚刚更新</span></div>`;
+const diff=(label,before,after)=>`<div class="diff"><span class="tiny">${label}</span><div class="before">${before}</div><div class="after">${after}</div></div>`;
+const focus=(title,desc='',label='',target='')=>`<div class="focus"><h2>${title}</h2>${desc?muted(desc):''}${label?btn(label,target):''}</div>`;
+const privacy=`<details class="details privacy"><summary>权限与隐私 ›</summary><p>仅访问你授权的功能。凭据加密保存在本机；可在 Cloudflare 撤销授权。</p></details>`;
+const resourceTabs=active=>tabs([['Workers','workers'],['R2','r2'],['KV','kv'],['D1','d1']],active);
+const zoneTabs=active=>tabs([['概况','zone'],['DNS','dns'],['设置','site-settings'],['安全','dnssec']],active);
+const pages=[];
+function add(id,group,title,body,opt={}){pages.push({id,group,title,body,back:opt.root?null:opt.back||'overview',sources:opt.sources||sources[group],intent:opt.intent||'减少重复说明，将当前内容和主要操作放在同一层级。',boundary:opt.boundary||'依据当前工作区入口设计；展示数据均为示例，能力与真实权限以 App 实现为准。',...opt})}
+function form(id,group,title,body,back,next='change-review',opt={}){add(id,group,title,body,{back,form:true,footer:btn('预览变更',next),intent:'单列表单，标签始终可见；字段校验就地显示，预览与提交分开。',...opt})}
+function confirm(id,group,title,body,back,opt={}){add(id,group,title,body,{back,footer:`<div class="split">${btn('返回编辑',back,'secondary')}${btn('确认提交',null)}</div>`,intent:'明确当前目标与变更内容；保留现有独立确认流程。',...opt})}
+// Primary navigation and account context.
+const resourceEntry=(name,count,i,to)=>`<button class="resource-entry" ${goAttr(to)}>${icon(i)}<span>${name}</span><small>${count}</small>${icon('chevron')}</button>`;
+add('overview','home','总览',()=>section('已加载资源')+`<div class="resource-list">${resourceEntry('域名','6','globe','domains')}${resourceEntry('Workers','4','cloud','workers')}${resourceEntry('R2 存储','2','box','r2')}${resourceEntry('KV 存储','3','grid','kv')}${resourceEntry('D1 数据库','2','box','d1')}</div>`+section('快速访问','操作记录','jobs')+row('example.com','DNS 与站点设置','zone')+row('media-assets','R2 存储桶','r2-objects')+row('app-config','KV 命名空间','kv-keys')+`<button class="pending-line" data-go="jobs-pending"><i></i><span>1 项操作待核对</span>${icon('arrow')}</button>`,{root:'overview',intent:'常用资源是紧凑入口，数量靠右弱化；不叠加总数卡片。待核对操作单独保留。',boundary:'数量为已加载列表的示例计数，不能当作账号全量。所有数据均为合成示例。'});
+add('first','home','总览',()=>focus('添加你的云账号','','连接 Cloudflare','connect'),{root:'overview',center:true,intent:'首次进入只保留连接入口，其余 Tab 仍可访问。'});
+add('account-switch','home','切换账号',()=>section('Cloudflare')+row('Jim 的账号','当前使用','overview',badge('当前'))+row('FlareGo 团队','已连接','overview')+btn('添加账号','connect','secondary'),{back:'overview',intent:'将原抽屉整理为账号选择页；切换保留当前功能分类，关闭旧账号详情。',boundary:'原生实施时保留账号隔离语义；此原型的切换仅跳转示例。其他厂商不作为可连接入口。'});
+add('search','home','搜索域名',()=>search('搜索已加载的域名')+row('example.com','已激活 · DNS 托管','zone')+row('example.net','等待激活','zone-activation'),{back:'domains',intent:'搜索与结果同屏，明确作用于当前列表；不新增假全局搜索。'});
+add('create-resource','home','创建资源',()=>row('R2 存储桶','对象存储','r2-create')+row('KV 命名空间','键值存储','kv-create')+row('D1 数据库','SQL 数据库','d1-create')+section('官方控制台')+row('Workers','在 Cloudflare 中部署','worker-console'),{back:'workers'});
+// Approved minimal connection direction.
+add('connect','connect','添加账号',()=>focus('连接 Cloudflare','在浏览器中完成授权','前往授权','connect-wait'),{center:true,back:'accounts',footer:privacy});
+add('connect-wait','connect','添加账号',()=>`<div class="focus"><div class="progress-title"><span class="spinner"></span><h2>等待授权</h2></div>${muted('完成授权后返回这里')}${btn('继续授权','connect-loading')}</div>`,{center:true,back:'accounts',boundary:'原型点击进入连接状态以供查看；正式版必须等待真实 OAuth 回调。'});
+add('connect-loading','connect','添加账号',()=>`<div class="focus"><div class="progress-title"><span class="spinner"></span><h2>正在连接</h2></div>${muted('正在读取账号…')}</div>`,{center:true,back:'accounts',related:['connect-saving','connect-choose','connect-error']});
+add('connect-saving','connect','添加账号',()=>`<div class="focus"><div class="progress-title"><span class="spinner"></span><h2>正在连接</h2></div>${muted('正在保存连接…')}</div>`,{center:true,back:'accounts',locked:true});
+add('connect-choose','connect','选择账号',()=>row('Jim 的账号','','connect-saving')+row('FlareGo 团队','','connect-saving'),{back:'accounts',footer:btn('重新授权','connect','link')});
+add('connect-error','connect','添加账号',()=>focus('连接未完成','请检查网络后重试。','重试','connect-loading'),{center:true,back:'accounts',related:['expired','empty','permission']});
+// Domains and Zone lifecycle.
+add('domains','zones','域名',()=>search('搜索已加载的域名')+`<div class="tabs domain-filters" role="group" aria-label="域名状态"><button class="active" data-status-filter="all" aria-pressed="true">全部</button><button data-status-filter="active" aria-pressed="false">已激活</button><button data-status-filter="pending" aria-pressed="false">待激活</button></div><div class="domain-list">${[['example.com',true],['example.org',true],['example.net',false],['example.app',true],['example.io',true],['example.dev',false]].map(([name,active])=>row(name,`<span class="domain-state ${active?'':'waiting'}">${active?'已激活':'等待名称服务器'}</span>`,active?'zone':'zone-activation').replace('class="row"',`class="row" data-domain-state="${active?'active':'pending'}"`)).join('')}</div>`+btn('加载更多',null,'link'),{root:'domains',top:action('添加','zone-create'),intent:'文字筛选和按需搜索共享一行；名称、状态与入口保持统一对齐。'});
+add('zone','zones','example.com',()=>zoneTabs('zone')+row('状态','','',badge('已激活'))+row('托管方式','','','完整托管')+row('创建时间','','','2026-10-12')+section('名称服务器')+row('mira.ns.cloudflare.com')+row('rick.ns.cloudflare.com')+section('管理')+row('修改属性','','zone-edit')+row('检查激活状态','','zone-activation')+row('删除站点','','zone-delete'),{back:'domains',top:action('刷新','zone'),intent:'站点概况不重复 DNS 列表。导航分为概况、DNS、设置、安全。'});
+form('zone-create','zones','添加域名',()=>field('域名','','text','例如 example.com；仅添加 DNS 托管。')+field('托管方式','完整托管','select:完整托管|部分托管')+details('高级选项','自定义名称服务器仅在当前账号具备相应资格时开放。'), 'domains','zone-preview');
+form('zone-edit','zones','站点属性',()=>field('域名','example.com')+field('托管方式','完整托管','select:完整托管|部分托管')+toggle('暂停 Cloudflare',false)+details('自定义名称服务器',field('名称服务器','','textarea','每行一个；仅对符合资格的账号开放。')), 'zone','zone-preview');
+confirm('zone-preview','zones','确认站点变更',()=>row('账号','','','Jim 的账号')+row('域名','','','example.com')+diff('托管方式','未添加','完整托管')+note('添加托管不会注册或购买域名。'),'zone-create');
+add('zone-activation','zones','激活域名',()=>row('example.net','等待名称服务器生效','',badge('待激活','warn'))+section('名称服务器')+row('mira.ns.cloudflare.com')+row('rick.ns.cloudflare.com')+muted('请在注册商处更新名称服务器。')+btn('检查激活状态',null)+details('尚未生效','名称服务器变更需要时间。检查请求受理不代表域名已经激活。'),{back:'zone'});
+confirm('zone-delete','zones','删除站点',()=>row('目标域名','','','example.com')+note('将移除该站点的 Cloudflare 配置，不会注销注册域名。','error')+`<label class="field"><span>输入完整域名确认</span><input data-match="example.com" autocomplete="off" placeholder="example.com"></label>`, 'zone',{footer:btn('删除站点',null,'danger-action'),gate:true});
+// DNS records, forms, bulk and settings.
+add('dns','dns','example.com',()=>zoneTabs('dns')+search('搜索名称或内容')+tabs([['全部','dns'],['A / AAAA','dns-types'],['其他','dns-types']],'dns')+row('@',`A · 192.0.2.10<br>已代理 · 自动 TTL`,'dns-record',badge('A'))+row('www',`CNAME · example.com<br>已代理 · 自动 TTL`,'dns-record',badge('CNAME'))+row('@','MX · mail.example.com · 优先级 10','dns-mx',badge('MX'))+row('_dmarc','TXT · v=DMARC1; p=none','dns-txt',badge('TXT'))+section('更多操作')+row('批量操作','','dns-batch')+row('导入与导出','','dns-files')+row('扫描记录','','dns-scan')+row('DNS 配置','','dns-settings'),{back:'domains',top:action('添加','dns-edit')});
+form('dns-edit','dns','编辑记录',()=>`<div class="record-heading"><span>A</span><div><strong>api.example.com</strong><small>example.com</small></div></div>`+field('类型','A','select:A|AAAA|CNAME|MX|TXT|其他类型')+field('名称','api','text','@ 表示根域名')+field('IPv4 地址','192.0.2.10')+field('TTL','自动','select:自动|60 秒|300 秒|自定义')+toggle('Cloudflare 代理',true)+details('更多字段',field('备注','','textarea')+field('标签','','text')), 'dns','dns-preview',{related:['dns-types','field-error'],intent:'记录类型决定字段。常见字段优先，高级内容折叠；数字错误在字段下说明。'});
+add('dns-types','dns','记录类型',()=>search('搜索记录类型')+['A','AAAA','CNAME','TXT','MX','NS','SRV','CAA','CERT','DNSKEY','DS','HTTPS','LOC','NAPTR','OPENPGPKEY','PTR','SMIMEA','SSHFP','SVCB','TLSA','URI'].map(t=>row(t,t==='A'?'IPv4 地址':t==='MX'?'邮件服务器':'',t==='A'?'dns-edit':t==='MX'?'dns-mx':t==='SRV'?'dns-srv':t==='TXT'?'dns-txt':'dns-structured')).join(''),{back:'dns-edit',boundary:'展示统一类型选择样式；原生实施必须复用现有 DnsFormSchema 的完整类型和条件字段，不能退化为通用字符串输入。'});
+confirm('dns-preview','dns','确认 DNS 变更',()=>row('域名','','','example.com')+row('记录','','','A · api')+diff('IPv4 地址','192.0.2.8','192.0.2.10')+row('代理','','','开启')+row('TTL','','','自动')+details('变更详情','只提交本次编辑的字段。传播状态以实际 DNS 查询为准。'),'dns-edit');
+add('dns-batch','dns','批量 DNS',()=>row('example.com','2 项待提交')+row('修改 api','A · 192.0.2.8 → 192.0.2.10','dns-edit',badge('修改'))+row('删除 old','CNAME · legacy.example.com','dns-edit',badge('删除','danger'))+btn('添加操作','dns-edit','secondary'),{back:'dns',footer:btn('预览整批变更','dns-batch-preview')});
+confirm('dns-batch-preview','dns','确认批量变更',()=>row('域名','','','example.com')+row('操作数量','','','2 项')+row('删除 old','CNAME · legacy.example.com')+row('修改 api','A · 192.0.2.8 → 192.0.2.10')+note('包含删除操作。DNS 传播不会同时完成。')+check('我已核对本批全部目标',true),'dns-batch',{gate:true});
+add('dns-files','dns','导入与导出',()=>section('导入 BIND 文件')+btn('选择文件','dns-import','secondary')+section('导出当前记录')+muted('保存为 BIND 文件')+btn('选择保存位置',null,'secondary'),{back:'dns',intent:'导入与导出分组；文件选择后进入预览，避免同屏堆叠多个确认按钮。'});
+form('dns-import','dns','导入 DNS',()=>row('文件','','','example.com.txt')+row('大小','','','2.4 KB')+field('默认代理','关闭','select:关闭|开启')+note('文件中的代理设置优先。可能出现部分导入。'),'dns-files','dns-import-preview');
+confirm('dns-import-preview','dns','确认导入',()=>row('目标域名','','','example.com')+row('文件','','','example.com.txt')+row('大小','','','2.4 KB')+note('导入结果可能部分成功；结果不明时先核对，不重复导入。')+check('确认导入此文件',true),'dns-import',{gate:true});
+add('dns-scan','dns','扫描记录',()=>row('已用记录','','','24')+row('记录限额','','','暂未提供')+section('发现记录')+muted('扫描不会自动添加 DNS 记录。')+btn('开始扫描','dns-scan-confirm')+row('查看候选记录','2 条待审核','dns-scan-review'),{back:'dns'});
+confirm('dns-scan-confirm','dns','开始扫描',()=>row('目标域名','','','example.com')+muted('提交扫描请求后，可返回查看候选记录。'),'dns-scan');
+add('dns-scan-review','dns','审核候选记录',()=>row('mail','A · 192.0.2.25')+field('处理方式','暂不处理','select:暂不处理|接受|拒绝')+row('ftp','CNAME · example.com')+field('处理方式','暂不处理','select:暂不处理|接受|拒绝')+note('当前候选列表不代表扫描已经完成。'),{back:'dns-scan',footer:btn('预览审核','change-review')});
+form('dns-settings','dns','DNS 配置',()=>field('NS TTL','86400','number','30–86400 秒')+field('SOA 邮箱标识','dns.cloudflare.com')+field('SOA 主服务器','供应商分配','select:供应商分配|指定主服务器')+details('名称服务器集合',field('集合序号','1','select:1|2|3|4|5')+field('集合 ID','','text','仅采用已验证归属的集合'))+details('高级配置',toggle('多供应商 DNS')+toggle('次级 DNS 覆盖')+field('引用域名 ID','','text','仅采用已验证关系的域名')),'dns','change-review');
+form('dns-mx','dns','MX 记录',()=>field('名称','@')+field('邮件服务器','mail.example.com')+field('优先级','10','number')+field('TTL','自动','select:自动|300 秒|自定义'),'dns','dns-preview');
+form('dns-srv','dns','SRV 记录',()=>field('名称','_sip._tcp')+field('优先级','10','number')+field('权重','5','number')+field('端口','5060','number')+field('目标','sip.example.com')+field('TTL','自动','select:自动|300 秒|自定义'),'dns','dns-preview');
+form('dns-txt','dns','TXT 记录',()=>field('名称','_dmarc')+field('内容','v=DMARC1; p=none','textarea','保留空格、引号和换行')+field('TTL','自动','select:自动|300 秒|自定义'),'dns','dns-preview');
+form('dns-structured','dns','结构化记录',()=>field('类型','CAA','select:AAAA|CNAME|NS|CAA|CERT|DNSKEY|DS|HTTPS|LOC|NAPTR|OPENPGPKEY|PTR|SMIMEA|SSHFP|SVCB|TLSA|URI')+field('名称','@')+field('标记','0','number')+field('标签','issue')+field('值','ca.example.com')+details('字段说明','本画面绘制 CAA 分支。其他结构类型按既有 Schema 生成专属字段。'),'dns','dns-preview',{boundary:'CAA 为结构化字段样板；不是将其他类型转为 CAA。21类 Schema 与字段类型在原生阶段完整复用。'});
+// Site settings and security.
+add('site-settings','security','example.com',()=>zoneTabs('site-settings')+row('SSL / TLS','完整（严格）','ssl')+row('Universal SSL','已开启','universal-ssl')+row('站点设置','HTTPS、网络与性能','site-options')+row('清除缓存','','purge'),{back:'domains'});
+add('site-options','security','站点设置',()=>section('HTTPS')+row('始终使用 HTTPS','','site-setting-edit','开启')+row('TLS 1.3','','site-setting-edit','开启')+row('最低 TLS 版本','','site-setting-edit','1.2')+section('网络与性能')+row('HTTP/3','','site-setting-edit','开启')+row('浏览器缓存 TTL','','site-setting-edit','4 小时')+row('更多设置','按权限显示可编辑项','site-options-more'),{back:'site-settings',boundary:'只允许编辑源码中受控设置白名单；未知资格显示只读，不新增权限。'});
+add('site-options-more','security','更多设置',()=>['AEGIS','自动平台优化 APO','Binary AST','字体优化','HTTP/2 优先级','图片缩放','源站 HTTP/2 并发流','源站最高 HTTP 版本','Speed Brain','图像转换允许来源','C2PA','图像转换配置','HTTP/2','开发模式'].map(x=>row(x,'按资格开放；未获准时只读','readonly')).join(''),{back:'site-options'});
+form('site-setting-edit','security','编辑站点设置',()=>row('当前站点','','','example.com')+field('最低 TLS 版本','1.2','select:1.0|1.1|1.2|1.3')+note('降低最低 TLS 版本会允许旧协议连接。'),'site-options','change-review');
+form('ssl','security','SSL / TLS',()=>field('加密模式','完整（严格）','select:关闭|灵活|完整|完整（严格）')+muted('校验源站证书并加密回源连接。')+details('降低加密级别','切换到较弱模式时，确认页单独说明影响并要求确认。'),'site-settings','change-review');
+form('universal-ssl','security','Universal SSL',()=>row('当前状态','','',badge('开启'))+toggle('Universal SSL',true)+note('关闭后会影响使用 Universal SSL 证书的访问。'),'site-settings','change-review');
+form('purge','security','清除缓存',()=>field('范围','指定 URL','select:指定 URL|全部缓存')+field('URL','https://example.com/assets/logo.svg','textarea','每行一个完整地址')+details('缓存键请求头',field('请求头 JSON','','textarea')),'site-settings','purge-confirm');
+confirm('purge-confirm','security','确认清缓存',()=>row('站点','','','example.com')+row('范围','','','指定 URL')+code('https://example.com/assets/logo.svg')+muted('请求受理后，缓存清理可能仍在进行。'),'purge');
+add('dnssec','security','example.com',()=>zoneTabs('dnssec')+section('DNSSEC')+row('Cloudflare 状态','','',badge('已启用'))+muted('注册商 DS 状态尚未核实。')+row('DS 记录','查看并复制到注册商','dnssec-ds')+row('公开签名密钥','','dnssec-keys')+row('配置 DNSSEC','','dnssec-edit'),{back:'domains'});
+add('dnssec-ds','security','DS 记录',()=>row('域名','','','example.com')+row('Key Tag','','','2371')+row('算法','','','13')+row('摘要类型','','','2')+code('2371 13 2\nA1B2…（设计示例摘要）')+btn('复制 DS',null,'secondary')+note('请在注册商处核对并设置 DS。App 不会自动修改注册商。'),{back:'dnssec',boundary:'图中摘要为明确占位，不可用于真实配置；实际页必须完整展示并复制供应商值。'});
+add('dnssec-keys','security','签名密钥',()=>row('Key Tag 2371','算法 13 · ZSK')+code('公开密钥内容由供应商返回')+btn('刷新',null,'secondary'),{back:'dnssec',intent:'公开签名信息按字段呈现，不把未返回的数据补成示例真实密钥。'});
+form('dnssec-edit','security','DNSSEC 配置',()=>field('状态','开启','select:开启|关闭')+toggle('多签名模式')+toggle('预签名模式')+note('变更前请核对注册商 DS，避免解析验证失败。')+row('删除 DNSSEC 配置','','danger-risk'),'dnssec','change-review');
+// Workers retains its current console boundary.
+add('workers','workers','资源',()=>context()+resourceTabs('workers')+search('搜索 Workers')+row('edge-api','Workers · 现代目录','worker')+row('image-resize','Workers · 现代目录','worker')+details('目录来源',field('目录','现代目录','select:现代目录|旧目录'))+btn('加载更多',null,'link'),{root:'resources',top:action('创建','create-resource')});
+add('worker','workers','edge-api',()=>row('类型','','','Worker')+row('目录来源','','','现代目录')+row('更新时间','','','今天 08:40')+details('资源标识','worker-example-id · 示例')+section('管理')+row('部署与绑定','前往 Cloudflare 控制台','worker-console'),{back:'workers',boundary:'当前原生入口提供目录与资源详情；不呈现虚假的部署版本切换、请求趋势或绑定编辑能力。'});
+add('worker-console','workers','管理 Worker',()=>focus('在 Cloudflare 中继续','部署与绑定请在官方控制台管理。','打开控制台',null),{back:'worker',center:true,mode:'官方入口'});
+// R2: buckets, objects, configuration, jobs and notifications.
+add('r2','r2','资源',()=>context()+resourceTabs('r2')+row('media-assets','标准存储 · 默认地区','r2-objects')+row('archive','低频访问 · 默认地区','r2-objects')+btn('加载更多',null,'link')+section('账号')+row('存储指标','','r2-metrics'),{root:'resources',top:action('创建','r2-create')});
+form('r2-create','r2','创建存储桶',()=>field('名称','','text','使用小写字母、数字和连字符')+field('默认存储类型','标准','select:标准|低频访问')+field('地区','默认','select:默认|欧盟')+details('高级选项',field('位置提示','自动','select:自动|北美东部|北美西部|欧洲|亚太')),'r2','r2-review');
+add('r2-objects','r2','media-assets',()=>tabs([['对象','r2-objects'],['配置','r2-config'],['作业','r2-jobs']],'r2-objects')+search('按对象前缀筛选')+row('images/','文件夹','r2-folder')+row('logo.svg','8.2 KB · 今天 08:30','r2-object')+row('readme.txt','1.4 KB · 昨天','r2-object')+btn('加载更多',null,'link')+row('选择多个对象','','r2-select'),{back:'r2',top:action('上传','r2-upload')});
+add('r2-folder','r2','images/',()=>muted('media-assets / images/')+search('按前缀筛选')+row('cover.webp','128 KB','r2-object')+row('avatar.png','24 KB','r2-object'),{back:'r2-objects',top:action('上传','r2-upload')});
+add('r2-object','r2','logo.svg',()=>row('对象键','','','logo.svg')+row('大小','','','8.2 KB')+row('存储类型','','','标准')+row('最后修改','','','今天 08:30')+details('元数据','Content-Type: image/svg+xml<br>ETag: 示例标识')+section('操作')+row('复制对象键','','prototype-feedback')+row('下载对象','通过已支持的文件路径保存','r2-download')+row('删除对象','','r2-delete-object'),{back:'r2-objects',boundary:'对象详情由列表字段与现有下载入口整理；没有新增图片预览或公开分享链接。'});
+add('r2-download','r2','下载对象',()=>row('对象','','','media-assets / logo.svg')+row('大小','','','8.2 KB')+btn('选择保存位置',null)+details('下载权限','下载取决于当前对象访问能力。设计稿不生成公开链接。'),{back:'r2-object'});
+form('r2-upload','r2','上传对象',()=>btn('选择本机文件',null,'secondary')+row('已选文件','','','cover.webp · 128 KB')+field('对象键','images/cover.webp')+field('内容类型','image/webp')+field('存储类型','标准','select:标准|低频访问')+note('同名对象可能被覆盖，请在提交前核对。'),'r2-objects','r2-review');
+confirm('r2-review','r2','确认 R2 变更',()=>row('账号','','','Jim 的账号')+row('桶','','','media-assets')+row('地区','','','默认')+row('操作','','','上传对象')+row('对象键','','','images/cover.webp')+row('完整文件','','','128 KB')+note('若存在同名对象，本次上传会覆盖它。')+check('确认覆盖同名对象',true),'r2-upload',{gate:true});
+add('r2-select','r2','选择对象',()=>check('logo.svg · 8.2 KB')+check('readme.txt · 1.4 KB')+check('images/cover.webp · 128 KB'),{back:'r2-objects',footer:btn('预览删除','r2-delete-many','danger-action')});
+confirm('r2-delete-object','r2','删除对象',()=>row('存储桶','','','media-assets')+row('对象键','','','logo.svg')+note('删除后无法从 App 恢复。','error')+check('确认删除此对象',true),'r2-object',{gate:true,footer:btn('删除对象',null,'danger-action')});
+confirm('r2-delete-many','r2','删除所选对象',()=>row('存储桶','','','media-assets')+row('logo.svg')+row('readme.txt')+note('将删除以上 2 个对象。','error')+check('我已核对全部对象',true),'r2-select',{gate:true,footer:btn('确认删除',null,'danger-action')});
+add('r2-config','r2','media-assets',()=>tabs([['对象','r2-objects'],['配置','r2-config'],['作业','r2-jobs']],'r2-config')+section('存储')+row('默认存储类型','','r2-storage','标准')+row('生命周期','','r2-lifecycle','1 条规则')+row('保留锁','','r2-lock','未配置')+row('近端写入','','r2-local','开启')+section('访问')+row('跨域访问 CORS','','r2-cors','1 条规则')+row('r2.dev 公开访问','','r2-public','关闭')+row('自定义域名','','r2-domains','1 个')+section('集成')+row('按需迁移 Sippy','','r2-sippy','未开启')+row('事件通知','','r2-notifications','1 条')+section('危险操作')+row('删除存储桶','','r2-delete-bucket'),{back:'r2'});
+form('r2-storage','r2','默认存储类型',()=>field('存储类型','标准','select:标准|低频访问')+muted('调整默认存储类型。'),'r2-config','change-review');
+add('r2-cors','r2','跨域访问',()=>row('网站资源','GET、HEAD · https://example.com','r2-cors-edit')+btn('添加规则','r2-cors-edit','secondary')+details('完整配置',code('{"rules":[{"allowed":{"methods":["GET","HEAD"],"origins":["https://example.com"]}}]}')),{back:'r2-config',sources:['r2/R2CorsConfigurationPanel.kt']});
+form('r2-cors-edit','r2','CORS 规则',()=>field('规则名称','website')+field('允许来源','https://example.com','textarea')+field('允许方法','GET, HEAD')+details('请求头与缓存',field('允许请求头','Content-Type')+field('暴露响应头','ETag')+field('缓存时间（秒）','3600','number')),'r2-cors','r2-config-review',{sources:['r2/R2CorsConfigurationPanel.kt']});
+add('r2-lifecycle','r2','生命周期',()=>row('清理临时文件','tmp/ · 30 天后删除','r2-lifecycle-edit')+btn('添加规则','r2-lifecycle-edit','secondary'),{back:'r2-config',sources:['r2/R2LifecycleConfigurationPanel.kt']});
+form('r2-lifecycle-edit','r2','生命周期规则',()=>field('规则名称','cleanup-temp')+field('匹配前缀','tmp/','text','留空表示整个桶')+toggle('启用规则',true)+field('自动删除','创建后天数','select:不自动删除|创建后天数|指定时间')+field('天数','30','number')+details('存储迁移与分段上传',field('迁移到低频访问（天）','7','number')+field('中止分段上传（秒）','604800','number')),'r2-lifecycle','r2-config-review',{sources:['r2/R2LifecycleConfigurationPanel.kt']});
+form('r2-lock','r2','保留锁',()=>field('规则名称','retain-reports')+field('对象前缀','reports/','text','留空表示整个桶')+field('保留方式','指定时长','select:指定时长|截止时间|无限期')+field('保留秒数','2592000','number')+note('保留期间，对象删除或覆盖会受到限制。'),'r2-config','r2-config-review',{sources:['r2/R2LockConfigurationPanel.kt']});
+form('r2-local','r2','近端写入',()=>toggle('允许近端写入',true)+muted('关闭不会中止已经开始的写入复制。')+row('适用地区','','','默认'),'r2-config','r2-config-review',{sources:['r2/R2LocalUploadsConfigurationPanel.kt'],boundary:'沿用 Local Uploads 当前实现，只适用于 default jurisdiction；其他地区展示只读限制。'});
+form('r2-public','r2','r2.dev 公开访问',()=>row('公开访问','','',badge('关闭'))+toggle('开启公开访问')+note('开启后，桶内对象可通过 r2.dev 地址公开访问。'),'r2-config','r2-config-review',{sources:['r2/R2ManagedDomainConfigurationPanel.kt']});
+add('r2-domains','r2','自定义域名',()=>row('cdn.example.com','已启用 · TLS 1.2','r2-domain-edit')+btn('添加域名','r2-domain-add','secondary'),{back:'r2-config',sources:['r2/R2CustomDomainConfigurationPanel.kt']});
+form('r2-domain-add','r2','添加自定义域名',()=>field('域名','cdn.example.com')+field('所属站点','example.com','select:example.com|example.org')+field('最低 TLS 版本','1.2','select:1.0|1.1|1.2|1.3')+toggle('启用域名')+note('启用后会通过该域名公开对象。'),'r2-domains','r2-config-review',{sources:['r2/R2CustomDomainConfigurationPanel.kt']});
+form('r2-domain-edit','r2','cdn.example.com',()=>row('归属站点','','','example.com')+row('证书状态','','',badge('有效'))+toggle('启用域名',true)+field('最低 TLS 版本','1.2','select:1.0|1.1|1.2|1.3')+row('删除此域名','','danger-risk'),'r2-domains','r2-config-review',{sources:['r2/R2CustomDomainConfigurationPanel.kt']});
+confirm('r2-config-review','r2','确认配置变更',()=>row('账号','','','Jim 的账号')+row('存储桶','','','media-assets')+row('地区','','','默认')+diff('允许来源','无','https://example.com')+row('方法','','','GET、HEAD')+details('完整变更内容',code('{"rules":[{"id":"website","allowed":{"methods":["GET","HEAD"],"origins":["https://example.com"]}}]}'))+note('此类配置按完整规则集替换，请核对全部规则。')+check('确认替换配置',true),'r2-cors-edit',{gate:true,boundary:'这里绘制 CORS 完整替换示例。原生实现按所选配置生成完整目标、旧值、新值及公开访问/降级/删除等独立确认，不能复用错误目标。'});
+add('r2-sippy','r2','按需迁移 Sippy',()=>row('当前状态','','',badge('未开启'))+muted('首次访问时，从源存储复制对象。')+btn('配置迁移','r2-sippy-edit')+details('迁移凭据','Sippy 的源存储凭据属于服务配置，与 App 的 Cloudflare 登录授权不同。只在受保护编辑页输入。'),{back:'r2-config',sources:['r2/R2SippyConfigurationPanel.kt'],boundary:'保留当前 Sippy 配置能力，不引入其他工作树中的 Slurper 迁移任务。'});
+form('r2-sippy-edit','r2','配置按需迁移',()=>field('源服务','Amazon S3','select:Amazon S3|Google Cloud Storage|S3 兼容|Azure')+field('源桶','source-assets')+field('源区域','us-east-1')+field('Access Key ID','','password')+field('Secret Access Key','','password')+section('目标 R2')+row('目标桶','','','media-assets')+field('目标 Access Key ID','','password')+field('目标 Secret Access Key','','password')+check('将源与目标凭据提交给 Cloudflare',true)+details('其他源的字段','GCS 使用服务账号邮箱与私钥；S3 兼容源填写 HTTPS 地址；Azure 使用账号、容器及 Key 或 SAS。实际字段随所选源切换。'),'r2-sippy','r2-sippy-review',{gate:true,sources:['r2/R2SippyConfigurationPanel.kt'],boundary:'凭据字段仅作空白视觉示意，无真实秘密。正式受保护窗口、字段可见性、供应商支持范围与现有实现保持一致。'});
+confirm('r2-sippy-review','r2','确认按需迁移',()=>row('源','','','Amazon S3 / source-assets')+row('目标','','','R2 / media-assets')+note('本次将向 Cloudflare 提交源与目标凭据。')+`<label class="field"><span>输入目标桶名确认</span><input data-match="media-assets" placeholder="media-assets" autocomplete="off"></label>`,'r2-sippy-edit',{gate:true});
+confirm('r2-sippy-disable','r2','停用按需迁移',()=>row('目标桶','','','media-assets')+muted('停止新的按需迁移，已复制的对象保留。')+check('确认停用',true),'r2-sippy',{gate:true});
+confirm('r2-delete-bucket','r2','删除存储桶',()=>row('存储桶','','','media-assets')+note('桶必须先清空。删除后无法恢复。','error')+`<label class="field"><span>输入桶名确认</span><input data-match="media-assets" placeholder="media-assets" autocomplete="off"></label>`,'r2-config',{gate:true,footer:btn('删除存储桶',null,'danger-action')});
+add('r2-jobs','r2','后台作业',()=>row('media-assets','默认地区')+row('存储类型迁移','images/ · 进行中','r2-job',badge('运行中'))+row('批量清理','tmp/ · 已受理','r2-job',badge('已受理'))+btn('创建作业','r2-job-create','secondary'),{back:'r2-objects',sources:['r2/R2CScreen.kt']});
+form('r2-job-create','r2','创建后台作业',()=>field('操作','迁移存储类型','select:迁移存储类型|按前缀删除|清空桶')+field('对象前缀','images/')+field('目标存储类型','低频访问','select:标准|低频访问')+field('地区','默认','select:默认|欧盟')+details('删除类操作','删除前缀或清空整个桶仍需影响核对、目标输入和最终确认。'),'r2-jobs','danger-risk',{sources:['r2/R2CScreen.kt']});
+add('r2-job','r2','作业详情',()=>row('任务','','','存储类型迁移')+row('桶','','','media-assets')+row('范围','','','images/')+row('状态','','',badge('运行中'))+row('目标类型','','','低频访问')+btn('刷新状态',null,'secondary'),{back:'r2-jobs',boundary:'不虚构后台作业进度百分比；仅展示接口实际返回的状态及字段。'});
+add('r2-notifications','r2','事件通知',()=>row('image-processing','对象创建 → media-events','r2-notification-edit')+btn('添加通知','r2-notification-edit','secondary')+row('替换全部规则','','r2-notification-edit')+row('删除通知配置','','danger-risk'),{back:'r2-config',sources:['r2/R2CScreen.kt']});
+form('r2-notification-edit','r2','通知规则',()=>field('名称','image-processing')+field('队列 ID','queue-example-id')+field('事件','对象创建','select:对象创建|对象删除')+field('对象前缀','images/')+field('对象后缀','.webp'),'r2-notifications','r2-config-review',{sources:['r2/R2CScreen.kt']});
+add('r2-metrics','r2','R2 账号指标',()=>context()+`<div class="number-panel"><span class="tiny">存储使用量</span><div class="hero">2.4 <small>GB</small></div><span class="tiny">本次读取 · 所有返回的桶</span></div>`+row('对象数','','','1,248')+row('桶数量','','','2')+details('来源与范围','仅使用账号指标接口实际提供的数据。缺失字段显示“暂不可用”，不自行推算费用。'),{back:'r2',sources:['r2/R2CScreen.kt']});
+// KV: separate namespace, key and private-content workflows.
+add('kv','kv','资源',()=>context()+resourceTabs('kv')+row('app-config','KV 命名空间','kv-keys')+row('session-cache','KV 命名空间','kv-keys')+btn('加载更多',null,'link'),{root:'resources',top:action('创建','kv-create')});
+form('kv-create','kv','创建命名空间',()=>field('名称','app-config'),'kv','kv-confirm-risk');
+add('kv-keys','kv','app-config',()=>search('按键名前缀筛选')+row('site:title','不过期 · metadata 未读取','kv-value')+row('site:theme','不过期 · metadata 未读取','kv-value')+row('session:demo','到期时间由接口返回','kv-value')+btn('加载更多',null,'link')+section('管理')+row('批量读取','','kv-bulk-read')+row('批量写入','','kv-bulk-write')+row('批量删除','','kv-bulk-delete')+row('命名空间设置','','kv-settings'),{back:'kv',top:action('写入','kv-edit')});
+add('kv-settings','kv','命名空间设置',()=>row('名称','','','app-config')+row('完整 ID','','','namespace-example-id')+row('重命名','','kv-rename')+row('删除命名空间','','kv-confirm-risk'),{back:'kv-keys'});
+form('kv-rename','kv','重命名',()=>field('名称','app-config'),'kv-settings','kv-confirm-risk');
+add('kv-value','kv','site:title',()=>row('命名空间','','','app-config')+row('到期策略','','','不过期')+section('值')+`<div class="code" data-private>••••••••</div><button class="link" data-reveal="FlareGo 示例站点">显示内容</button>`+section('Metadata')+btn('读取 metadata',null,'secondary')+section('操作')+row('编辑完整值','','kv-edit')+row('保存完整值文件','','kv-export')+row('删除此键','','kv-confirm-risk'),{back:'kv-keys',boundary:'默认遮蔽值与 metadata；点击显示的是合成示例。真实 App 必须保留私有会话和窗口保护。'});
+form('kv-edit','kv','编辑键值',()=>field('键名','site:title','text','键名按原样使用')+field('值','','password')+btn('从完整文件导入',null,'secondary')+details('Metadata',field('JSON','','textarea')+check('写回当前 metadata'))+section('到期策略')+field('到期方式','不过期','select:不过期|指定 UTC 时间|TTL 秒')+details('完整内容与保存','大文件与二进制值通过文件入口处理，不能用截断预览覆盖完整值。'),'kv-keys','kv-confirm-risk');
+add('kv-export','kv','导出键值',()=>row('命名空间','','','app-config')+row('键','','','site:title')+note('导出文件为明文，请妥善保存。')+btn('选择保存位置',null),{back:'kv-value'});
+add('kv-bulk-read','kv','批量读取',()=>field('键名','site:title\nsite:theme','textarea','每行一个，最多 100 个')+field('结果格式','文本','select:文本|JSON')+btn('读取','kv-bulk-result'),{back:'kv-keys'});
+add('kv-bulk-result','kv','读取结果',()=>row('读取数量','','','2 个键')+`<div class="code" data-private>内容已隐藏</div><button class="link" data-reveal='{"site:title":"FlareGo 示例站点","site:theme":"forest"}'>显示完整示例</button>`+btn('保存完整结果',null,'secondary'),{back:'kv-bulk-read'});
+form('kv-bulk-write','kv','批量写入',()=>btn('选择 JSON 文件',null,'secondary')+row('文件','','','config.json · 1.2 KB')+row('记录数','','','2')+note('已有键会被覆盖，请在确认页核对完整范围。'),'kv-keys','kv-confirm-risk');
+form('kv-bulk-delete','kv','批量删除',()=>field('键名 JSON','["site:title", "site:theme"]','textarea')+btn('选择完整文件',null,'secondary')+note('删除后无法从 App 恢复。','error'),'kv-keys','kv-confirm-risk');
+confirm('kv-confirm-risk','kv','核对操作范围',()=>row('账号','','','Jim 的账号')+row('命名空间','','','app-config')+row('ID','','','namespace-example-id')+row('操作','','','批量删除')+section('完整目标 · 2 个')+row('site:title')+row('site:theme')+note('将删除以上键及其内容。','error')+check('我已核对全部目标',true),'kv-bulk-delete',{gate:true,footer:btn('继续','kv-confirm-identity'),intent:'保留当前 KV 三级确认：范围、精确身份、最终提交。'});
+add('kv-confirm-identity','kv','核对目标身份',()=>row('命名空间','','','app-config')+code('namespace-example-id')+`<label class="field"><span>输入完整命名空间 ID</span><input data-match="namespace-example-id" autocomplete="off"></label>`,{back:'kv-confirm-risk',gate:true,footer:btn('继续','kv-confirm-final')});
+confirm('kv-confirm-final','kv','确认删除',()=>row('账号','','','Jim 的账号')+row('命名空间','','','app-config')+row('ID','','','namespace-example-id')+row('目标数量','','','2 个键')+row('site:title')+row('site:theme')+note('确认后提交本次操作。结果不明时不会自动重发。','error'),'kv-confirm-identity',{footer:`<div class="split">${btn('取消','kv-keys','secondary')}${btn('确认删除',null,'danger-action')}</div>`});
+add('kv-failed','kv','未完成的键',()=>muted('1 个键未完成，请先核对结果。')+row('site:theme','写入结果未知','task-unknown'),{back:'kv-keys'});
+// D1: browsing, SQL, private results and gated maintenance paths.
+add('d1','d1','资源',()=>context()+resourceTabs('d1')+search('按数据库名称筛选')+row('app-db','4.8 MB · 读取复制未启用','d1-database')+row('analytics','12.6 MB · 读取复制已启用','d1-database')+btn('加载更多',null,'link'),{root:'resources',top:action('创建','d1-create')});
+form('d1-create','d1','创建数据库',()=>field('数据库名称','app-db')+field('地区限制','不指定','select:不指定|欧盟')+field('位置提示','自动','select:自动|北美东部|北美西部|欧洲|亚太')+muted('地区限制优先于位置提示。'),'d1','d1-confirm-risk');
+add('d1-database','d1','app-db',()=>tabs([['数据','d1-database'],['SQL','d1-sql'],['设置','d1-settings']],'d1-database')+section('数据库')+row('大小','','','4.8 MB')+row('读取复制','','','未启用')+section('浏览')+row('表与结构','','d1-schema')+row('查询数据','','d1-rows')+row('完整详情','','d1-details'),{back:'d1'});
+add('d1-details','d1','数据库详情',()=>row('名称','','','app-db')+row('UUID','','','11111111-2222-3333-4444-555555555555')+row('大小','','','4.8 MB')+row('读取复制','','','未启用')+row('创建时间','','','2026-10-20'),{back:'d1-database'});
+add('d1-schema','d1','表与结构',()=>row('users','3 个字段','d1-table')+row('sessions','4 个字段','d1-table')+btn('下一页',null,'link'),{back:'d1-database'});
+add('d1-table','d1','users',()=>table(['字段','类型','约束'],[['id','INTEGER','主键'],['name','TEXT','非空'],['created_at','TEXT','—']])+btn('查看数据','d1-rows','secondary')+row('索引','','d1-indexes'),{back:'d1-schema'});
+add('d1-rows','d1','数据浏览',()=>field('表','users','select:users|sessions')+details('筛选与排序',field('筛选列','id')+field('等值筛选值','1')+field('排序列','id')+toggle('降序'))+table(['id','name','created_at'],[['1','示例用户 A','2026-10-28'],['2','示例用户 B','2026-10-29'],['3','示例用户 C','2026-10-30']])+btn('下一页',null,'secondary'),{back:'d1-database',boundary:'受控只读浏览沿用当前允许的选择与过滤方式；不把任意 SQL 归为只读。数据仅为设计示例。'});
+form('d1-sql','d1','SQL 查询',()=>row('数据库','','','app-db')+field('SQL','SELECT id, name FROM users LIMIT 20;','textarea')+row('完整 JSON / batch','','d1-json')+details('参数与格式',field('参数（JSON）','[]','textarea')+field('返回格式','结构化 JSON','select:结构化 JSON|Raw 数组'))+btn('读取完整 SQL / JSON 文件',null,'secondary')+muted('执行前需核对；SQL 可能修改数据。'),'d1-database','d1-confirm-risk',{intent:'编辑器与结果分屏，完整 SQL 和参数在确认页核对。潜在写入不被包装成普通搜索。'});
+add('d1-results','d1','查询结果',()=>row('数据库','','','app-db')+`<div class="code" data-private>结果已隐藏</div><button class="link" data-reveal='[{"id":1,"name":"示例用户 A"},{"id":2,"name":"示例用户 B"}]'>显示当前页</button>`+`<div class="line-actions">${btn('上一页',null,'secondary')}${btn('下一页',null,'secondary')}</div>`+btn('保存完整结果',null,'secondary')+btn('关闭结果','d1-database','link'),{back:'d1-sql',boundary:'示例只有两条完整结果。真实 App 必须完整分页/文件导出并保留私有会话生命周期，不能用截断截图冒充完整结果。'});
+add('d1-settings','d1','数据库设置',()=>row('名称与读取复制','','d1-edit')+section('数据维护')+row('导入 SQL','当前版本暂未开放','d1-import')+row('导出数据库','当前版本暂未开放','d1-export')+row('Time Travel','当前版本暂未开放','d1-restore')+row('恢复已删除数据库','当前版本暂未开放','d1-undelete')+section('危险操作')+row('删除数据库','','d1-delete'),{back:'d1-database',boundary:'依据当前 D1BrowserHost 提示，导入、导出、恢复、删除恢复的生产入口保持关闭；下级表单为受限能力的设计状态。'});
+form('d1-edit','d1','数据库属性',()=>row('名称','','','app-db')+field('读取复制','未启用','select:未启用|已启用|不修改')+field('更新方式','差量修改','select:差量修改|完整替换'),'d1-settings','d1-confirm-risk');
+add('d1-import','d1','导入 SQL',()=>note('当前版本暂未开放此操作。')+field('文件','未选择','text')+muted('开放后通过完整 SQL 文件导入，提交前核对文件和目标数据库。'),{back:'d1-settings',mode:'生产受限',boundary:'仅呈现当前关闭入口与未来已实现表单的设计位置，不提供可提交按钮。'});
+add('d1-export','d1','导出数据库',()=>note('当前版本暂未开放此操作。')+field('表范围','全部表','select:全部表|指定表')+toggle('包含结构',true)+toggle('包含数据',true),{back:'d1-settings',mode:'生产受限',boundary:'云导出、下载、保存是不同状态；不把请求受理视作文件已保存。此预览无可提交按钮。'});
+add('d1-restore','d1','Time Travel',()=>note('当前版本暂未开放此操作。')+field('恢复依据','时间点','select:时间点|Bookmark')+field('UTC 时间','2026-10-30T08:00:00Z')+muted('恢复会覆盖当前数据。'),{back:'d1-settings',mode:'生产受限'});
+add('d1-undelete','d1','恢复已删除数据库',()=>note('当前版本暂未开放此操作。')+field('数据库 UUID','')+field('恢复后名称',''),{back:'d1-settings',mode:'生产受限'});
+form('d1-delete','d1','删除数据库',()=>row('数据库','','','app-db')+row('UUID','','','11111111-2222-3333-4444-555555555555')+note('将删除数据库及其中的数据。','error'),'d1-settings','d1-confirm-risk',{footer:btn('核对删除范围','d1-confirm-risk','danger-action')});
+confirm('d1-confirm-risk','d1','核对 SQL 操作',()=>row('账号','','','Jim 的账号')+row('数据库','','','app-db')+row('UUID','','','11111111-2222-3333-4444-555555555555')+code('SELECT id, name FROM users LIMIT 20;')+row('参数','','','[]')+note('SQL 按可能修改数据的操作处理。')+check('我已核对完整 SQL 和目标',true),'d1-sql',{gate:true,footer:btn('继续','d1-confirm-identity')});
+add('d1-confirm-identity','d1','核对数据库身份',()=>row('数据库','','','app-db')+code('11111111-2222-3333-4444-555555555555')+`<label class="field"><span>输入完整数据库 UUID</span><input data-match="11111111-2222-3333-4444-555555555555" autocomplete="off"></label>`,{back:'d1-confirm-risk',gate:true,footer:btn('继续','d1-confirm-final')});
+confirm('d1-confirm-final','d1','确认执行',()=>row('数据库','','','app-db')+row('UUID','','','11111111-2222-3333-4444-555555555555')+code('SELECT id, name FROM users LIMIT 20;')+row('参数','','','[]')+muted('结果不明时，先核对，不自动重发。'),'d1-confirm-identity',{related:['d1-results','task-unknown']});
+// Billing, accounts, update and operation history.
+add('billing','billing','账单',()=>context()+tabs([['账号账单','billing'],['用户账单','billing-user']],'billing')+`<div class="number-panel"><span class="tiny">最近账单 · USD</span><div class="hero">$12.40</div><span class="tiny">2026 年 9 月 · 已结算</span></div>`+section('账单记录')+row('2026 年 9 月','已结算','bill-detail','$12.40')+row('2026 年 8 月','已结算','bill-detail','$10.80')+btn('加载更多',null,'link')+row('费用与发票','在 Cloudflare 控制台查看','billing-console'),{root:'billing',intent:'以实际账单历史为中心。币种与期间靠近金额，不虚构预算、折算或本月预估。'});
+add('billing-user','billing','用户账单',()=>muted('用户范围 · 旧接口')+row('2026 年 9 月','USD · 已结算','bill-detail','$12.40')+row('费用与发票','','billing-console'),{back:'billing',boundary:'用户级旧接口必须显式选择，并与账号账单分开；不能合并计为同一范围。'});
+add('bill-detail','billing','账单详情',()=>row('期间','','','2026 年 9 月')+row('金额','','','12.40 USD')+row('状态','','',badge('已结算'))+row('范围','','','Jim 的账号')+row('账单标识','','','invoice-example')+btn('在控制台查看','billing-console','secondary'),{back:'billing'});
+add('billing-unavailable','billing','账单',()=>focus('暂时无法读取账单','可在 Cloudflare 查看费用与发票。','打开控制台','billing-console'),{root:'billing',center:true,boundary:'未知金额不得显示为零。用户可以继续使用其他功能。'});
+add('billing-console','billing','费用与发票',()=>focus('在 Cloudflare 中查看','','打开控制台',null),{center:true,back:'billing',mode:'官方入口'});
+add('accounts','account','账号',()=>section('Cloudflare')+row('Jim 的账号','当前账号','account-detail',badge('当前'))+row('FlareGo 团队','已连接','account-detail')+btn('添加账号','connect','secondary')+section('应用')+row('应用更新','稳定版 · 自动检查已开启','updates')+row('关于 FlareGo','','about'),{root:'accounts',intent:'账号连接和应用设置分组；移除厂商规划广告，避免把断开连接放成醒目主按钮。'});
+add('account-detail','account','Jim 的账号',()=>row('厂商','','','Cloudflare')+row('连接状态','','',badge('已连接'))+details('账号标识','Account ID：0123456789abcdef0123456789abcdef（示例）')+row('授权与访问','','account-permissions')+row('重新授权','','connect')+section('连接管理')+row('断开连接','','disconnect'),{back:'accounts'});
+add('account-permissions','account','授权与访问',()=>row('授权方式','','','Cloudflare OAuth')+muted('可访问范围以 Cloudflare 本次授权为准。')+row('前往 Cloudflare 管理授权','','prototype-feedback')+details('本机存储','凭据加密保存在本机。断开连接会移除本机凭据；撤销云端授权需要在 Cloudflare 完成。'),{back:'account-detail',boundary:'不虚构逐项权限已经验证。权限查询能力未返回的内容显示未知或官方入口。'});
+confirm('disconnect','account','断开连接',()=>row('账号','','','Jim 的账号')+muted('移除本机连接、凭据和操作记录。云上资源不受影响。'),'account-detail',{footer:`<div class="split">${btn('取消','account-detail','secondary')}${btn('断开连接',null,'danger-action')}</div>`});
+add('updates','account','应用更新',()=>row('当前版本','','','版本号由 App 提供')+field('更新通道','稳定版','select:稳定版|测试版')+toggle('自动检查更新',true)+section('检查结果')+muted('有新版本可用')+row('更新说明','','update-notes')+btn('下载并安装','update-progress')+btn('检查更新',null,'link'),{back:'accounts',sources:['UpdatePanel.kt'],intent:'更新设置与当前结果分组，下载时只呈现实际进度与状态。'});
+add('update-notes','account','更新说明',()=>section('本次更新')+muted('• 改进账号授权体验<br>• 优化列表与表单布局<br>• 修复已知问题')+note('此处为设计示例，不代表已发布版本。'),{back:'updates',mode:'示例说明',sources:['UpdatePanel.kt']});
+add('update-progress','account','应用更新',()=>focus('正在下载','12.4 MB / 24.8 MB')+`<div class="progress"><span style="width:50%"></span></div>`+muted('下载后由系统确认安装。'),{back:'updates',center:true,related:['update-error'],sources:['UpdatePanel.kt']});
+add('update-error','account','应用更新',()=>focus('下载未完成','请检查网络后重试。','重试','update-progress'),{back:'updates',center:true,sources:['UpdatePanel.kt']});
+add('about','account','关于 FlareGo',()=>`<div class="hero">FlareGo</div>`+muted('云服务管理')+row('版本','','','由安装包提供')+row('Cloudflare','首期接入厂商')+details('说明','此页是应用信息的布局提案，不新增未经核实的遥测、订阅或后端服务。'),{back:'accounts',mode:'新增信息页提案',boundary:'现有版本信息从 UpdatePanel 整理；关于页为本轮信息架构提案，不代表已有独立路由。'});
+add('jobs','tasks','操作记录',()=>search('搜索当前账号的记录')+tabs([['全部','jobs'],['待处理','jobs-pending']],'jobs')+section('今天')+row('更新 DNS 记录','api.example.com · 09:12','task-detail',badge('已完成'))+row('批量写入 KV','app-config · 08:50','task-unknown',badge('待核对','warn'))+row('上传对象','media-assets · 08:30','task-detail',badge('已完成')),{back:'overview',intent:'按结果状态与目标组织记录，技术标识收进详情。待核对结果不提供“重新提交”。'});
+add('jobs-pending','tasks','待处理操作',()=>row('批量写入 KV','app-config · 结果未知','task-unknown',badge('待核对','warn'))+row('清缓存','example.com · 请求已受理','task-running',badge('进行中')),{back:'jobs'});
+add('task-detail','tasks','操作详情',()=>row('操作','','','更新 DNS 记录')+row('目标','','','api.example.com')+row('账号','','','Jim 的账号')+row('状态','','',badge('已完成'))+row('时间','','','今天 09:12')+details('技术详情','任务标识与供应商回执按实际结果显示；不保存敏感内容。'),{back:'jobs'});
+add('task-unknown','tasks','核对操作结果',()=>row('操作','','','批量写入 KV')+row('目标','','','app-config')+row('状态','','',badge('结果未知','warn'))+note('请求可能已经生效。先读取当前结果，不重复提交。')+btn('核对结果',null)+row('查看未完成的键','','kv-failed')+row('人工处理','','task-manual'),{back:'jobs'});
+add('task-running','tasks','操作进行中',()=>row('操作','','','清除缓存')+row('目标','','','example.com')+row('状态','','',badge('已受理'))+muted('请求已受理，尚未确认完成。')+btn('查询结果',null,'secondary'),{back:'jobs'});
+add('task-manual','tasks','人工处理',()=>row('任务','','','批量写入 KV · app-config')+note('结束本机跟踪不会撤销云端操作。')+field('处理说明','','textarea')+check('我已在云端核对结果',true),{back:'task-unknown',gate:true,footer:btn('结束本机跟踪',null)});
+// Shared states are first-class designs, not a placeholder for normal content.
+add('empty','states','域名',()=>focus('还没有域名','','添加域名','zone-create'),{root:'domains',center:true,boundary:'仅在完整读取且确实为空时展示。分页未读完使用“当前页无结果 / 继续加载”。'});
+add('no-results','states','搜索域名',()=>search('输入名称')+focus('没有匹配的域名','','清空搜索','domains'),{back:'domains',center:true});
+add('loading','states','域名',()=>`<div class="loading-status" role="status"><span class="spinner"></span>正在读取域名</div>`+[1,2,3,4,5,6].map(()=>'<div class="skeleton"></div>').join(''),{root:'domains',related:['refreshing'],intent:'首次加载使用简洁骨架；刷新时保留已有数据。'});
+add('refreshing','states','域名',()=>`<div class="context"><span class="spinner"></span><span>正在刷新</span></div>`+row('example.com','上次读取的数据','zone')+row('example.net','上次读取的数据','zone-activation'),{root:'domains'});
+add('read-error','states','域名',()=>focus('读取失败','请检查网络后重试。','重试','loading'),{root:'domains',center:true});
+add('permission','states','域名',()=>focus('没有访问权限','请确认此账号的授权范围。','重新授权','connect'),{root:'domains',center:true});
+add('expired','states','账号授权',()=>focus('授权已失效','重新授权后即可继续。','重新授权','connect'),{back:'accounts',center:true});
+add('pagination-error','states','域名',()=>row('example.com','已加载','zone')+row('example.net','已加载','zone-activation')+note('后续内容未加载。')+btn('重试加载',null,'secondary'),{root:'domains',intent:'分页失败保留已有内容，只在列表尾提供重试，不误报空列表。'});
+add('field-error','states','编辑 DNS 记录',()=>field('名称','api')+`<label class="field invalid"><span>TTL（秒）</span><input value="abc" aria-invalid="true"><small>请输入有效的整数秒数</small></label>`,{back:'dns-edit',footer:btn('预览变更',null),invalid:true});
+add('conflict','states','变更已过期',()=>row('记录','','','A · api.example.com')+diff('云端当前地址','192.0.2.8','192.0.2.20')+muted('云端内容已变化，请重新核对。')+btn('返回编辑','dns-edit'),{back:'dns-preview'});
+add('readonly','states','站点设置',()=>row('设置','','','最低 TLS 版本')+row('当前值','','','1.2')+note('当前账号只能查看此设置。')+btn('刷新',null,'secondary'),{back:'site-options'});
+confirm('change-review','states','确认变更',()=>row('账号','','','Jim 的账号')+row('目标','','','example.com')+diff('最低 TLS 版本','1.2','1.3'),'site-setting-edit',{intent:'通用差异确认样式，实际内容必须来自当前草稿与新读取的旧值。'});
+confirm('danger-risk','states','核对影响范围',()=>row('账号','','','Jim 的账号')+row('存储桶','','','media-assets')+row('操作','','','按前缀删除')+row('前缀','','','tmp/')+note('将删除匹配前缀的对象。','error')+check('已在外部中止分段上传并暂停写入',true)+check('我已核对完整范围',true),'r2-job-create',{gate:true,footer:btn('继续','danger-identity')});
+add('danger-identity','states','核对目标',()=>row('存储桶','','','media-assets')+`<label class="field"><span>输入完整桶名</span><input data-match="media-assets" autocomplete="off"></label>`,{back:'danger-risk',gate:true,footer:btn('继续','danger-final')});
+confirm('danger-final','states','确认删除',()=>row('存储桶','','','media-assets')+row('前缀','','','tmp/')+note('删除匹配的对象，无法从 App 恢复。','error'),'danger-identity',{footer:`<div class="split">${btn('取消','r2-jobs','secondary')}${btn('确认删除',null,'danger-action')}</div>`});
+add('prototype-feedback','states','操作预览',()=>focus('仅设计预览','不会执行真实操作。','返回','overview'),{center:true,back:'overview',mode:'原型提示'});
+// Existing demonstration purchase flow: isolated from the production navigation.
+add('buy','demo','购买域名',()=>note('演示流程 · 不查询真实报价，不会扣款。')+search('搜索示例域名')+row('myproject.dev','示例首年价格','buy-confirm','$12.00')+row('myproject.app','示例首年价格','buy-confirm','$14.00')+row('在官方控制台购买','','domain-console'),{back:'domains',mode:'仅演示',boundary:'购买流程仅留在演示分类，正式域名页不显示可直接付款的入口。'});
+add('buy-confirm','demo','购买确认',()=>note('演示报价，不会下单。')+row('域名','','','myproject.dev')+row('首年','','','12.00 USD')+row('续费参考','','','14.00 USD')+field('年限','1 年','select:1 年|2 年')+toggle('自动续费')+check('已核对域名与金额',true),{back:'buy',mode:'仅演示',gate:true,footer:btn('模拟确认',null),related:['buy-followup']});
+add('buy-followup','demo','补充资料',()=>note('演示状态')+focus('需要补充资料','请在 Cloudflare 完成后查询结果。','打开控制台',null),{back:'buy',mode:'仅演示'});
+add('domain-console','demo','购买域名',()=>focus('在 Cloudflare 中继续','域名注册请在官方控制台办理。','打开控制台',null),{back:'domains',center:true,mode:'官方入口'});
+// Additional detail/confirmation families discovered during source coverage review.
+add('dns-record','dns','api.example.com',()=>row('类型','','','A')+row('内容','','','192.0.2.10')+row('代理','','','开启')+row('TTL','','','自动')+section('操作')+row('编辑变更字段','','dns-edit')+row('完整替换记录','','dns-replace')+row('删除记录','','dns-delete'),{back:'dns'});
+form('dns-replace','dns','完整替换记录',()=>field('类型','A','select:A|AAAA|CNAME|MX|TXT')+field('名称','api')+field('记录内容','192.0.2.10')+field('TTL','自动','select:自动|300 秒|自定义')+toggle('代理',true)+note('完整替换会提交整条记录。请核对全部字段。'),'dns-record','dns-preview');
+confirm('dns-delete','dns','删除 DNS 记录',()=>row('域名','','','example.com')+row('记录','','','A · api')+row('内容','','','192.0.2.10')+note('删除后此记录不再提供解析。','error')+check('确认删除此记录',true),'dns-record',{gate:true,footer:btn('删除记录',null,'danger-action')});
+add('d1-indexes','d1','users · 索引',()=>table(['名称','唯一','字段'],[['idx_users_name','否','name'],['sqlite_autoindex_users_1','是','id']]),{back:'d1-table'});
+form('d1-json','d1','SQL JSON / batch',()=>row('数据库','','','app-db')+field('完整 JSON','{"batch":[{"sql":"SELECT id FROM users WHERE id = ?","params":["1"]}]}','textarea')+field('返回格式','结构化 JSON','select:结构化 JSON|Raw 数组')+btn('读取完整 JSON 文件',null,'secondary')+muted('每个 query 的参数均为字符串。'),'d1-sql','d1-confirm-risk');
+add('secure-session','states','内容会话',()=>focus('内容已隐藏','重新开启后查看或编辑。','开启受保护会话','kv-value'),{center:true,back:'kv-keys',intent:'KV、D1 和 Sippy 共用受保护会话状态；离开或失效后清除敏感内容，重新打开恢复入口。',boundary:'原型按钮使用 KV 示例。正式版恢复原请求页面，并且必须先完成 SecureWindow/私有 owner 门禁，不能用普通弹层模拟保护。',related:['kv-value','d1-sql','r2-sippy-edit']});
+// A form's preview uses that form's target and visible values. The catalogue also
+// exposes standalone examples of each confirmation stage for design review.
+const reviewEntries=new Set(['change-review','r2-review','r2-config-review','zone-preview','kv-confirm-risk','d1-confirm-risk','danger-risk','dns-preview']);
+const reviewLater=new Set(['kv-confirm-identity','kv-confirm-final','d1-confirm-identity','d1-confirm-final','danger-identity','danger-final']);
+const drafts=new Map();let activeReview=null;
+function captureReview(page,phone,entry,trigger){
+ const fields=Array.from(phone.querySelectorAll('.field')).map(f=>{
+  const el=f.querySelector('input,select,textarea');return [f.querySelector('span')?.textContent||'字段',el?.type==='password'?'已隐藏':el?.value||'未填写'];
+ });
+ phone.querySelectorAll('.switch-row').forEach(f=>fields.push([f.querySelector('span').textContent,f.querySelector('input').checked?'开启':'关闭']));
+ const get=k=>fields.find(x=>x[0]===k)?.[1];
+ const deletion=trigger?.dataset.actionLabel?.startsWith('删除');
+ const title=deletion?trigger.dataset.actionLabel:page.id==='r2-job-create'?(get('操作')||page.title):page.title;
+ const creating=['kv-create','r2-create','d1-create','zone-create'].includes(page.id);
+ const targets={zones:'example.com',dns:'example.com',security:'example.com',r2:'media-assets',kv:'app-config',d1:'app-db'};
+ const target=page.id==='r2-domain-edit'?'cdn.example.com':page.id==='kv-value'?'app-config / site:title':creating?(get('数据库名称')||get('名称')||get('域名')||'待填写名称'):targets[page.group]||'media-assets';
+ const identity=page.group==='d1'?(creating?'0123456789abcdef0123456789abcdef':'11111111-2222-3333-4444-555555555555'):page.group==='kv'?'namespace-example-id':target;
+ const identityLabel=page.group==='d1'?(creating?'账号 ID':'数据库 UUID'):page.group==='kv'?'命名空间 ID':page.id==='r2-domain-edit'?'域名':['zones','dns','security'].includes(page.group)?'域名':'存储桶名';
+ const danger=/删除|清空/.test(title);
+ const fast=page.id==='kv-create'||page.id==='kv-rename';
+ return {origin:page.id,title,group:page.group,fields:deletion?[]:fields,target,identity,identityLabel,danger,fast,entry};
+}
+function reviewPresentation(p){
+ const r=activeReview;if(!r||(!reviewEntries.has(p.id)&&!reviewLater.has(p.id)))return p;
+ const identity=p.id.endsWith('-identity');
+ const final=p.id.endsWith('-final')||r.fast;
+ const chain=r.entry==='kv-confirm-risk'?'kv-confirm':r.entry==='d1-confirm-risk'?'d1-confirm':r.entry==='danger-risk'?'danger':null;
+ let body=row('账号','','','Jim 的账号')+row('操作','','',esc(r.title))+row('目标','','',esc(r.target));
+ if(identity){body+=code(r.identity)+`<label class="field"><span>输入完整${r.identityLabel}</span><input data-match="${esc(r.identity)}" autocomplete="off"></label>`;
+  return {...p,title:'核对目标身份',back:r.entry,body:()=>body,gate:true,footer:btn('继续',chain+'-final')};}
+ if(r.group==='d1'||r.group==='kv'&&!r.fast)body+=row(r.identityLabel,'','',r.identity);
+ body+=r.fields.map(([k,v])=>/SQL|JSON|内容|值/.test(k)?section(esc(k))+code(v):row(esc(k),'','',esc(v))).join('');
+ const checks=[];
+ if(r.origin==='r2-job-create'&&r.danger){body+=note('将删除匹配范围内的对象。','error');checks.push('已在外部中止分段上传并暂停写入');}
+ if(r.origin==='r2-public'&&r.fields.some(x=>x[0]==='开启公开访问'&&x[1]==='开启')){body+=note('开启后可通过公开地址访问桶内对象。');checks.push('确认公开访问影响');}
+ if(['r2-cors-edit','r2-lifecycle-edit','r2-lock'].includes(r.origin)){body+=note('将替换本次完整规则集。');checks.push('已核对全部规则');}
+ if(r.origin==='universal-ssl'&&r.fields.some(x=>x[0]==='Universal SSL'&&x[1]==='关闭')){body+=note('关闭后可能影响使用该证书的访问。');checks.push('确认关闭证书的影响');}
+ if(!r.danger&&(r.origin==='ssl'||r.origin==='site-setting-edit'||r.origin==='r2-domain-edit')){body+=note('若降低协议或加密级别，会影响连接安全。');checks.push('已核对本次安全设置变更');}
+ if(r.danger&&r.origin==='r2-domain-edit'){body+=note('移除该域名与存储桶的关联，域名访问将受影响。','error');checks.push('确认移除此域名');}
+ if(r.danger&&r.origin==='dnssec-edit'){body+=note('删除前请核对注册商 DS，避免解析验证失败。','error');checks.push('已核对注册商 DS 配置');}
+ if(r.danger&&r.origin==='r2-notifications'){body+=note('将删除此桶的通知配置，后续事件不再发送到相关队列。','error');checks.push('已核对通知配置范围');}
+ if(r.group==='d1'){body+=note(r.danger?'将删除数据库及其中数据。':'请核对数据库与完整操作内容。');}
+ if(r.group==='kv'&&!r.fast){body+=note(r.danger?'将删除所选范围的键及内容。':'写入会影响已有值与到期设置。');}
+ if(r.origin==='dns-replace')body+=note('本次为完整替换，请核对全部字段。');
+ if(!final&&(chain||checks.length)){checks.push('我已核对本次全部目标与内容');body+=checks.map(x=>check(x,true)).join('');}
+ const footer=!final&&chain?btn('继续',chain+'-identity'):`<div class="split">${btn('返回编辑',r.origin,'secondary')}${btn(r.danger?'确认删除':'确认提交',null,r.danger?'danger-action':'primary')}</div>`;
+ return {...p,title:final?'最终确认':'确认变更',back:final&&chain&&!r.fast?chain+'-identity':r.origin,body:()=>body,footer,gate:!final&&(!!chain||checks.length>0)};
+}
+// Curated boards include both everyday surfaces and deep management workflows.
+const boards={
+ main:{name:'五个主页面',ids:['overview','domains','workers','billing','accounts']},
+ connect:{name:'账号连接',ids:['connect','connect-loading','connect-choose','connect-error']},
+ domains:{name:'域名与 DNS',ids:['zone','dns','dns-edit','dns-preview','dns-batch','dns-files','dns-scan-review','dns-settings']},
+ security:{name:'安全与站点',ids:['site-settings','site-options','ssl','dnssec','dnssec-ds','purge','purge-confirm','readonly']},
+ r2:{name:'R2 对象与配置',ids:['r2','r2-objects','r2-object','r2-upload','r2-config','r2-cors-edit','r2-lifecycle-edit','r2-public']},
+ r2more:{name:'R2 集成与作业',ids:['r2-lock','r2-domains','r2-sippy','r2-sippy-edit','r2-jobs','r2-notifications','r2-metrics','r2-delete-bucket']},
+ kv:{name:'KV 管理',ids:['kv','kv-keys','kv-value','kv-edit','kv-bulk-write','kv-confirm-risk','kv-confirm-identity','kv-confirm-final']},
+ d1:{name:'D1 管理',ids:['d1','d1-database','d1-schema','d1-rows','d1-sql','d1-confirm-risk','d1-results','d1-settings']},
+ account:{name:'账单、账号与任务',ids:['bill-detail','billing-unavailable','account-detail','updates','jobs','task-unknown','task-manual','disconnect']},
+ states:{name:'状态与恢复',ids:['first','empty','loading','read-error','permission','pagination-error','field-error','conflict']}
+};
+const pageMap=new Map(pages.map(p=>[p.id,p]));
+const nav=[['overview','总览','grid'],['domains','域名','globe'],['workers','资源','box'],['billing','账单','card'],['accounts','账号','user']];
+let current='overview',galleryMode=false,boardKey='main',historyStack=[],toastTimer;
+const params=new URLSearchParams(location.search);
+function notify(text){const t=document.querySelector('#toast');t.textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.textContent='',3500)}
+function frame(p){
+ p=reviewPresentation(p);const body=p.body(),root=!!p.root;
+ const left=root?'':`<button class="icon-button" ${goAttr(p.back)} aria-label="返回" ${p.locked?'disabled':''}>${icon('back')}</button>`;
+ const account=root&&!['accounts','first'].includes(p.id)?`<button class="account-chip" data-go="account-switch">Jim 的账号 ${icon('down')}</button>`:'';
+ const action=p.top?`<button class="${root&&['添加','创建'].includes(p.top.label)?'icon-button add-action':'top-action'}" ${goAttr(p.top.id)} aria-label="${p.top.label}">${root&&['添加','创建'].includes(p.top.label)?icon('plus'):p.top.label}</button>`:'';
+ const footer=p.footer?`<div class="footer">${p.footer}</div>`:'';
+ const html=`<div class="phone ${root?'root-phone':''}" data-page="${p.id}" data-gated="${p.gate?1:0}"><div class="status"><span>9:41</span><span class="system">${icon('signal')}<span class="battery"></span></span></div><div class="topbar ${root?'root-topbar':''}">${left}<h1>${p.title}</h1>${account}${action}</div><div class="scroll ${p.center?'center-content':''}" tabindex="0" aria-label="${p.title}内容">${body}${p.center?'':footer}</div>${p.center?footer:''}${root?`<nav class="bottom-nav" aria-label="主导航">${nav.map(([id,label,i])=>`<button ${goAttr(id)} class="${(p.root==='resources'?id==='workers':id===p.root)?'selected':''}"><span class="navicon">${icon(i)}</span>${label}</button>`).join('')}</nav>`:''}<div class="gesture"></div></div>`;
+ return polishFrame(html,p);
+}
+function polishFrame(html,p){
+ const template=document.createElement('template');template.innerHTML=html;
+ const phone=template.content.querySelector('.phone'),scroll=phone.querySelector('.scroll');
+ if(p.root)scroll.querySelectorAll('.context').forEach(e=>{if(e.querySelector('button'))e.remove()});
+ // Adjacent fields share one quiet surface; section and risk boundaries remain intact.
+ for(const parent of [scroll,...scroll.querySelectorAll('.details')]){
+  for(const field of [...parent.children]){if(field.parentElement!==parent||!field.matches('.field'))continue;const group=document.createElement('div');group.className='form-group';field.before(group);let next=field;while(next?.matches('.field')){const following=next.nextElementSibling;group.append(next);next=following}}
+ }
+ const module=scroll.querySelector('.search-module');
+ if(module){
+  const tools=module.querySelector('.list-tools'),trigger=module.querySelector('[data-toggle-search]');
+  const adjacent=module.nextElementSibling?.matches('.tabs')?module.nextElementSibling:module.previousElementSibling?.matches('.tabs')?module.previousElementSibling:null;
+  if(adjacent){tools.prepend(adjacent)}else{phone.querySelector('.topbar').append(trigger);tools.remove()}
+  let next=module.nextElementSibling;while(next&&(!next.matches('.section,.details,.form-group')||p.id==='jobs'&&next.matches('.section'))){if(next.matches('.section'))next.dataset.filterHeading='';if(next.matches('.row'))next.dataset.filterRow='';next.querySelectorAll('.row').forEach(row=>row.dataset.filterRow='');next=next.nextElementSibling}
+  const empty=document.createElement('p');empty.className='search-empty';empty.hidden=true;empty.textContent='没有匹配结果';module.after(empty);
+  if(['search','no-results'].includes(p.id)){module.querySelector('.search-editor').hidden=false;trigger.setAttribute('aria-expanded','true')}
+ }
+ return template.innerHTML;
+}
+function applyListFilter(phone){
+ const q=phone.querySelector('[data-local-filter]')?.value.trim().toLowerCase()||'',state=phone.querySelector('[data-status-filter].active')?.dataset.statusFilter||'all';let visible=0;
+ phone.querySelectorAll('[data-filter-row]').forEach(row=>{row.hidden=!!q&&!row.textContent.toLowerCase().includes(q)||state!=='all'&&row.dataset.domainState!==state;if(!row.hidden)visible++});
+ phone.querySelectorAll('[data-filter-heading]').forEach(heading=>{let next=heading.nextElementSibling,hasVisible=false;while(next&&!next.matches('.section')){if(next.matches('[data-filter-row]')&&!next.hidden)hasVisible=true;next=next.nextElementSibling}heading.hidden=!hasVisible});
+ const empty=phone.querySelector('.search-empty');if(empty)empty.hidden=visible!==0||!phone.querySelector('[data-filter-row]');
+}
+function toggleSearch(phone,open){
+ const editor=phone.querySelector('.search-editor'),input=phone.querySelector('[data-local-filter]'),trigger=phone.querySelector('[data-toggle-search]');
+ editor.hidden=!open;trigger.setAttribute('aria-expanded',String(open));if(open){input.focus()}else{input.value='';applyListFilter(phone);trigger.focus()}
+}
+function gatePhones(){document.querySelectorAll('.phone').forEach(phone=>{
+ const p=pageMap.get(phone.dataset.page);if(phone.dataset.gated!=='1'&&!p?.invalid)return;
+ const inputs=[...phone.querySelectorAll('[data-gate-check],[data-match]')];
+ const valid=!p.invalid&&inputs.length>0&&inputs.every(i=>i.hasAttribute('data-match')?i.value===i.dataset.match:i.checked);
+ phone.querySelectorAll('.footer .primary,.footer .danger-action').forEach(b=>b.disabled=!valid);
+})}
+function saveDraft(phone){if(!phone)return;drafts.set(phone.dataset.page,[...phone.querySelectorAll('input,textarea,select')].map(e=>({value:e.type==='password'?'':e.value,checked:e.checked})))}
+function restoreDraft(phone){const values=drafts.get(phone.dataset.page);if(!values)return;phone.querySelectorAll('input,textarea,select').forEach((e,i)=>{if(values[i]){e.value=values[i].value;e.checked=values[i].checked}});if(phone.querySelector('[data-local-filter]')?.value){toggleSearch(phone,true);applyListFilter(phone)}}
+function renderCatalog(){
+ const q=document.querySelector('#filter').value.toLowerCase();
+ document.querySelector('#page-count').textContent=`${pages.length} 个页面与状态 · 全部为设计示例`;
+ document.querySelector('#catalog').innerHTML=Object.entries(groups).map(([g,label])=>{
+  const ps=pages.filter(p=>p.group===g&&(!q||`${p.title} ${p.id} ${label}`.toLowerCase().includes(q)));
+  return ps.length?`<details ${q||pageMap.get(current)?.group===g?'open':''}><summary>${label}<span>${ps.length}</span></summary>${ps.map(p=>`<button data-catalog="${p.id}" class="${p.id===current?'active':''}">${p.title}${p.mode?' · '+p.mode:''}</button>`).join('')}</details>`:'';
+ }).join('')+`<button data-coverage>页面覆盖清单</button>`;
+}
+function inspector(p){return `<div class="inspector-card"><span class="tag ${p.mode?'warn':''}">${p.mode||'当前入口重设计'}</span><h2>${p.title}</h2><p>${p.intent}</p><h3>能力边界</h3><p>${p.boundary}</p><h3>对应源码</h3>${p.sources.map(s=>`<p><code>${esc(s)}</code></p>`).join('')}</div><div class="inspector-card"><h3>浏览方式</h3><p>点击页面中的列表、按钮和底部导航，查看相关画面。不会连接 Cloudflare、上传文件或执行操作。请勿填写真实凭据。</p><p>20:9 是参考比例，2K 导出为 1440 × 3200；实际 App 还需原生字体、系统缩放和安全区验收。</p>${p.related?'<h3>相关状态</h3>'+p.related.map(id=>`<button data-catalog="${id}">${pageMap.get(id)?.title||id}</button>`).join(''):''}<button data-coverage>页面覆盖清单</button></div>`}
+function renderPage(id,push=true){
+ const p=pageMap.get(id)||pageMap.get('overview');if(push&&current!==p.id)historyStack.push(current);current=p.id;galleryMode=false;document.body.classList.remove('gallery-mode');
+ document.querySelector('#stage').innerHTML=`<div class="stage-label"><span>${groups[p.group]} / ${p.title}</span><span>示例数据 · ${pages.indexOf(p)+1}/${pages.length}</span></div>${frame(p)}`;
+ document.querySelector('#inspector').innerHTML=inspector(p);renderCatalog();restoreDraft(document.querySelector('.phone'));gatePhones();
+ if(!document.body.classList.contains('solo'))location.hash=p.id;
+}
+function renderBoard(key=boardKey){
+ activeReview=null;boardKey=boards[key]?key:'main';galleryMode=true;document.body.classList.add('gallery-mode');const b=boards[boardKey];
+ window.scrollTo(0,0);document.querySelector('#stage').scrollLeft=0;document.querySelector('#stage').innerHTML=`<div class="gallery-heading"><div><h2>${b.name}</h2><p>FlareGo · 全页面视觉提案 · 示例数据，不代表真实云端状态</p></div><select id="board-select" aria-label="设计分组">${Object.entries(boards).map(([k,v])=>`<option value="${k}" ${k===boardKey?'selected':''}>${v.name}</option>`).join('')}</select></div><div class="sheet ${boardKey==='main'?'five':''}">${b.ids.map(id=>{const p=pageMap.get(id);return `<article class="sheet-item"><div class="sheet-label"><span>${p.title}</span><button data-catalog="${id}">单页查看 ↗</button></div>${frame(p)}</article>`}).join('')}</div>`;gatePhones();
+}
+function showCoverage(){
+ activeReview=null;galleryMode=true;document.body.classList.add('gallery-mode');
+ document.querySelector('#stage').innerHTML=`<div class="coverage"><h2>页面覆盖清单</h2><p>本稿以当前 main 工作区的实际 UI 为范围，覆盖主入口、子页面、表单、确认和恢复状态。共 ${pages.length} 个可浏览画面。其数量包含流程状态，不等同于原生路由数量。</p><div class="coverage-note"><strong>设计边界</strong><p>沿用已确认的紧凑样式，深浅色均覆盖全部页面。资源入口右侧显示小数量，搜索按需展开，文字标签用短下划线区分。列表与分组表单优先；高级选项折叠，风险和范围只在需要用户决策时出现。复杂操作保留既有独立确认；设计稿不修改授权、权限、任务归属或自动重试规则。</p><p>R2 Slurper 位于其他工作树，不在此工作区实际入口范围内。Workers 部署、真实域名购买仍为官方入口；购买模拟独立标注。D1 导入、导出、恢复、删除恢复保留生产受限状态。关于页为新增布局提案。</p><p>设置值与表单展示典型分支；DNS 类型字段、站点受控白名单、Sippy 供应商分支均须在原生实现时复用既有 schema。主路径设计不意味着降低确认或允许未支持的操作。</p></div><table><thead><tr><th>区域</th><th>设计画面</th><th>源码依据</th></tr></thead><tbody>${Object.entries(groups).map(([g,name])=>`<tr><td>${name}</td><td>${pages.filter(p=>p.group===g).map(p=>`<button data-catalog="${p.id}">${p.title}${p.mode?'（'+p.mode+'）':''}</button>`).join('')}</td><td>${[...new Set(pages.filter(p=>p.group===g).flatMap(p=>p.sources))].map(s=>`<code>${s}</code>`).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function navigate(id,fromPhone,trigger){
+ const from=fromPhone? pageMap.get(fromPhone.dataset.page):pageMap.get(current);saveDraft(fromPhone);
+ if(reviewEntries.has(id)&&from&&!reviewEntries.has(from.id)&&!reviewLater.has(from.id)){for(const key of [...reviewEntries,...reviewLater])drafts.delete(key);activeReview=captureReview(from,fromPhone,id,trigger);}
+ else if(!reviewLater.has(id)&&!reviewEntries.has(id))activeReview=null;
+ renderPage(id);
+}
+document.addEventListener('click',e=>{
+ const target=e.target.closest('button');if(!target||target.disabled)return;
+ const phone=target.closest('.phone');
+ if(target.hasAttribute('data-toggle-search')){toggleSearch(phone,target.getAttribute('aria-expanded')!=='true');return}
+ if(target.hasAttribute('data-close-search')){toggleSearch(phone,false);return}
+ if(target.hasAttribute('data-status-filter')){phone.querySelectorAll('[data-status-filter]').forEach(b=>{b.classList.toggle('active',b===target);b.setAttribute('aria-pressed',String(b===target))});applyListFilter(phone);return}
+ if(target.hasAttribute('data-catalog')){activeReview=null;renderPage(target.dataset.catalog);return}
+ if(target.hasAttribute('data-coverage')){showCoverage();return}
+ if(target.hasAttribute('data-go')){navigate(target.dataset.go,target.closest('.phone'),target);return}
+ if(target.hasAttribute('data-demo')){notify(target.dataset.demo);return}
+ if(target.hasAttribute('data-reveal')){const privateEl=target.closest('.scroll').querySelector('[data-private]');privateEl.textContent=privateEl.dataset.open?'内容已隐藏':target.dataset.reveal;privateEl.dataset.open=privateEl.dataset.open?'':'true';target.textContent=privateEl.dataset.open?'隐藏内容':'显示内容';}
+});
+document.addEventListener('input',e=>{gatePhones();if(e.target.matches('[data-local-filter]'))applyListFilter(e.target.closest('.phone'))});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&e.target.matches('[data-local-filter]')){e.preventDefault();toggleSearch(e.target.closest('.phone'),false)}});
+document.addEventListener('change',e=>{gatePhones();if(e.target.id==='board-select')renderBoard(e.target.value)});
+document.querySelector('#filter').oninput=renderCatalog;
+document.querySelector('#theme').onclick=e=>{const on=document.body.classList.toggle('light');e.currentTarget.textContent=on?'深色':'浅色';e.currentTarget.setAttribute('aria-pressed',on)};
+document.querySelector('#font').onclick=e=>{const on=document.body.classList.toggle('large');e.currentTarget.setAttribute('aria-pressed',on);e.currentTarget.textContent=on?'标准字号':'大字号'};
+document.querySelector('#viewport').onchange=e=>document.documentElement.style.setProperty('--phone-height',`${e.target.value}px`);
+document.querySelector('#gallery').onclick=()=>galleryMode?renderPage(current,false):renderBoard();
+window.addEventListener('hashchange',()=>{if(pageMap.has(location.hash.slice(1))&&location.hash.slice(1)!==current){activeReview=null;renderPage(location.hash.slice(1),false)}});
+if(params.get('theme')==='light')document.querySelector('#theme').click();
+if(params.get('font')==='large')document.querySelector('#font').click();
+if(params.get('height')==='640'){document.querySelector('#viewport').value='640';document.querySelector('#viewport').dispatchEvent(new Event('change'))}
+if(params.has('solo'))document.body.classList.add('solo');
+if(params.get('board')){if(params.get('clean')==='1')document.body.classList.add('board-only');renderBoard(params.get('board'))}else if(params.has('coverage'))showCoverage();else renderPage(params.get('page')||params.get('solo')||location.hash.slice(1)||'overview',false);
+// Read-only metadata for local design checks, no cloud calls.
+window.designPreview={pages:pages.map(({id,group,title,mode,sources})=>({id,group,title,mode,sources})),boards,renderPage,renderBoard,showCoverage};
+</script>
+</body></html>

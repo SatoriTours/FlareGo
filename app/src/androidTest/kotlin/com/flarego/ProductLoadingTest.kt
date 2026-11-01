@@ -50,7 +50,7 @@ class ProductLoadingTest {
                     },object:CapabilityPort { override suspend fun status(scope:CloudScope,actionKey:String)=CapabilityStatus(actionKey,scope) })
                 }).also { controller=it;it.publishTasks(tasks);it.navigate(page) }
             }
-            FlareGoTheme { FlareGoApp(c,{_,_,_->},{},{},reconcileTask={checked++}) }
+            FlareGoTheme { FlareGoApp(c,{},{},reconcileTask={checked++}) }
         }
     }
     @After fun cleanup() {

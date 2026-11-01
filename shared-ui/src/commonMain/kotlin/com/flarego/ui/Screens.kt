@@ -7,6 +7,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,118 +20,81 @@ import com.flarego.core.model.*
 import com.flarego.core.application.inventory.*
 import kotlinx.coroutines.launch
 
-private val ListPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp)
+private val ListPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
 
 @Composable
-fun OverviewScreen(state: AppState, navigate: (Page) -> Unit, create: () -> Unit, refreshAll: () -> Unit = {}) {
-    LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+fun OverviewScreen(
+    state: AppState,
+    navigate: (Page) -> Unit,
+    create: () -> Unit,
+    refreshAll: () -> Unit = {},
+    openResource: (ResourceKind) -> Unit = { navigate(Page.RESOURCES) },
+) {
+    LazyColumn(contentPadding = ListPadding) {
+        item { Muted("已加载资源", Modifier.padding(top = 8.dp, bottom = 8.dp)) }
         item {
-            Surface(
-                color = Forest,
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
-                modifier = Modifier.fillMaxWidth().clickable { navigate(Page.BILLING) },
-            ) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("本月费用预估", color = Lime, style = MaterialTheme.typography.labelLarge)
-                        Text(
-                            if (state.selected?.demo == true) "演示 · USD" else "尚无预估",
-                            color = Lime,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                    Text(
-                        state.billing?.estimate?.let { "$$it" } ?: "—",
-                        color = androidx.compose.ui.graphics.Color.White,
-                        style = MaterialTheme.typography.headlineLarge,
-                    )
-                    Text(
-                        if (state.selected?.demo == true) "示例数据 · 不产生真实扣款" else "历史账单可在费用页查看，暂无账号费用预估",
-                        color = Lime.copy(alpha = .8f),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
+            CompactListRow("域名", Modifier.testTag("overview-domains"),
+                value = overviewLoadedCount(state, ProductKey.ZONES), icon = Icons.Outlined.Language,
+                onClick = { navigate(Page.DOMAINS) })
         }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SectionCard(Modifier.weight(1f).clickable { navigate(Page.RESOURCES) }) {
-                    Muted("云资源")
-                    Text(
-                        if (state.productLoading) loadedLabel(state.products.filterKeys { it in resourceProducts }.values.toList()) else "${state.inventory.resources.size}",
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                    Muted("Workers / R2 / D1 / KV")
-                }
-                SectionCard(Modifier.weight(1f).clickable { navigate(Page.DOMAINS) }) {
-                    Muted("我的域名")
-                    Text(
-                        if (state.productLoading) loadedLabel(listOfNotNull(state.products[ProductKey.ZONES])) else "${state.inventory.domains.size}",
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                    Muted(if (state.productLoading && state.products[ProductKey.ZONES]?.observedAtMs == null) "激活状态未加载"
-                        else if (state.productLoading) "已加载域名中 ${state.inventory.domains.count { it.status == "active" }} 个已激活"
-                        else "${state.inventory.domains.count { it.status == "active" }} 个已激活")
-                }
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                listOf(
-                        Triple(Icons.Default.AddCircleOutline, "购买域名", { navigate(Page.BUY) }),
-                        Triple(Icons.Default.AddBox, "创建资源", create),
-                        Triple(
-                            Icons.AutoMirrored.Filled.ReceiptLong,
-                            "费用明细",
-                            { navigate(Page.BILLING) },
-                        ),
-                        Triple(Icons.Default.History, "操作记录", { navigate(Page.JOBS) }),
-                    )
-                    .forEach { (icon, title, click) ->
-                        Column(
-                            Modifier.weight(1f)
-                                .clickable(onClick = click)
-                                .padding(vertical = 10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(7.dp),
-                        ) {
-                            Icon(
-                                icon,
-                                title,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(26.dp),
-                            )
-                            Muted(title)
-                        }
-                    }
-            }
-        }
-        if (state.selected?.demo == true)
+        listOf(ResourceKind.WORKER, ResourceKind.R2, ResourceKind.KV, ResourceKind.D1).forEach { kind ->
             item {
-                SectionCard {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("请求趋势", style = MaterialTheme.typography.titleMedium)
-                        Pill("示例 · 近 30 天")
-                    }
-                    DemoChart()
-                    Muted("演示账号流量，仅用于展示界面")
-                }
-            }
-        item {
-            SectionCard {
-                Text("最近操作", style = MaterialTheme.typography.titleMedium)
-                val jobs = state.operations.filter { it.connectionId == state.selected?.id }.take(3)
-                if (jobs.isEmpty()) Muted("暂无操作，所有变更可在操作记录追踪")
-                else
-                    jobs.forEach {
-                        Text(it.title, style = MaterialTheme.typography.bodyMedium)
-                        Muted(it.status.label)
-                    }
+                CompactListRow(when (kind) {
+                    ResourceKind.WORKER -> "Workers"
+                    ResourceKind.R2 -> "R2 存储"
+                    ResourceKind.KV -> "KV 存储"
+                    ResourceKind.D1 -> "D1 数据库"
+                }, Modifier.testTag("overview-${kind.name.lowercase()}"),
+                    value = overviewLoadedCount(state, kind.product()), icon = kind.icon(),
+                    onClick = { openResource(kind) })
             }
         }
-        if (state.productLoading) item { OutlinedButton(onClick = refreshAll,modifier = Modifier.fillMaxWidth()) { Text("刷新全部产品") } }
+        item {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Muted("快速访问", Modifier.weight(1f))
+                TextButton(onClick = { navigate(Page.JOBS) }) { Text("操作记录", style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+        items(state.inventory.domains.take(2), key = { "domain:${it.id}" }) { domain ->
+            CompactListRow(domain.name, subtitle = "DNS 与站点设置", onClick = { navigate(Page.DOMAINS) })
+        }
+        items(state.inventory.resources.take(3), key = { "resource:${it.kind}:${it.id}" }) { resource ->
+            CompactListRow(resource.name, subtitle = resource.kind.label, onClick = { openResource(resource.kind) })
+        }
+        if (state.inventory.domains.isEmpty() && state.inventory.resources.isEmpty()) item {
+            Muted("加载资源后显示快捷入口", Modifier.padding(vertical = 12.dp))
+        }
+        val pendingTasks = state.tasks.filter { it.connectionId == state.selected?.id &&
+            it.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED, TaskState.ACTION_REQUIRED, TaskState.RECONCILING) }
+        val taskIds = state.tasks.filter { it.connectionId == state.selected?.id }.map { it.id }.toSet()
+        val pending = pendingTasks.size + state.operations.count { it.connectionId == state.selected?.id &&
+            it.id !in taskIds && it.status == OperationStatus.UNKNOWN }
+        if (pending > 0) item {
+            OutlinedButton(onClick = { navigate(Page.JOBS) }, modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                Text("$pending 项操作待核对")
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(15.dp))
+            }
+        }
+        if (state.productLoading) item {
+            TextButton(onClick = refreshAll, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("刷新全部产品") }
+        }
         items(state.inventory.notices) { Notice(it) }
     }
+}
+
+private fun overviewLoadedCount(state: AppState, product: ProductKey): String {
+    if (state.productLoading) {
+        val loaded = state.products[product] ?: return "未加载"
+        if (loaded.observedAtMs == null) return when {
+            loaded.loading -> "读取中"
+            loaded.error != null -> "读取失败"
+            else -> "未加载"
+        }
+        return "${loaded.content.count()}${if (loaded.allPagesLoaded) "" else "+"}"
+    }
+    return if (product == ProductKey.ZONES) state.inventory.domains.size.toString()
+    else state.inventory.resources.count { it.kind.product() == product }.toString()
 }
 
 @Composable
@@ -198,34 +164,16 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
     r2Content: (@Composable () -> Unit)? = null, kvContent: (@Composable () -> Unit)? = null, d1Content: (@Composable () -> Unit)? = null) {
     var filter by remember { mutableStateOf<ResourceKind?>(null) }
     Column {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            if (!state.productLoading) TextButton(onClick = { filter = null }, contentPadding = PaddingValues(6.dp)) {
-                Text(
-                    "全部",
-                    color =
-                        if (filter == null) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            ResourceKind.entries.forEach { kind ->
-                TextButton(onClick = { if (state.productLoading) selectKind(kind) else filter = kind }, contentPadding = PaddingValues(6.dp)) {
-                    Text(
-                        when (kind) {
-                            ResourceKind.WORKER -> if (state.productLoading) "Workers" else "边缘计算"
-                            ResourceKind.R2 -> if (state.productLoading) "R2" else "存储"
-                            ResourceKind.D1 -> "数据库"
-                            ResourceKind.KV -> "KV"
-                        },
-                        color =
-                            if ((if (state.productLoading) state.resourceKind else filter) == kind) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
+        val selectedKind = if (state.productLoading) state.resourceKind else filter
+        CompactTabs(
+            (if (!state.productLoading) listOf("all" to "全部") else emptyList()) +
+                listOf("WORKER" to "Workers", "R2" to "R2", "KV" to "KV", "D1" to "D1"),
+            selected = selectedKind?.name ?: "all",
+            onSelect = { key ->
+                val kind = ResourceKind.entries.firstOrNull { it.name == key }
+                if (state.productLoading && kind != null) selectKind(kind) else filter = kind
+            }, modifier = Modifier.padding(horizontal = 20.dp), tagPrefix = "resource-tab",
+        )
         if (state.resourceKind == ResourceKind.R2 && r2Content != null) {
             Box(Modifier.weight(1f)) { r2Content() }
             return@Column
@@ -508,7 +456,7 @@ fun AccountsScreen(
 ) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (state.connections.isEmpty()) item { ServiceSetupCard(connect) }
-        item { Notice("账号仅保存于本机。API Token 使用 Android Keystore 加密保存。") }
+        item { Notice("账号仅保存于本机，授权凭据使用 Android Keystore 加密保存。") }
         item { updates() }
         items(state.connections, key = { it.id }) { connection ->
             SectionCard {
@@ -592,11 +540,6 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
     }
 }
 
-private val resourceProducts = setOf(ProductKey.WORKERS,ProductKey.R2,ProductKey.D1,ProductKey.KV)
-private fun loadedLabel(states: List<ProductLoadState>): String {
-    val observed = states.filter { it.observedAtMs != null }
-    return if (observed.isEmpty()) "未加载" else "已加载 ${observed.sumOf { it.content.count() }}"
-}
 @Composable
 fun ProductStatus(state: ProductLoadState?, refresh: () -> Unit, more: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp,vertical = 6.dp),verticalArrangement = Arrangement.spacedBy(4.dp)) {

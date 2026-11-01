@@ -533,7 +533,7 @@ class DnsManagementUiTest {
         compose.setContent {
             val scope = rememberCoroutineScope()
             val controller = remember { AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), demoConnections) }
-            FlareGoApp(controller, { _, _, _ -> }, {}, {}, management = CloudflareManagement(dns, zones))
+            FlareGoApp(controller, {}, {}, management = CloudflareManagement(dns, zones))
         }
         compose.onNodeWithTag("nav-domains").performClick()
         click("zone-row-ui-zone")

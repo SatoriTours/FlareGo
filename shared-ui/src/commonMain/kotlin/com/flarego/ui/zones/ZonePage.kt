@@ -11,6 +11,10 @@ import androidx.compose.ui.unit.dp
 import com.flarego.core.application.zones.*
 import com.flarego.core.model.*
 import com.flarego.ui.SectionCard
+import com.flarego.ui.CompactTabs
+import com.flarego.ui.CompactListRow
+import com.flarego.ui.Muted
+import com.flarego.ui.EmptyState
 import com.flarego.ui.management.ZoneManagementSlots
 import com.flarego.ui.management.ZoneManagementTab
 
@@ -61,6 +65,7 @@ private fun ZonePageContent(
             else -> ZoneFormDraft(type = editorTarget?.type ?: "full", paused = editorTarget?.paused ?: false)
         })
     }
+    var statusFilter by remember(account) { mutableStateOf("all") }
     var localTab by remember(account, selected?.ref) { mutableStateOf("details") }
     val tab = slots?.selectedTab?.name?.lowercase() ?: localTab
     Column(modifier.fillMaxSize()) {
@@ -92,39 +97,40 @@ private fun ZonePageContent(
                     onPreview = { if (!state.loading) onIntent(ZoneIntent.Preview(it)) },
                     onCancel = { onIntent(ZoneIntent.Cancel) }, busy = state.loading)
                 selected == null -> Column(
-                    Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Cloudflare Zone", style = MaterialTheme.typography.titleLarge)
-                    Text("Zone 是 DNS 托管与云服务区域，不是注册域名购买。")
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp)) {
+                    CompactTabs(listOf("all" to "全部", "active" to "已激活", "pending" to "待激活"),
+                        statusFilter, { statusFilter = it }, tagPrefix = "zone-filter")
                     ZoneTaskSummary(task, onIntent)
-                    Button(onClick = { onIntent(ZoneIntent.BeginCreate) }, enabled = !blocked && !state.loading,
-                        modifier = Modifier.fillMaxWidth().testTag("zone-create")) { Text("创建 Zone") }
-                    val matchingZones = state.zones.filter { it.ref.account == account && it.name.contains(query.trim(), true) }
+                    val matchingZones = state.zones.filter { it.ref.account == account &&
+                        (statusFilter == "all" || it.status == statusFilter) && it.name.contains(query.trim(), true) }
                     if (query.isNotBlank()) Text("已加载域名中匹配 ${matchingZones.size} 个")
                     matchingZones.forEach { zone ->
-                        OutlinedButton(onClick = { onIntent(ZoneIntent.Open(zone.ref)) },
-                            modifier = Modifier.fillMaxWidth().testTag("zone-row-${zone.ref.zoneId}")) {
-                            Column(Modifier.fillMaxWidth()) { Text(zone.name); Text("${zone.status} · ${zone.type}") }
-                        }
+                        CompactListRow(zone.name, Modifier.testTag("zone-row-${zone.ref.zoneId}"),
+                            subtitle = when (zone.status) {
+                                "active" -> "已激活 · DNS 托管"
+                                "pending" -> "等待名称服务器"
+                                else -> zone.status
+                            }, onClick = { onIntent(ZoneIntent.Open(zone.ref)) })
                     }
-                    if (matchingZones.isEmpty() && !state.loading) {
-                        if (query.isNotBlank()) {
-                            Text("没有匹配的域名")
-                            Text("尝试其他关键词或清空搜索；搜索范围为已加载的域名。")
-                        } else Text("当前账号尚无 Zone；可刷新或检查 Zone Read 权限。")
+                    if (matchingZones.isEmpty() && !state.loading && state.error == null) {
+                        EmptyState(
+                            if (query.isNotBlank() || statusFilter != "all") "没有匹配的域名" else "已加载列表暂无域名",
+                            if (query.isNotBlank() || statusFilter != "all") "尝试其他关键词或筛选；仅搜索已加载域名。"
+                            else if (state.next != null) "还有更多页面，可继续加载。"
+                            else "可刷新列表，或检查 Zone Read 权限。")
                     }
+                    Muted("仅显示已加载的 DNS 托管区域，不是注册商域名目录。",
+                        Modifier.padding(vertical = 12.dp))
                     if (state.next != null) OutlinedButton(onClick = { onIntent(ZoneIntent.LoadMore) }, enabled = !state.loading,
                         modifier = Modifier.fillMaxWidth().testTag("zone-load-more")) { Text("加载更多 Zone") }
                     OutlinedButton(onClick = { onIntent(ZoneIntent.Load(account)) }, enabled = !state.loading,
                         modifier = Modifier.fillMaxWidth().testTag("zone-refresh")) { Text("刷新 Zone") }
                 }
                 else -> Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp)) {
-                    Text(selected.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag("zone-detail-name"))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("details" to "详情", "dns" to "DNS", "settings" to "设置", "security" to "安全").forEach { (key, label) ->
-                            FilterChip(tab == key, { if(slots!=null) slots.onTabChanged(ZoneManagementTab.valueOf(key.uppercase())) else localTab=key }, label = { Text(label) }, modifier = Modifier.testTag("zone-tab-$key"))
-                        }
-                    }
+                    CompactTabs(listOf("details" to "概况", "dns" to "DNS", "settings" to "设置", "security" to "安全"),
+                        selected = tab, onSelect = { key ->
+                            if(slots!=null) slots.onTabChanged(ZoneManagementTab.valueOf(key.uppercase())) else localTab=key
+                        }, tagPrefix = "zone-tab")
                     Box(Modifier.weight(1f)) {
                         when (tab) {
                             "dns" -> dnsContent(selected)

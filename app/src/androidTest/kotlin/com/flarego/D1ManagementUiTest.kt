@@ -135,7 +135,7 @@ class D1ManagementUiTest {
     private fun install(open: Boolean = true) {
         compose.runOnIdle { model!!.viewModelScope.launch { model!!.connect("D1 Synthetic",account,"synthetic-d1-token") } }
         waitFor { model!!.controller.state.value.selected?.accountId == account }
-        compose.onNodeWithTag("nav-resources").performClick(); compose.onNodeWithText("数据库",useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("nav-resources").performClick(); compose.onNodeWithTag("resource-tab-D1").performClick()
         waitFor { browser.state.value.databases.isNotEmpty() }
         if (open) { click("d1-db-$uuid"); waitFor { browser.state.value.database != null } }
     }

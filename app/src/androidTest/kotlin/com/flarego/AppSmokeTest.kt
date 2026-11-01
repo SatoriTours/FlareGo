@@ -11,7 +11,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.flarego.core.application.AppController
 import com.flarego.core.demo.DemoSession
@@ -37,26 +36,26 @@ class AppSmokeTest {
                 val controller = remember {
                     AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), demoConnections)
                 }
-                FlareGoApp(controller, { _, _, _ -> }, {}, {})
+                FlareGoApp(controller, {}, {})
             }
         }
         compose.waitForIdle()
     }
 
     @Test
-    fun freshInstallGuidesServiceAndKeySetupAcrossTabs() {
-        compose.onNodeWithText("添加你的第一个云服务").assertIsDisplayed()
-        compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
+    fun freshInstallGuidesOfficialAuthorizationAcrossTabs() {
+        compose.onNodeWithText("添加你的云账号").assertIsDisplayed()
+        screenshot("first-launch")
+        compose.onNodeWithTag("setup-connect").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("api-gateway").assertDoesNotExist()
         listOf("domains", "resources", "billing", "accounts").forEach { tab ->
             compose.onNodeWithTag("nav-$tab").performClick()
-            compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("setup-connect").performScrollTo().assertIsDisplayed()
         }
-        compose.onNodeWithText("添加 Cloudflare 服务").performClick()
+        compose.onNodeWithTag("setup-connect").performClick()
         compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
-        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
-        compose.onNodeWithText("获取 API Token").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("验证并连接").assertIsNotEnabled()
+        compose.onNodeWithTag("oauth-token-fallback").assertDoesNotExist()
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         compose.onNodeWithText("取消").performClick()
         compose.onNodeWithContentDescription("切换云账号").performClick()
         compose.onNodeWithText("Production · 演示").assertDoesNotExist()
@@ -134,15 +133,14 @@ class AppSmokeTest {
     }
 
     @Test
-    fun connectionKeyboardMovesToNextFieldWithoutSubmitting() {
+    fun accountTabOffersOnlyOfficialAuthorization() {
         installDemoFixture()
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithText("账号名称").performScrollTo().performClick().performImeAction()
-        compose.onNodeWithText("Account ID").assertIsFocused().performImeAction()
-        compose.onNodeWithText("API Token", substring = false).assertIsFocused().performImeAction()
-        compose.onNodeWithText("API Token", substring = false).assertIsNotFocused()
-        compose.onNodeWithText("验证并连接").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        compose.onNodeWithTag("oauth-token-fallback").assertDoesNotExist()
+        compose.onNodeWithText("取消").performClick()
     }
 
     @Test
@@ -181,16 +179,9 @@ class AppSmokeTest {
     }
 
     @Test
-    fun authorizationAllowsScreenshotsButTokenEntryRemainsProtected() {
+    fun authorizationContainsNoSecretFieldsAndAllowsScreenshots() {
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.runOnIdle {
-            assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-        }
-        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
-        compose.runOnIdle {
-            assertTrue(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-        }
-        compose.onNodeWithText("改用 Cloudflare 官方授权").performScrollTo().performClick()
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         compose.runOnIdle {
             assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         }
@@ -198,51 +189,17 @@ class AppSmokeTest {
     }
 
     @Test
-    fun connectionDraftSurvivesActivityRecreationAndIsClearedOnCancel() {
-        val secret = "fixture-recreation-token-not-real"
+    fun authorizationDialogSurvivesActivityRecreationAndCancelClosesIt() {
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
-        compose.onNode(hasSetTextAction() and hasText("账号名称"))
-            .performScrollTo().performTextInput("恢复测试")
-        compose.onNode(hasSetTextAction() and hasText("Account ID"))
-            .performScrollTo().performTextInput("a".repeat(32))
-        compose.onNode(hasSetTextAction() and hasText("API Token"))
-            .performScrollTo().performTextInput(secret)
-
-        compose.onNodeWithText("账号 Token").performScrollTo().performClick()
         compose.activityRule.scenario.recreate()
-        compose.onNodeWithText("账号 Token").performScrollTo().assertIsSelected()
-
-        compose.onNode(hasSetTextAction() and hasText("账号名称"))
-            .performScrollTo().assertTextContains("恢复测试")
-        compose.onNode(hasSetTextAction() and hasText("Account ID"))
-            .performScrollTo().assertTextContains("a".repeat(32))
-        val tokenField = compose.onNode(hasSetTextAction() and hasText("API Token"))
-            .performScrollTo()
-        assertEquals(
-            "•".repeat(secret.length),
-            tokenField.fetchSemanticsNode().config[SemanticsProperties.EditableText].text,
-        )
-        compose.runOnIdle {
-            val model = ViewModelProvider(compose.activity)[FlareGoViewModel::class.java]
-            assertEquals(secret, model.connectionDraft.token)
-            assertTrue(
-                compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
-            )
-        }
+        compose.onNodeWithTag("oauth-title").assertIsDisplayed()
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         compose.onNodeWithText("取消").performClick()
-        compose.runOnIdle {
-            assertFalse(
-                compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
-            )
-        }
+        compose.activityRule.scenario.recreate()
+        compose.onNodeWithTag("oauth-title").assertDoesNotExist()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
-        listOf("账号名称", "Account ID", "API Token").forEach { label ->
-            val field = compose.onNode(hasSetTextAction() and hasText(label)).performScrollTo()
-            assertEquals("", field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
-        }
+        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
     }
 
     @Test
@@ -260,23 +217,14 @@ class AppSmokeTest {
         instrumentation.addMonitor(monitor)
         try {
             compose.onNodeWithText("Cloudflare 授权帮助").performClick()
-            compose.onNodeWithText("添加 Cloudflare 服务").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("setup-connect").performScrollTo().assertIsDisplayed()
             compose.onNodeWithTag("nav-accounts").performClick()
             compose.onNodeWithContentDescription("连接账号").performClick()
-            compose.onNodeWithTag("oauth-token-fallback").performScrollTo().performClick()
-            compose.onNodeWithText("获取 API Token").performScrollTo().performClick()
-            compose.onNodeWithText("查找 Account ID").performScrollTo().performClick()
             compose.runOnIdle {
-                assertEquals(
-                    listOf(
-                        "https://developers.cloudflare.com/fundamentals/oauth/",
-                        "https://dash.cloudflare.com/profile/api-tokens",
-                        "https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/",
-                    ),
-                    opened,
-                )
+                assertEquals(listOf("https://developers.cloudflare.com/fundamentals/oauth/"), opened)
             }
-            compose.onNodeWithText("验证并连接").assertIsDisplayed().assertIsNotEnabled()
+            compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
+            compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
             compose.onNodeWithText("取消").performClick()
             compose.onNodeWithText("获取 API Token").assertDoesNotExist()
         } finally {

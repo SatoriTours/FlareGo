@@ -54,7 +54,7 @@ class ExtendedManagementUiTest {
                         h.controller=controller
                         val appState by controller.state.collectAsState()
                         val actualContext=remember(appState,h.actual.value) { h.liveContext }
-                        FlareGoApp(controller,{_,_,_->},{},{},management=h.management,panelPorts=h.ports,panelContext=actualContext)
+                        FlareGoApp(controller,{},{},management=h.management,panelPorts=h.ports,panelContext=actualContext)
                     } else if(overlap) {
                         var old by remember { mutableStateOf(true) }; var next by remember { mutableStateOf(false) }
                         Column {
@@ -345,7 +345,7 @@ private fun NativeRetainedFixtureApp(h:UiOwner) {
     val controller=h.controller!!
     val appState by controller.state.collectAsState()
     val actual=remember(appState,h.actual.value) { h.liveContext }
-    FlareGoApp(controller,{_,_,_->},{},{},management=h.management,panelPorts=h.ports,panelContext=actual)
+    FlareGoApp(controller,{},{},management=h.management,panelPorts=h.ports,panelContext=actual)
 }
 private class UiLease(override val context:ManagementPanelContext):ManagementPanelLease
 

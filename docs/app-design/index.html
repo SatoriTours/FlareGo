@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FlareGo · 全页面设计</title><link rel="stylesheet" href="design.css"><link rel="stylesheet" href="theme.css"></head>
+<body>
+<header class="studio-head"><div><strong>FlareGo</strong><span>全页面设计 · 仅预览</span></div><div class="tools"><select id="viewport" aria-label="参考屏幕"><option value="800">20:9 · 360 × 800</option><option value="640">短屏 · 360 × 640</option></select><button id="theme" aria-pressed="false">浅色</button><button id="font" aria-pressed="false">大字号</button><button id="gallery">页面总览</button></div></header>
+<div class="workspace"><aside class="catalog"><label class="catalog-search">查找页面<input id="filter" placeholder="名称 / 功能" type="search"></label><div id="page-count"></div><nav id="catalog" aria-label="设计稿目录"></nav></aside><main id="stage"></main><aside id="inspector"></aside></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="design.js"></script>
+</body></html>

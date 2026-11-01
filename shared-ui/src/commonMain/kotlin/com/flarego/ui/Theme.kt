@@ -1,79 +1,78 @@
 package com.flarego.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val Forest = Color(0xFF315B42)
-val Lime = Color(0xFFD2EE98)
-val Orange = Color(0xFFEA8B51)
+// Kept for legacy demo illustrations. Production surfaces use semantic theme roles.
+val Forest = Color(0xFF3A6C50)
+val Lime = Color(0xFFC4DFAA)
+val Orange = Color(0xFF906C31)
 private val Light =
     lightColorScheme(
-        primary = Forest,
-        onPrimary = Color.White,
-        primaryContainer = Color(0xFFE7EFDF),
-        onPrimaryContainer = Forest,
-        background = Color(0xFFF5F6F2),
-        surface = Color(0xFFFFFFFF),
-        surfaceVariant = Color(0xFFEDF1E7),
-        surfaceContainerLowest = Color.White,
-        surfaceContainerLow = Color(0xFFF8FAF5),
-        surfaceContainer = Color(0xFFF0F3EC),
-        surfaceContainerHigh = Color.White,
-        surfaceContainerHighest = Color(0xFFE7EDE1),
-        surfaceTint = Forest,
-        onSurface = Color(0xFF29352C),
-        onSurfaceVariant = Color(0xFF7A8677),
-        outlineVariant = Color(0xFFE5E9E0),
-        secondary = Forest,
-        secondaryContainer = Color(0xFFE7EFDF),
-        onSecondaryContainer = Forest,
+        primary = Forest, onPrimary = Color(0xFFF8F9F6),
+        primaryContainer = Color(0xFFEDF3E9), onPrimaryContainer = Forest,
+        background = Color(0xFFF8F9F6), onBackground = Color(0xFF22352C),
+        surface = Color.White, onSurface = Color(0xFF22352C),
+        surfaceVariant = Color(0xFFEFF2ED), onSurfaceVariant = Color(0xFF626F66),
+        surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF8F9F6),
+        surfaceContainer = Color(0xFFEFF2ED), surfaceContainerHigh = Color.White,
+        surfaceContainerHighest = Color(0xFFEFF2ED), surfaceTint = Forest,
+        outline = Color(0xFF7B877D), outlineVariant = Color(0xFFE7ECE5),
+        secondary = Forest, onSecondary = Color(0xFFF8F9F6),
+        secondaryContainer = Color(0xFFEDF3E9), onSecondaryContainer = Forest,
+        tertiary = Color(0xFF906C31), onTertiary = Color.White,
+        tertiaryContainer = Color(0xFFF2EDDF), onTertiaryContainer = Color(0xFF906C31),
+        error = Color(0xFFAC4338), onError = Color.White,
+        errorContainer = Color(0xFFF8EBE7), onErrorContainer = Color(0xFFAC4338),
     )
 private val Dark =
     darkColorScheme(
-        primary = Lime,
-        onPrimary = Forest,
-        primaryContainer = Forest,
-        onPrimaryContainer = Lime,
-        background = Color(0xFF15201A),
-        surface = Color(0xFF202D24),
-        surfaceVariant = Color(0xFF2A382E),
-        surfaceContainerLowest = Color(0xFF111A15),
-        surfaceContainerLow = Color(0xFF1B2820),
-        surfaceContainer = Color(0xFF202D24),
-        surfaceContainerHigh = Color(0xFF2A382E),
-        surfaceContainerHighest = Color(0xFF344639),
-        surfaceTint = Lime,
-        onSurface = Color(0xFFE8EEE4),
-        onSurfaceVariant = Color(0xFFABB8A8),
-        outlineVariant = Color(0xFF344639),
-        secondary = Lime,
-        secondaryContainer = Forest,
-        onSecondaryContainer = Lime,
+        primary = Lime, onPrimary = Color(0xFF131B18),
+        primaryContainer = Color(0xFF29392B), onPrimaryContainer = Lime,
+        background = Color(0xFF131B18), onBackground = Color(0xFFF0F3EB),
+        surface = Color(0xFF1B2520), onSurface = Color(0xFFF0F3EB),
+        surfaceVariant = Color(0xFF202B25), onSurfaceVariant = Color(0xFFA1AFA4),
+        surfaceContainerLowest = Color(0xFF131B18), surfaceContainerLow = Color(0xFF131B18),
+        surfaceContainer = Color(0xFF1B2520), surfaceContainerHigh = Color(0xFF202B25),
+        surfaceContainerHighest = Color(0xFF2A362E), surfaceTint = Lime,
+        outline = Color(0xFF8D9E91), outlineVariant = Color(0xFF2A362E),
+        secondary = Lime, onSecondary = Color(0xFF131B18),
+        secondaryContainer = Color(0xFF29392B), onSecondaryContainer = Lime,
+        tertiary = Color(0xFFD9BF88), onTertiary = Color(0xFF131B18),
+        tertiaryContainer = Color(0xFF2B2A21), onTertiaryContainer = Color(0xFFD9BF88),
+        error = Color(0xFFF0A8A0), onError = Color(0xFF31221F),
+        errorContainer = Color(0xFF31221F), onErrorContainer = Color(0xFFF0A8A0),
     )
 
 @Composable
-fun FlareGoTheme(content: @Composable () -> Unit) {
+fun FlareGoTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) Dark else Light,
-        typography =
-            Typography(
-                headlineLarge = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.SemiBold),
-                headlineSmall = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.SemiBold),
-                titleLarge = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
-                titleMedium = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
-                titleSmall = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
-                bodyLarge = TextStyle(fontSize = 15.sp),
-                bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
-                bodySmall = TextStyle(fontSize = 11.sp, lineHeight = 16.sp),
-                labelLarge = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium),
-                labelMedium = TextStyle(fontSize = 11.sp),
-                labelSmall = TextStyle(fontSize = 10.sp),
-            ),
+        colorScheme = if (darkTheme) Dark else Light,
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(5.dp), small = RoundedCornerShape(10.dp),
+            medium = RoundedCornerShape(14.dp), large = RoundedCornerShape(16.dp),
+            extraLarge = RoundedCornerShape(24.dp),
+        ),
+        typography = Typography(
+            headlineLarge = TextStyle(fontSize = 28.sp, lineHeight = 36.sp, fontWeight = FontWeight.Medium),
+            headlineSmall = TextStyle(fontSize = 25.sp, lineHeight = 35.sp, fontWeight = FontWeight.SemiBold),
+            titleLarge = TextStyle(fontSize = 21.sp, lineHeight = 29.sp, fontWeight = FontWeight.Medium),
+            titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium),
+            titleSmall = TextStyle(fontSize = 13.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+            bodyLarge = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+            bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 21.sp),
+            bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 20.sp),
+            labelLarge = TextStyle(fontSize = 13.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium),
+            labelMedium = TextStyle(fontSize = 11.sp, lineHeight = 17.sp),
+            labelSmall = TextStyle(fontSize = 10.sp, lineHeight = 15.sp),
+        ),
         content = content,
     )
 }

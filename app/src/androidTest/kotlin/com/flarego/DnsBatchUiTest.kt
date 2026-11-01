@@ -365,7 +365,7 @@ class DnsBatchUiTest {
             override fun onIntent(intent:ZoneIntent) { when(intent) { is ZoneIntent.Load->mutable.value=ZonePageState(account=intent.account,zones=listOf(zone));is ZoneIntent.Open->mutable.value=mutable.value.copy(selected=zone);ZoneIntent.Clear->mutable.value=ZonePageState();else->Unit } }
         }
         compose.setContent { FlareGoTheme { val coroutine=rememberCoroutineScope();val controller=remember { AppController(coroutine,SessionFactory { DemoSession(it) },MemoryStore(),demoConnections) }
-            FlareGoApp(controller,{_,_,_->},{},{},management=CloudflareManagement(dns,zones,h)) } }
+            FlareGoApp(controller,{},{},management=CloudflareManagement(dns,zones,h)) } }
         compose.onNodeWithTag("nav-domains").performClick();click("zone-row-batch-app-zone");compose.onNodeWithTag("zone-tab-dns").performClick();click("dns-open-batch")
         compose.onNodeWithTag("db-add-POST").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(h.intents.any { it==DnsBatchIntent.Bind(zone.ref) });assertTrue(confirms(h).isEmpty()) }

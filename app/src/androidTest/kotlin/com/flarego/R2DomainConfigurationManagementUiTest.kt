@@ -146,7 +146,7 @@ class R2DomainConfigurationManagementUiTest {
         }
         compose.waitUntil(15000) { model?.controller?.state?.value?.selected?.accountId == account }
         val m = model!!
-        compose.setContent { FlareGoApp(m.controller, { _, _, _ -> }, m::disconnect, {}, r2Browser = m.r2Browser) }
+        compose.setContent { FlareGoApp(m.controller, m::disconnect, {}, r2Browser = m.r2Browser) }
         compose.onNodeWithTag("nav-resources").performClick()
         compose.onNodeWithText("R2", useUnmergedTree = true).performClick()
         compose.waitUntil(15000) { m.r2Browser.state.value.buckets.rows.isNotEmpty() }

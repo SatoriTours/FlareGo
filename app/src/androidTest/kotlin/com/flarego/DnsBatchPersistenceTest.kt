@@ -157,7 +157,7 @@ class DnsBatchRuntimeIntegrationTest {
     }
     @Test fun productionVmNativeConfirmationPersistsTaskSummaryAndSafeManifest() {
         val m=create(true)
-        compose.setContent { com.flarego.ui.FlareGoTheme { com.flarego.ui.FlareGoApp(m.controller,{_,_,_->},{},{},management=m.management) } }
+        compose.setContent { com.flarego.ui.FlareGoTheme { com.flarego.ui.FlareGoApp(m.controller,{},{},management=m.management) } }
         compose.onNodeWithTag("nav-domains").performClick()
         compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         click("zone-row-batch-zone");compose.waitUntil(10000) { m.management.zones.state.value.selected!=null }
@@ -196,7 +196,7 @@ class DnsBatchRuntimeIntegrationTest {
     @Test fun demoNativeBatchUsesSamePortsWithoutCredentialAcquisitionOrRealDatabaseTasks() {
         val m=create(false,cloud=false)
         compose.runOnIdle { m.controller.reloadConnections(m.controller.state.value.connections+com.flarego.core.demo.demoConnections);m.controller.selectConnection(m.controller.state.value.connections.first { it.id=="demo-production" }) }
-        compose.setContent { com.flarego.ui.FlareGoTheme { com.flarego.ui.FlareGoApp(m.controller,{_,_,_->},{},{},management=m.management) } }
+        compose.setContent { com.flarego.ui.FlareGoTheme { com.flarego.ui.FlareGoApp(m.controller,{},{},management=m.management) } }
         compose.onNodeWithTag("nav-domains").performClick();compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         click("zone-row-zone-demo");compose.waitUntil(10000) { m.management.zones.state.value.selected!=null }
         compose.onNodeWithTag("zone-tab-dns").performClick();compose.waitUntil(10000) { m.management.dns.state.value.rows.isNotEmpty() }

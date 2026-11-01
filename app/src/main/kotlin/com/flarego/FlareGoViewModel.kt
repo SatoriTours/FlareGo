@@ -547,16 +547,6 @@ class FlareGoViewModel private constructor(
             nowMs = System::currentTimeMillis, parseHttpDate = CloudflareHttpDates::parse))
     }
 
-    suspend fun discoverAccounts(token: String, request: PageRequest): CloudPage<AccountSummary> =
-        identity(token).discover(request)
-
-    suspend fun verifyDraftToken(token: String, kind: TokenKind, accountId: String?): TokenVerification {
-        val account = accountId?.trim()?.lowercase()
-        if (kind == TokenKind.ACCOUNT_OWNED && account?.matches(Regex("[a-f0-9]{32}")) != true)
-            throw CloudException("Account ID 必须为 32 位十六进制字符")
-        return identity(token).verifyToken(kind, account)
-    }
-
     suspend fun connect(name: String, accountId: String, token: String) {
         val cleanAccount = accountId.trim().lowercase()
         val cleanToken = token.trim()

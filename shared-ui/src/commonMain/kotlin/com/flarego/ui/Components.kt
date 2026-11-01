@@ -1,12 +1,14 @@
 package com.flarego.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -25,7 +27,8 @@ fun SectionCard(
 ) {
     Surface(
         modifier,
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.large,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         color = MaterialTheme.colorScheme.surface,
     ) {
         Column(
@@ -50,52 +53,38 @@ fun Muted(text: String, modifier: Modifier = Modifier) {
 fun Pill(text: String, warning: Boolean = false) {
     Text(
         text,
-        Modifier.background(
-                if (warning) Orange.copy(alpha = .12f)
-                else MaterialTheme.colorScheme.primaryContainer,
-                RoundedCornerShape(6.dp),
-            )
-            .padding(horizontal = 7.dp, vertical = 4.dp),
-        color = if (warning) Orange else MaterialTheme.colorScheme.primary,
+        Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+        color = if (warning) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
         style = MaterialTheme.typography.labelSmall,
     )
 }
 
 fun ResourceKind.icon(): ImageVector =
     when (this) {
-        ResourceKind.WORKER -> Icons.Default.Bolt
-        ResourceKind.R2 -> Icons.Default.Inventory2
-        ResourceKind.D1 -> Icons.Default.Storage
-        ResourceKind.KV -> Icons.Default.Layers
+        ResourceKind.WORKER -> Icons.Outlined.Bolt
+        ResourceKind.R2 -> Icons.Outlined.Inventory2
+        ResourceKind.D1 -> Icons.Outlined.Storage
+        ResourceKind.KV -> Icons.Outlined.Layers
     }
 
 @Composable
 fun ResourceRow(resource: CloudResource, demo: Boolean, onClick: () -> Unit) {
-    Surface(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-    ) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
-            Modifier.heightIn(min = 78.dp).padding(14.dp),
+            Modifier.heightIn(min = 62.dp).padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Icon(
                 resource.kind.icon(),
                 null,
-                Modifier.size(36.dp)
-                    .background(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        RoundedCornerShape(11.dp),
-                    )
-                    .padding(8.dp),
+                Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.primary,
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     resource.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -109,6 +98,7 @@ fun ResourceRow(resource: CloudResource, demo: Boolean, onClick: () -> Unit) {
                 Muted(if (demo) "示例用量" else "已读取")
             }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -129,13 +119,10 @@ fun EmptyState(title: String, subtitle: String, action: String? = null, onAction
 
 @Composable
 fun Notice(text: String, onRetry: (() -> Unit)? = null) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(text, style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Box(Modifier.width(2.dp).height(24.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        Column(Modifier.padding(start = 12.dp)) {
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (onRetry != null)
                 TextButton(onClick = onRetry, contentPadding = PaddingValues(0.dp)) { Text("重试") }
         }

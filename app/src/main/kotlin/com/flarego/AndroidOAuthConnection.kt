@@ -3,6 +3,8 @@ package com.flarego
 import android.content.Context
 import com.flarego.core.cloudflare.identity.CloudflareIdentityClient
 import com.flarego.core.model.CloudException
+import com.flarego.core.model.CloudFailure
+import com.flarego.core.model.CloudFailureCode
 import com.flarego.core.model.PageToken
 import com.flarego.core.model.PageRequest
 import com.flarego.platform.*
@@ -44,6 +46,7 @@ internal class AndroidOAuthConnection(
     private var job: Job? = null
 
     override fun begin(): String {
+        check(!state.value.busy) { "连接正在处理中" }
         if (!state.value.waiting) cancel()
         val url = flow.begin()
         mutable.value = OAuthConnectionState(waiting = true)
@@ -85,8 +88,10 @@ internal class AndroidOAuthConnection(
         if (generation != expected) throw CloudException("授权已变化，请重新连接")
         val current = tokens ?: throw CloudException("请先完成 Cloudflare 授权")
         if (current.expiresAtMs > System.currentTimeMillis() + 30_000) return current
-        val refresh = current.refreshToken ?: throw CloudException("授权已过期，请重新授权")
-        val renewed = endpoint.refresh(config, refresh, System.currentTimeMillis())
+        val refresh = current.refreshToken ?: throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "授权已过期，请重新授权")
+        val renewed = try { endpoint.refresh(config, refresh, System.currentTimeMillis()) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "授权无法续期，请重新授权") }
         if (generation != expected || tokens !== current) throw CloudException("授权已变化，请重新连接")
         return OAuthTokens(renewed.accessToken, renewed.refreshToken ?: refresh, renewed.expiresAtMs).also { tokens = it }
     }
@@ -95,40 +100,67 @@ internal class AndroidOAuthConnection(
             val result = identity(freshTokens(expected).accessToken).discover(PageRequest(token = page))
             if (generation != expected) return
             next = result.next
+            val accounts = (if (page == null) result.items else state.value.accounts + result.items).distinctBy { it.id }
             mutable.value = OAuthConnectionState(authorized = true,
-                accounts = (if (page == null) result.items else state.value.accounts + result.items).distinctBy { it.id },
+                busy = next == null && accounts.size == 1,
+                connecting = next == null && accounts.size == 1,
+                accounts = accounts,
                 hasMore = next != null,
-                error = if (result.items.isEmpty() && page == null) "未发现可用账号，可手填 Account ID 验证；请核对账号读取权限" else null)
+                discoveryFailed = accounts.isEmpty(),
+                error = if (accounts.isEmpty()) "授权已完成，但没有找到可连接的账号。请重新读取，或返回 Cloudflare 确认授权的账号。" else null)
         } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) {
+        catch (failure: Exception) {
             if (generation == expected) mutable.value = state.value.copy(busy = false, authorized = true, discoveryFailed = true,
-                error = "无法发现账号，可手填 Account ID 验证；请核对账号读取权限")
+                reauthorizationRequired = failure is CloudFailure && failure.code == CloudFailureCode.CREDENTIAL_EXPIRED,
+                error = connectionError(failure, "读取账号"))
+            return
+        }
+        // Only a complete, unambiguous list permits automatic selection. A partial page never does.
+        if (generation == expected && next == null && state.value.accounts.size == 1) {
+            verifyAndSave(expected, state.value.accounts.single().id)
         }
     }
     override fun loadMore() {
         val page = next
         if (page == null && !state.value.discoveryFailed) return
-        if (state.value.busy || !state.value.authorized) return
+        if (state.value.busy || !state.value.authorized || state.value.connected || state.value.reauthorizationRequired) return
         val expected = generation
         mutable.value = state.value.copy(busy = true, error = null)
         job = scope.launch { discover(expected, page) }
     }
-    override suspend fun connect(name: String, accountId: String) {
-        if (state.value.busy || !state.value.authorized) throw CloudException("请先完成授权并选择账号")
-        val account = accountId.trim().lowercase()
-        if (!account.matches(Regex("[a-f0-9]{32}"))) throw CloudException("Account ID 必须为 32 位十六进制字符")
+    override fun connect(accountId: String) {
+        if (state.value.busy || !state.value.authorized || state.value.connected || state.value.reauthorizationRequired) return
+        if (state.value.accounts.none { it.id == accountId }) return
         val expected = generation
-        mutable.value = state.value.copy(busy = true, error = null)
+        mutable.value = state.value.copy(busy = true, connecting = true, error = null)
+        job = scope.launch { verifyAndSave(expected, accountId) }
+    }
+    private suspend fun verifyAndSave(expected: Long, account: String) {
+        if (generation != expected) return
+        mutable.value = state.value.copy(busy = true, connecting = true, error = null)
+        var saving = false
         try {
             val granted = freshTokens(expected)
             val verified = identity(granted.accessToken).verifyAccount(account)
-            val label = name.trim().ifBlank { verified.name }
-            if (label.length !in 1..80) throw CloudException("账号名称长度应为 1–80 字符")
-            if (generation != expected || tokens !== granted) throw CloudException("授权已变化，请重新连接")
-            save(label, account, granted)
-            cancel()
-        } finally {
-            if (generation == expected) mutable.value = state.value.copy(busy = false)
+            if (generation != expected || tokens !== granted) return
+            saving = true
+            save(verified.name, account, granted)
+            if (generation != expected) return
+            tokens = null; next = null; flow.cancel()
+            mutable.value = OAuthConnectionState(connected = true)
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (failure: Exception) {
+            if (generation == expected) mutable.value = state.value.copy(busy = false, connecting = false,
+                reauthorizationRequired = failure is CloudFailure && failure.code == CloudFailureCode.CREDENTIAL_EXPIRED,
+                error = if (saving) "连接信息未能保存，请检查设备存储后重试。" else connectionError(failure, "连接账号"))
         }
+    }
+
+    private fun connectionError(failure: Exception, action: String): String = when ((failure as? CloudFailure)?.code) {
+        CloudFailureCode.CREDENTIAL_EXPIRED -> "授权已失效或无法续期，请重新前往 Cloudflare 授权。"
+        CloudFailureCode.PERMISSION_REQUIRED -> "Cloudflare 未允许$action。请确认所选账号的授权；若仍无法连接，请联系维护者检查应用的账号读取权限。"
+        CloudFailureCode.RATE_LIMITED -> "请求过于频繁，请稍后重试。"
+        CloudFailureCode.INVALID_RESPONSE -> "Cloudflare 返回的账号信息无法识别，请稍后重试；若持续发生，请联系维护者。"
+        else -> "${action}未完成，请检查网络后重试。不会保存未验证的连接。"
     }
 }

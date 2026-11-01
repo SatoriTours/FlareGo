@@ -12,6 +12,9 @@ data class OAuthConnectionState(
     val hasMore: Boolean = false,
     val error: String? = null,
     val discoveryFailed: Boolean = false,
+    val connecting: Boolean = false,
+    val connected: Boolean = false,
+    val reauthorizationRequired: Boolean = false,
 )
 
 interface OAuthConnection {
@@ -21,5 +24,5 @@ interface OAuthConnection {
     fun cancel()
     fun launchFailed()
     fun loadMore()
-    suspend fun connect(name: String, accountId: String)
+    fun connect(accountId: String)
 }

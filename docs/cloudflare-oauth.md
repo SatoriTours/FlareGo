@@ -1,8 +1,24 @@
 # Cloudflare OAuth 接入
 
+## 仅跳转授权的连接流程（2026-10-31）
+
+用户已要求移除手动 Token 模式，账号名称和 Account ID 也不再由用户填写。
+采用现有原生 OAuth 与账号接口，避免引入登录后端或额外权限。
+不采用保留高级 Token 表单或要求每次确认单账号的方案，因为它们仍让用户承担接入细节。
+
+- 未连接：只展示官方授权入口、简短流程及隐私说明；构建未配置时说明需要维护者提供支持授权的版本。
+- 返回 App：由 ViewModel 连续完成换取凭据、查询账号、验证账号及加密保存。仅当完整列表中只有一个账号时自动连接；多账号或分页未结束时按名称选择，点击即验证连接，不再另设确认按钮。同名账号用编号末六位区分，无需输入。
+- 进行中：区分等待浏览器、读取账号、连接账号；连接保存期间禁用重复操作和关闭。连接成功自动关闭窗口，进入已连接账号。状态保留到 UI 消费，Activity 重建不会重复保存。
+- 异常：空列表、网络失败、权限不足、过期分别说明；提供重新读取或重新授权。分页失败保留已发现的账号，重试失败页，不把部分列表误判为唯一账号。验证/保存失败保留账号以便再次点击重试。
+- 安全：只接受当前发现列表中的账号；旧回调、取消后的响应不保存。错误信息不含原始响应或凭据。保留现有 PKCE、state、HTTPS 回调及续期约束。
+- 兼容：保留已保存连接与旧凭据读取能力；新增/重新连接仅走 OAuth。同一账号重连沿用连接标识。删除 Token 输入表单、帮助入口和相关引导，不更改其他资源的凭据编辑器。
+- 能力：授权成功仅表示账号连接成功，实际资源读写仍受构建请求范围与已有权限守卫限制；不新增 scope、不扩大云端权限。
+
+实施顺序：先用 `AndroidOAuthConnectionTest` 固定自动连接、分页/空列表重试和取消边界，再修改连接状态与 `OAuthConnectionDialog`，删除旧表单及入口，更新 `OAuthConnectionUiTest`、实际入口烟测与文档。验收覆盖单/多/空账号、失败重试、重复回调、Activity 重建、无 Token/ID 输入及大字号可用性；真实 Cloudflare 登录/回跳独立记录，不以隔离测试冒充。
+
 ## 当前边界
 
-代码提供 Android 的 Authorization Code + PKCE S256 授权、HTTPS App Link 回调、账号发现/验证、Keystore 加密保存及 refresh token 续期。API Token 保持兼容，不接受 Global API Key。维护者已提供 OAuth Client ID，Android Actions 工作流会在构建前注入公开客户端配置；真实云授权和设备回跳仍未验证。缺少配置的其他构建会禁用按钮，不模拟授权成功。
+代码提供 Android 的 Authorization Code + PKCE S256 授权、HTTPS App Link 回调、账号发现/验证、Keystore 加密保存及 refresh token 续期。已保存的 API Token 保持读取兼容；新增连接仅支持 OAuth，不提供手动凭据输入。维护者已提供 OAuth Client ID，Android Actions 工作流会在构建前注入公开客户端配置；真实云授权和设备回跳仍未验证。缺少配置的其他构建会禁用按钮，不模拟授权成功。
 
 ## GitHub Actions 官方构建配置
 
@@ -30,8 +46,7 @@ flarego.oauthScopes=account-settings.read
 不要猜 scope、移除全部 scope 碰运气或一次勾选全部读写。修正后的新构建仍需实际浏览器同意、账号发现及续期验收；旧 APK 不会自动更换 scope。
 App 将已知错误码映射为明确提示，不显示原始 `error_description`、授权 URL 或凭据。
 
-授权说明/账号选择页不显示密钥，允许截图；只有切换到 API Token 输入页才开启截图保护，
-其他敏感资源编辑器的保护不受影响。
+授权说明/账号选择页不显示密钥，允许截图；已移除 API Token 输入页，其他敏感资源编辑器的保护不受影响。
 
 ## 维护者配置（不是每个 App 用户都要做）
 
@@ -49,7 +64,7 @@ flarego.oauthScopes=account-settings.read
 
 默认只有 `account-settings.read`，与维护者确认的 Account Settings Read 范围一致；实际账号发现/验证能力仍须真实授权后核验，不表示已授权资源管理。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
 
-Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建只显示配置说明及 Token 备用入口。
+Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建禁用授权入口并提示联系维护者，没有手动 Token 备用入口。
 
 ### Client ID 与回调地址的安全边界
 
@@ -65,11 +80,11 @@ Client ID 是应用的公开标识，可以包含在 APK 中。它本身不能�
 - verifier、state、未保存的授权只驻留 ViewModel 内存。Activity 重建可继续；进程退出后必须重新授权，不从陌生回调创建连接。
 - 精确校验 HTTPS 主机、端口和路径，无 fragment/用户名/密码；state 单值匹配，授权码单值，十分钟有效，一次消费。拒绝/错误正文不直接显示，令牌对象不生成含密钥的字符串。
 - 等待期间重新打开授权页会复用仍有效的 state 与 PKCE 请求；超过十分钟重新生成，取消则立即失效。旧授权或不匹配 state 的回调不会消耗当前请求，匹配的拒绝/错误回调仍为一次性处理。
-- 账号发现失败后可在原授权下重试，也可手填 Account ID 验证；翻页失败保留已有列表及待重试页。主动重新授权会清除旧的账号选择。取消或重新开始后，迟到的续期响应不会恢复旧凭据或继续验证旧账号。
+- 账号发现失败或为空后可在原授权下重试，也可重新授权；翻页失败保留已有列表及待重试页。主动重新授权会清除旧的账号选择。取消或重新开始后，迟到的续期响应不会恢复旧凭据或继续验证旧账号。
 - 令牌端点固定 `https://dash.cloudflare.com/oauth2/token`，禁止重定向/自动重试，响应最多 64 KiB。只有令牌请求重签；业务 401、写入未知结果都不自动重放。
 - access/refresh token 和过期时间一起存入原有 TokenVault 密文。旧 API Token 格式不变，无自动迁移；显式重新连接同一 Account ID 才替换凭据。
 - 续期、替换和删除由应用级逐连接锁串行处理；缓存会话逐请求读取当前令牌，并检查原有凭据代次，避免恢复过期 token 或已断开的连接。
-- OAuth 授权成功不是写权限证明。现有 Token verify/details/catalog 与 Zone owner 守卫不绕过；这些辅助接口不兼容 OAuth 或权限不足时仍拒绝受保护的写操作。当前只应把 OAuth 用作按实际 scopes 允许的读取接入，写入仍可用最小权限 API Token。
+- OAuth 授权成功不是写权限证明。现有 Token verify/details/catalog 与 Zone owner 守卫不绕过；这些辅助接口不兼容 OAuth 或权限不足时仍拒绝受保护的写操作。OAuth 只能执行实际 scopes 和既有权限守卫允许的操作；不再引导用户手工添加 API Token 来补足能力。
 - App 内断开仅删除本机连接及凭据，不撤销云端 grant。用户可在 Cloudflare 的 OAuth authorizations 管理页撤销；重新连接后需重新授权。刷新令牌也具有敏感性，泄漏后应撤销授权。
 
 ## 验证
@@ -80,7 +95,7 @@ Client ID 是应用的公开标识，可以包含在 APK 中。它本身不能�
 ANDROID_HOME=<SDK路径> SCHEMA_FILE=<固定公开OpenAPI路径> ./gradlew :android-platform:testDebugUnitTest :shared-core:jvmTest :shared-ui:jvmTest :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin :app:lintDebug
 ```
 
-必须补充的真实验收：部署 App Links → 验证签名/包名 → 浏览器同意/拒绝 → 回跳 → 选择账号 → 读取已授权资源 → 重启恢复 → 过期续期 → 控制台撤销 → App 明确报错 → Token 备用及已有账号回归。没有设备或真实客户端时不能把这些项目判为通过。
+必须补充的真实验收：部署 App Links → 验证签名/包名 → 浏览器同意/拒绝 → 回跳 → 单账号自动连接／多账号按名称选择 → 读取已授权资源 → 重启恢复 → 过期续期 → 控制台撤销 → App 明确报错 → 已有账号兼容回归。没有设备或真实客户端时不能把这些项目判为通过。
 
 官方资料：
 - https://developers.cloudflare.com/fundamentals/oauth/
