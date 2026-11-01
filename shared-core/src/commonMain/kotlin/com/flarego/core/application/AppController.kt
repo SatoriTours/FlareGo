@@ -66,10 +66,16 @@ class AppController(
                     current.copy(products = valid, inventory = Inventory(
                         (valid[ProductKey.ZONES]?.content as? ProductContent.Zones)?.items.orEmpty(),
                         valid.values.flatMap { (it.content as? ProductContent.Resources)?.items.orEmpty() }),
-                        loading = if (current.page == Page.BILLING && current.billingSource == BillingSource.USER_HISTORY_LEGACY) current.legacyBillingLoading else activeProduct(current)?.let { valid[it]?.loading } == true)
+                        loading = productsLoading(current, valid))
                 }
             }
         } }
+    }
+
+    private fun productsLoading(current: AppState, products: Map<ProductKey, ProductLoadState>): Boolean = when {
+        current.page == Page.OVERVIEW -> products.values.any { it.loading }
+        current.page == Page.BILLING && current.billingSource == BillingSource.USER_HISTORY_LEGACY -> current.legacyBillingLoading
+        else -> activeProduct(current)?.let { products[it]?.loading } == true
     }
 
     private fun activeProduct(current: AppState = state.value): ProductKey? = when(current.page) {
@@ -109,7 +115,10 @@ class AppController(
         loader?.load(product, PageRequest(token = next))
     }
     fun refreshAllProducts() {
-        if (loader == null) refresh() else ProductKey.entries.forEach { loader.load(it) }
+        if (loader == null) refresh() else ProductKey.entries.forEach {
+            // An explicit refresh must not cancel and restart an already running read.
+            if (loader.states.value[it]?.loading != true) loader.load(it)
+        }
     }
     fun publishTasks(tasks: List<OperationTask>) {
         mutable.update { current -> current.copy(tasks = tasks.filter { t -> current.connections.any { it.id == t.connectionId } }, operations = store.operations()) }
@@ -129,7 +138,7 @@ class AppController(
             )
         }
         if (loader != null) {
-            mutable.update { it.copy(loading = if (page == Page.BILLING && it.billingSource == BillingSource.USER_HISTORY_LEGACY) it.legacyBillingLoading else activeProduct()?.let { key -> loader.states.value[key]?.loading } == true) }
+            mutable.update { it.copy(loading = productsLoading(it, loader.states.value)) }
             loadActive()
             if (page == Page.BILLING && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY && state.value.billing == null) refresh()
         }
@@ -161,7 +170,8 @@ class AppController(
             AppState(it.connections, connection, page = root, operations = store.operations(), productLoading = loader != null, resourceKind = it.resourceKind, tasks = it.tasks, workersMode = it.workersMode)
         }
         resetProducts()
-        refresh()
+        // Selection/startup remain lazy; only an explicit overview refresh reads all products.
+        if (loader != null) loadActive() else refresh()
     }
 
     fun invalidateSession(id: String) {
@@ -197,7 +207,7 @@ class AppController(
                 AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = loader != null)
             }
             resetProducts()
-            refresh()
+            if (loader != null) loadActive() else refresh()
         }
     }
 
@@ -247,7 +257,12 @@ class AppController(
             }
             return
         }
-        if (loader != null) { loadActive(force = true); state.value.domain?.let(::loadDns); return }
+        if (loader != null) {
+            if (state.value.page == Page.OVERVIEW) refreshAllProducts()
+            else loadActive(force = true)
+            state.value.domain?.let(::loadDns)
+            return
+        }
         val connection = state.value.selected ?: return
         val request = ++revision
         mutable.update { it.copy(loading = true, error = null) }

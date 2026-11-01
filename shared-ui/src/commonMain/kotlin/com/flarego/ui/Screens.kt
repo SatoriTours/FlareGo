@@ -29,8 +29,18 @@ fun OverviewScreen(
     create: () -> Unit,
     refreshAll: () -> Unit = {},
     openResource: (ResourceKind) -> Unit = { navigate(Page.RESOURCES) },
+    reauthorize: () -> Unit = {},
 ) {
+    val loading = state.products.values.any { it.loading }
+    val failures = state.products.filterValues { it.error != null }
+    val completed = state.products.values.count { !it.loading }
+    val succeeded = state.products.values.count { !it.loading && it.error == null && it.observedAtMs != null }
     LazyColumn(contentPadding = ListPadding) {
+        if (state.productLoading && state.products.isNotEmpty()) item {
+            if (loading) Muted("已完成 $completed/${state.products.size} 项读取", Modifier.padding(vertical = 8.dp))
+            else Muted("读取完成：$succeeded 项成功" + if (failures.isEmpty()) "" else "，${failures.size} 项失败",
+                Modifier.padding(vertical = 8.dp))
+        }
         item { Muted("已加载资源", Modifier.padding(top = 8.dp, bottom = 8.dp)) }
         item {
             CompactListRow("域名", Modifier.testTag("overview-domains"),
@@ -76,11 +86,34 @@ fun OverviewScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(15.dp))
             }
         }
-        if (state.productLoading) item {
-            TextButton(onClick = refreshAll, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("刷新全部产品") }
+        if (state.productLoading) {
+            item {
+                TextButton(onClick = refreshAll, enabled = !loading,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("overview-refresh-all")) {
+                    Text(if (loading) "正在刷新产品…" else "刷新全部产品")
+                }
+            }
+            failures.forEach { (product, loaded) ->
+                item(key = "error:$product") { Notice("${product.overviewLabel()}：${loaded.error!!.publicMessage}") }
+            }
+            if (failures.values.any { it.error?.code in setOf(CloudFailureCode.PERMISSION_REQUIRED, CloudFailureCode.CREDENTIAL_EXPIRED) }) item {
+                Column {
+                    Muted("连接成功不代表已获得产品权限。需使用请求了相应权限的版本重新授权。", Modifier.padding(vertical = 8.dp))
+                    TextButton(onClick = reauthorize, modifier = Modifier.fillMaxWidth()) { Text("重新授权") }
+                }
+            }
         }
         items(state.inventory.notices) { Notice(it) }
     }
+}
+
+private fun ProductKey.overviewLabel(): String = when (this) {
+    ProductKey.ZONES -> "域名"
+    ProductKey.WORKERS -> "Workers"
+    ProductKey.R2 -> "R2"
+    ProductKey.KV -> "KV"
+    ProductKey.D1 -> "D1"
+    ProductKey.BILLING -> "账单"
 }
 
 private fun overviewLoadedCount(state: AppState, product: ProductKey): String {
@@ -91,7 +124,12 @@ private fun overviewLoadedCount(state: AppState, product: ProductKey): String {
             loaded.error != null -> "读取失败"
             else -> "未加载"
         }
-        return "${loaded.content.count()}${if (loaded.allPagesLoaded) "" else "+"}"
+        val count = "${loaded.content.count()}${if (loaded.allPagesLoaded) "" else "+"}"
+        return when {
+            loaded.loading -> "$count · 更新中"
+            loaded.error != null -> "$count · 更新失败"
+            else -> count
+        }
     }
     return if (product == ProductKey.ZONES) state.inventory.domains.size.toString()
     else state.inventory.resources.count { it.kind.product() == product }.toString()

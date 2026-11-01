@@ -59,11 +59,11 @@
 ### 连接 Cloudflare
 
 1. 打开 FlareGo 的「账号」，点击「连接 Cloudflare 账号」或标题栏的 `+`。
-2. 点击「前往 Cloudflare 授权」，在系统浏览器确认权限，返回 App 后自动读取账号、验证并保存连接。只有一个账号时无需其他操作；多个账号时按名称点选即可。
-3. 无需填写账号名称、Account ID 或 API Token。读取失败可「重新读取账号」或重新授权；没有手动 Token 备用模式。
+2. 点击「前往 Cloudflare 授权」，在系统浏览器确认账号授权。App 自动读取官方权限目录，首次连接可能再提示「继续授权产品」，由你在 Cloudflare 确认域名、DNS、Workers 元数据、KV 和 R2 的只读权限；无需查找内部权限代号。完成后自动读取账号、验证并保存连接；只有一个账号时自动连接，多个账号时按名称点选即可。
+3. 无需填写账号名称、Account ID 或 API Token，也不需开发者工具或抓包。权限目录读取失败可在 App 点「重新读取权限」；账号读取失败可「重新读取账号」或重新授权。没有手动 Token 备用模式。
 4. 点击标题栏的账号名称，从账号菜单选择对应账号，再进入域名、资源或账单页。
 
-**OAuth 已配置 Actions 构建参数，但不代表真实授权已验收**：Android Actions 工作流会注入维护者提供的公开 Client ID 和 `https://satori.tours/flarego/cloudflare/callback`，关联文件已部署；只有包含该配置的新构建才会启用授权入口，历史 APK 不会自动更新。缺少配置的其他构建仍禁用授权按钮，不会退回手动输入；已有账号继续保留。浏览器授权、设备 App Links、真实 API 权限兼容性尚需实际 Actions APK 验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。默认 OAuth scope 仅 `account-settings.read`（外加续期所需 `offline_access`），不预先申请 DNS、Workers、R2、D1、KV 或账单权限，也不假定 OAuth 可满足现有写权限证明链。
+**OAuth 已配置 Actions 构建参数，但不代表真实授权已验收**：Android Actions 工作流会注入维护者提供的公开 Client ID 和 `https://satori.tours/flarego/cloudflare/callback`，关联文件已部署；只有包含该配置的新构建才会启用授权入口，历史 APK 不会自动更新。缺少配置的其他构建仍禁用授权按钮，不会退回手动输入；已有账号继续保留。浏览器授权、设备 App Links、真实 API 权限兼容性尚需实际 Actions APK 验证，见 [OAuth 接入配置](docs/cloudflare-oauth.md)。OAuth 引导 scope 为 `account-settings.read`（外加续期所需 `offline_access`）；App 随后从已认证的官方目录识别六项明确只读权限并再次请求授权，不猜测 scope ID。本轮不申请 D1、账单、Workers 内容或任何写权限，也不假定 OAuth 可满足现有写权限证明链。
 
 账号编号由 App 自动获取。资源访问仍受实际授权范围限制：连接成功不代表所有模块都可读写。维护者应根据实际能力配置请求权限，用户无需自行创建 Token 或查找编号。
 

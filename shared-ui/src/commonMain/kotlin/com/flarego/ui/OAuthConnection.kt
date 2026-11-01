@@ -15,6 +15,9 @@ data class OAuthConnectionState(
     val connecting: Boolean = false,
     val connected: Boolean = false,
     val reauthorizationRequired: Boolean = false,
+    val productAuthorizationRequired: Boolean = false,
+    val scopeDiscoveryFailed: Boolean = false,
+    val readingScopes: Boolean = false,
 )
 
 interface OAuthConnection {

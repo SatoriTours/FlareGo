@@ -409,8 +409,11 @@ fun FlareGoApp(
                                         Icon(Icons.Default.Add, "连接账号")
                                     }
                                 else ->
-                                    IconButton(onClick = { controller.refresh() }) {
-                                        Icon(
+                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading, modifier = Modifier.testTag("toolbar-refresh")) {
+                                        if (state.loading) CircularProgressIndicator(
+                                            modifier = Modifier.size(21.dp).semantics { contentDescription = "正在刷新" },
+                                            strokeWidth = 2.dp,
+                                        ) else Icon(
                                             Icons.Default.Refresh,
                                             "刷新",
                                             modifier = Modifier.size(21.dp),
@@ -505,6 +508,7 @@ fun FlareGoApp(
                                     { dialog = DialogState.Create },
                                     controller::refreshAllProducts,
                                     openResource = { kind -> controller.selectResourceKind(kind); controller.navigate(Page.RESOURCES) },
+                                    reauthorize = openConnection,
                                 )
                             Page.DOMAINS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->

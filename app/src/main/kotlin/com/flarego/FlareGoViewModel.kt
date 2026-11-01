@@ -93,7 +93,10 @@ class FlareGoViewModel private constructor(
     val operationStore = localDatabase.operationStore
     private val oauthConfig = cloudflareOAuthConfig()
     private val credentials = OAuthCredentialOwner.get(application, oauthConfig)
-    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection)
+    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection,
+        resolveReadScopes = { token -> withContext(operationDispatcher) {
+            OAuthReadScopes(transportForToken(token)).resolve()
+        } })
     fun acceptOAuthCallback(value: String) = oauthConnection.acceptCallback(value)
     val connectionDraft = ConnectionDraft()
     private val managementPlatformOwner = ManagementPlatformOwner.forApplication(application)

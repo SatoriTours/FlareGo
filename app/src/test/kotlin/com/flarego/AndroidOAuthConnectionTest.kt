@@ -18,6 +18,142 @@ class AndroidOAuthConnectionTest {
     private val account = "a".repeat(32)
     private val config = OAuthConfig("client", "https://login.example.org/cloudflare/callback", listOf("account-settings.read"))
 
+    private val productScopes = listOf("fixture.account.read", "fixture.zone.read", "fixture.dns.read",
+        "fixture.worker-metadata.read", "fixture.kv.read", "fixture.r2.read")
+
+    @Test fun catalogDiscoveryPrecedesProductGrantAndOnlyFinalTokensCanBeSaved() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val paths = mutableListOf<String>()
+                var saved: String? = null
+                var catalogReads = 0
+                val owner = AndroidOAuthConnection(scope, config, { identity(it, paths, multiple = false, expectedToken = "product-fixture") },
+                    { _, _, tokens -> saved = tokens.accessToken }, endpoint(server),
+                    resolveReadScopes = { token ->
+                        assertEquals("access-fixture", token)
+                        OAuthReadScopes(HttpTransport { request ->
+                            assertEquals("GET", request.method)
+                            assertEquals("/oauth/scopes", request.path)
+                            catalogReads++
+                            HttpResponse(200, """{"success":true,"result":[
+                                {"name":"Account Settings Read","id":"fixture.account.read"},
+                                {"name":"Zone Read","id":"fixture.zone.read"},
+                                {"name":"DNS Read","id":"fixture.dns.read"},
+                                {"name":"Workers Metadata Read-Only","id":"fixture.worker-metadata.read"},
+                                {"name":"Workers KV Storage Read","id":"fixture.kv.read"},
+                                {"name":"Workers R2 Storage Read","id":"fixture.r2.read"}]}""")
+                        }).resolve()
+                    })
+                val bootstrap = owner.begin().toHttpUrl()
+                assertEquals("account-settings.read offline_access", bootstrap.queryParameter("scope"))
+                server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=bootstrap&state=" + bootstrap.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { !it.busy && !it.waiting } }
+                assertTrue(owner.state.value.productAuthorizationRequired)
+                assertNull(saved)
+                assertTrue(paths.isEmpty())
+                assertEquals(1, catalogReads)
+                val resource = owner.begin().toHttpUrl()
+                assertEquals("fixture.account.read fixture.zone.read fixture.dns.read fixture.worker-metadata.read fixture.kv.read fixture.r2.read offline_access",
+                    resource.queryParameter("scope"))
+                assertNotEquals(bootstrap.queryParameter("state"), resource.queryParameter("state"))
+                assertEquals(resource.toString(), owner.begin())
+                // The bootstrap callback is now stale and cannot consume the product request.
+                owner.acceptCallback(config.redirectUri + "?code=bootstrap&state=" + bootstrap.queryParameter("state"))
+                assertTrue(owner.state.value.waiting)
+                assertEquals(1, server.requestCount)
+                server.enqueue(response().setBody("""{"access_token":"product-fixture","refresh_token":"refresh-product","token_type":"bearer","expires_in":3600}"""))
+                owner.acceptCallback(config.redirectUri + "?code=product&state=" + resource.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.connected } }
+                assertEquals("product-fixture", saved)
+                assertEquals(1, catalogReads)
+                assertEquals(listOf("/accounts?page=1&per_page=50", "/accounts/$account"), paths)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun productDenialCannotFallBackToSavingBootstrapAndRetryKeepsOnlyResolvedScopes() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                var saved = false
+                val owner = AndroidOAuthConnection(scope, config, { error("No accounts after denial") },
+                    { _, _, _ -> saved = true }, endpoint(server), resolveReadScopes = { productScopes })
+                val first = owner.begin().toHttpUrl(); server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=bootstrap&state=" + first.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.productAuthorizationRequired } }
+                val product = owner.begin().toHttpUrl()
+                owner.acceptCallback(config.redirectUri + "?error=access_denied&error_description=secret-fixture&state=" + product.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { it.error != null } }
+                assertFalse(saved)
+                assertFalse(owner.state.value.authorized)
+                assertFalse(owner.state.value.error!!.contains("secret-fixture"))
+                assertEquals(1, server.requestCount)
+                val retry = owner.begin().toHttpUrl()
+                assertEquals("fixture.account.read fixture.zone.read fixture.dns.read fixture.worker-metadata.read fixture.kv.read fixture.r2.read offline_access",
+                    retry.queryParameter("scope"))
+                assertNotEquals(product.queryParameter("state"), retry.queryParameter("state"))
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun catalogFailureIsSafeAndManualRetryDoesNotRepeatBrowserOrTokenExchange() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                var attempts = 0
+                val owner = AndroidOAuthConnection(scope, config, { error("No accounts before product grant") },
+                    { _, _, _ -> error("No partial credential save") }, endpoint(server),
+                    resolveReadScopes = {
+                        if (++attempts == 1) error("Bearer secret-fixture")
+                        productScopes
+                    })
+                val url = owner.begin().toHttpUrl(); server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=bootstrap&state=" + url.queryParameter("state"))
+                withTimeout(3_000) { owner.state.first { !it.busy && !it.waiting } }
+                assertTrue(owner.state.value.scopeDiscoveryFailed)
+                assertFalse(owner.state.value.error.orEmpty().contains("secret-fixture"))
+                assertEquals(1, attempts)
+                owner.loadMore()
+                withTimeout(3_000) { owner.state.first { it.productAuthorizationRequired } }
+                assertEquals(2, attempts)
+                assertEquals(1, server.requestCount)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun cancellingCatalogLookupCannotUpgradeOrRestoreAnOlderAuthorization() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            try {
+                val owner = AndroidOAuthConnection(scope, config, { error("No account requests") },
+                    { _, _, _ -> error("No save") }, endpoint(server),
+                    resolveReadScopes = {
+                        entered.complete(Unit)
+                        withContext(NonCancellable) { release.await() }
+                        productScopes
+                    })
+                val url = owner.begin().toHttpUrl(); server.enqueue(response())
+                owner.acceptCallback(config.redirectUri + "?code=bootstrap&state=" + url.queryParameter("state"))
+                withTimeout(3_000) { entered.await() }
+                owner.cancel()
+                val active = owner.begin()
+                release.complete(Unit)
+                delay(50)
+                assertEquals(OAuthConnectionState(waiting = true), owner.state.value)
+                assertEquals(active, owner.begin())
+                assertEquals("account-settings.read offline_access", active.toHttpUrl().queryParameter("scope"))
+            } finally { release.complete(Unit); scope.cancel() }
+        }
+    }
+
     @Test fun singleAccountIsVerifiedAndSavedAutomaticallyAfterCallback() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -377,8 +513,8 @@ class AndroidOAuthConnectionTest {
     }
     private fun details(id: String) = HttpResponse(200, """{"success":true,"result":{"id":"$id","name":"Verified account"}}""")
 
-    private fun identity(token: String, paths: MutableList<String>, multiple: Boolean = true): CloudflareIdentityClient {
-        assertEquals("access-fixture", token)
+    private fun identity(token: String, paths: MutableList<String>, multiple: Boolean = true, expectedToken: String = "access-fixture"): CloudflareIdentityClient {
+        assertEquals(expectedToken, token)
         return CloudflareIdentityClient(CloudflareGateway(HttpTransport { request ->
             paths += request.path
             val second = if (multiple) ",{\"id\":\"${"b".repeat(32)}\",\"name\":\"Second account\"}" else ""

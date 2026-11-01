@@ -107,7 +107,7 @@ class ProductLoaderTest {
     }
     @Test fun controllerNavigationLoadsOnlyItsProductAndOverviewDoesNotFetch() = runTest {
         val c=AppController(backgroundScope,SessionFactory { error("Legacy inventory must not run") },MemoryStore(),listOf(a,b),productFactory=factory)
-        c.refresh(); runCurrent(); assertTrue(calls.isEmpty()); assertTrue(c.state.value.productLoading)
+        c.start(); runCurrent(); assertTrue(calls.isEmpty()); assertTrue(c.state.value.productLoading)
         c.navigate(Page.DOMAINS); runCurrent(); assertEquals(listOf(ProductKey.ZONES),calls)
         assertEquals(1,c.state.value.inventory.domains.size)
         c.navigate(Page.RESOURCES); runCurrent(); c.selectResourceKind(ResourceKind.R2); runCurrent()
@@ -116,6 +116,50 @@ class ProductLoaderTest {
         c.selectConnection(b); runCurrent(); assertEquals(account(b),c.state.value.products[ProductKey.BILLING]?.scope)
         assertTrue(c.state.value.inventory.domains.isEmpty())
     }
+    @Test fun overviewRefreshLoadsAllProductsAndExposesProgressWithoutRepeatingInFlightReads() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val normal = read
+        read = { s, k, r -> gate.await(); normal(s, k, r) }
+        val c = AppController(backgroundScope, SessionFactory { error("No legacy inventory") },
+            MemoryStore(), listOf(a), productFactory = factory)
+        c.start(); runCurrent()
+        assertTrue(calls.isEmpty())
+        c.refresh(); runCurrent()
+        assertEquals(ProductKey.entries.toSet(), calls.toSet())
+        assertEquals(6, calls.size)
+        assertTrue(c.state.value.loading)
+        assertEquals(6, c.state.value.products.values.count { it.loading })
+        c.refresh(); c.refreshAllProducts(); runCurrent()
+        assertEquals(6, calls.size)
+        gate.complete(Unit); runCurrent()
+        assertFalse(c.state.value.loading)
+        assertEquals(6, c.state.value.products.values.count { it.observedAtMs != null })
+    }
+
+    @Test fun overviewProgressAndFailuresStayBoundToTheSelectedAccount() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val normal = read
+        read = { s, k, r ->
+            if (s.connectionId == a.id) withContext(NonCancellable) { gate.await() }
+            if (s.connectionId == a.id && k == ProductKey.R2)
+                throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED, "需要权限")
+            normal(s, k, r)
+        }
+        val c = AppController(backgroundScope, SessionFactory { error("No legacy inventory") },
+            MemoryStore(), listOf(a, b), productFactory = factory)
+        c.refreshAllProducts(); runCurrent()
+        assertTrue(c.state.value.loading)
+        c.selectConnection(b); runCurrent()
+        assertFalse(c.state.value.loading)
+        assertTrue(c.state.value.products.isEmpty())
+        assertEquals(6, calls.size)
+        c.refresh(); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertFalse(c.state.value.loading)
+        assertEquals(6, c.state.value.products.size)
+        assertTrue(c.state.value.products.values.all { it.scope == account(b) && it.error == null })
+    }
+
     @Test fun explicitRefreshAllKeepsSuccessfulProductsWhenOneIsForbidden() = runTest {
         val normal=read; read={s,k,r -> if(k==ProductKey.R2) throw CloudFailure(CloudFailureCode.PERMISSION_REQUIRED,"需要权限"); normal(s,k,r)}
         val c=AppController(backgroundScope,SessionFactory { DemoSession(it) },MemoryStore(),listOf(a),productFactory=factory)
