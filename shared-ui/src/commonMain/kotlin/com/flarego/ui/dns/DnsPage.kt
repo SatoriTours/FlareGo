@@ -9,10 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.dns.*
-import com.flarego.core.cloudflare.generated.DnsSchemas
 import com.flarego.core.model.*
-import com.flarego.core.ports.DnsFilter
-import com.flarego.ui.SectionCard
 import kotlinx.serialization.json.*
 
 @Composable
@@ -30,7 +27,7 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
     val task = state.pendingTask?.takeIf { it.scope == scope }
     val unsettled = task?.state in setOf(TaskState.QUEUED, TaskState.RUNNING, TaskState.ACCEPTED,
         TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.RECONCILING)
-    val writable = scope != null && zoneName != null && !unsettled && !state.loading
+    val writable = scope != null && zoneName != null && !unsettled && !state.loading && !state.fromCache && state.error == null
     var draft by remember(scope, state.editorRevision, state.editingRecordId, state.mode) {
         val input = state.draft
         mutableStateOf(if (input != null) DnsFormDraft(input.type, input.name, input.fields)
@@ -38,7 +35,9 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
     }
     Column(modifier.fillMaxSize()) {
         if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(12.dp).testTag("dns-demo-notice"))
-        if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state.fromCache && !state.loading) Text("正在显示本地缓存，修改前需重新核实。",
+            Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("dns-cache-notice"), style = MaterialTheme.typography.labelMedium)
+        if (state.loading && state.observedAtMs==null) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { Text(it, Modifier.padding(12.dp).testTag("dns-page-error"), color = MaterialTheme.colorScheme.error) }
         Box(Modifier.weight(1f)) {
             val prepared = state.preparedChange
@@ -103,76 +102,7 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
 }
 
 @Composable
-private fun DnsRecordsBody(state: DnsPageState, writable: Boolean, task: OperationTask?, onIntent: (DnsIntent) -> Unit, onBatch: (() -> Unit)? = null, managementActions: (@Composable () -> Unit)? = null) {
-    var filterName by remember(state.scope, state.filter) { mutableStateOf(state.filter.name.orEmpty()) }
-    var filterType by remember(state.scope, state.filter) { mutableStateOf(state.filter.type.orEmpty()) }
-    var filterContent by remember(state.scope, state.filter) { mutableStateOf(state.filter.content.orEmpty()) }
-    var filterComment by remember(state.scope, state.filter) { mutableStateOf(state.filter.comment.orEmpty()) }
-    var filterTags by remember(state.scope, state.filter) { mutableStateOf(state.filter.tags.joinToString(",")) }
-    var advanced by remember(state.scope) { mutableStateOf(false) }
-    var rawVisible by remember(state.scope, state.detail?.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("DNS 记录 · ${state.zoneName}", style = MaterialTheme.typography.titleLarge)
-        managementActions?.invoke()
-        DnsTaskSummary(task, onIntent)
-        if (onBatch != null) OutlinedButton(onClick = onBatch, modifier = Modifier.fillMaxWidth().testTag("dns-open-batch")) { Text("批量 DNS 草稿与只读核对") }
-        Button(onClick = { onIntent(DnsIntent.BeginCreate()) }, enabled = writable,
-            modifier = Modifier.fillMaxWidth().testTag("dns-create")) { Text("新增 DNS 记录") }
-        val detail = state.detail
-        if (detail != null) {
-            val editable = writable && detail.type in DnsSchemas.types && detail.readOnlyReason == null
-            SectionCard {
-                Text("${detail.type} · ${detail.name}", style = MaterialTheme.typography.titleMedium)
-                detail.content?.let { Text(it) }
-                Text("TTL：${detail.ttl ?: "未提供"}\n代理：${detail.proxied ?: "未提供"}")
-                detail.fields["data"]?.let { Text("结构化字段：\n$it") }
-                detail.readOnlyReason?.let { Text(it, Modifier.testTag("dns-detail-readonly")) }
-                if (detail.unknownFields.isNotEmpty()) Text("保留的未知字段（仅查看）：${detail.unknownFields.sorted().joinToString()}")
-                OutlinedButton(enabled = editable, onClick = { onIntent(DnsIntent.BeginEdit(detail.id, DnsWriteMode.PATCH)) },
-                    modifier = Modifier.fillMaxWidth().testTag("dns-detail-patch")) { Text("PATCH 修改明确字段") }
-                OutlinedButton(enabled = editable, onClick = { onIntent(DnsIntent.BeginEdit(detail.id, DnsWriteMode.REPLACE)) },
-                    modifier = Modifier.fillMaxWidth().testTag("dns-detail-replace")) { Text("PUT 完整替换记录") }
-                TextButton(enabled = editable, onClick = { onIntent(DnsIntent.BeginDelete(detail.id)) },
-                    modifier = Modifier.fillMaxWidth().testTag("dns-detail-delete")) { Text("删除记录") }
-                TextButton(onClick = { rawVisible = !rawVisible }, modifier = Modifier.testTag("dns-raw-toggle")) { Text("供应商元数据（只读）") }
-                if (rawVisible) Text(state.selected?.takeIf { it.id == detail.id && it.scope == state.scope }?.raw?.toString()
-                    ?: state.records.firstOrNull { it.id == detail.id && it.scope == state.scope }?.raw?.toString().orEmpty(),
-                    Modifier.testTag("dns-raw-readonly"), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        SectionCard {
-            Text("筛选 DNS 记录", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(filterName, { filterName = it }, label = { Text("名称筛选") }, modifier = Modifier.fillMaxWidth().testTag("dns-filter-name"))
-            OutlinedTextField(filterType, { filterType = it }, label = { Text("类型筛选") }, modifier = Modifier.fillMaxWidth().testTag("dns-filter-type"))
-            TextButton(onClick = { advanced = !advanced }) { Text("内容、备注与标签筛选") }
-            if (advanced) {
-                OutlinedTextField(filterContent, { filterContent = it }, label = { Text("内容筛选") }, modifier = Modifier.fillMaxWidth().testTag("dns-filter-content"))
-                OutlinedTextField(filterComment, { filterComment = it }, label = { Text("备注筛选") }, modifier = Modifier.fillMaxWidth().testTag("dns-filter-comment"))
-                OutlinedTextField(filterTags, { filterTags = it }, label = { Text("标签筛选（逗号分隔）") }, modifier = Modifier.fillMaxWidth().testTag("dns-filter-tags"))
-            }
-            Button(onClick = {
-                state.scope?.let { onIntent(DnsIntent.Load(it, DnsFilter(filterName.takeIf(String::isNotBlank),
-                    filterType.trim().uppercase().takeIf(String::isNotBlank), filterContent.takeIf(String::isNotBlank),
-                    filterComment.takeIf(String::isNotBlank), filterTags.split(',').map(String::trim).filter(String::isNotEmpty)))) }
-            }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().testTag("dns-filter-apply")) { Text("应用筛选") }
-        }
-        Text("已加载 ${state.rows.size} 条${state.total?.let { " / 共 $it 条" } ?: ""}")
-        state.rows.forEach { row ->
-            OutlinedButton(onClick = { onIntent(DnsIntent.Open(row.id)) }, modifier = Modifier.fillMaxWidth().testTag("dns-record-${row.id}")) {
-                Column(Modifier.fillMaxWidth()) { Text("${row.type} · ${row.name}"); row.content?.let { Text(it) } }
-            }
-        }
-        if (state.rows.isEmpty()) Text("当前筛选下没有 DNS 记录。")
-        if (state.next != null) OutlinedButton(onClick = { onIntent(DnsIntent.LoadMore) }, enabled = !state.loading,
-            modifier = Modifier.fillMaxWidth().testTag("dns-load-more")) { Text("加载更多记录") }
-        OutlinedButton(onClick = { state.scope?.let { onIntent(DnsIntent.Load(it, state.filter)) } }, enabled = !state.loading,
-            modifier = Modifier.fillMaxWidth().testTag("dns-refresh")) { Text("刷新 DNS") }
-    }
-}
-
-@Composable
-private fun DnsTaskSummary(task: OperationTask?, onIntent: (DnsIntent) -> Unit) {
+internal fun DnsTaskSummary(task: OperationTask?, onIntent: (DnsIntent) -> Unit) {
     task ?: return
     Text("操作状态：${task.state}\n${task.safeDetail}", Modifier.testTag("dns-task-status"))
     if (task.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED, TaskState.RECONCILING)) {

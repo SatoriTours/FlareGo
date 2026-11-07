@@ -1,5 +1,7 @@
 package com.flarego.core.application.dns
 
+import com.flarego.core.application.cache.*
+
 import com.flarego.core.model.*
 import com.flarego.core.ports.DnsFilter
 import kotlinx.coroutines.flow.*
@@ -58,10 +60,14 @@ data class DnsPageState(
     /** Changes only on scope/editor replacement; do not key local text on every draft revision. */
     val editorRevision: Long = 0,
     val demo: Boolean = false,
+    val observedAtMs: Long? = null,
+    val fromCache: Boolean = false,
 )
 
 sealed interface DnsIntent {
     data class Load(val scope: ZoneScope, val filter: DnsFilter = DnsFilter(), val page: PageRequest = PageRequest()) : DnsIntent
+    data class Ensure(val scope: ZoneScope) : DnsIntent
+    data object CloseDetail : DnsIntent
     data object LoadMore : DnsIntent
     data class Open(val recordId: String) : DnsIntent
     data class BeginCreate(val type: String = "A") : DnsIntent
@@ -90,6 +96,8 @@ class DnsController(
     private val session: suspend (ZoneScope) -> DnsManagementSession,
     private val context: (CloudScope) -> ManagementContext,
     private val actions: ManagementActions,
+    private val cache: ManagementSnapshots? = null,
+    private val nowMs: () -> Long = { 0L },
 ) : DnsPagePort {
     private val mutable = MutableStateFlow(DnsPageState())
     override val state: StateFlow<DnsPageState> = mutable.asStateFlow()
@@ -99,13 +107,18 @@ class DnsController(
     override fun onIntent(intent: DnsIntent) {
         when(intent) {
             is DnsIntent.Load -> load(intent.scope,intent.filter,intent.page,false)
+            is DnsIntent.Ensure -> {
+                val s=state.value
+                if(s.scope!=intent.scope || s.observedAtMs==null || (!s.loading && nowMs()-s.observedAtMs>=SNAPSHOT_FRESH_MS)) load(intent.scope,if(s.scope==intent.scope) s.filter else DnsFilter(),PageRequest(),false,true)
+            }
+            DnsIntent.CloseDetail -> { prepared=null;readGeneration++;invalidate(true);mutable.update { it.copy(selected=null,detail=null,draft=null,mode=null,editingRecordId=null,loading=false) } }
             DnsIntent.LoadMore -> state.value.let { s -> if(!s.loading && s.scope!=null && s.next!=null) load(s.scope,s.filter,PageRequest(pageLimit,s.next),true) }
             is DnsIntent.Open -> open(intent.recordId,null)
             is DnsIntent.BeginEdit -> if(intent.mode in setOf(DnsWriteMode.PATCH,DnsWriteMode.REPLACE)) open(intent.recordId,intent.mode)
             is DnsIntent.BeginDelete -> open(intent.recordId,DnsWriteMode.DELETE)
             is DnsIntent.BeginCreate -> {
                 val s=state.value
-                if(s.zoneName==null || DnsSchemas.forType(intent.type)==null) { mutable.update { it.copy(error="请先读取 Zone，且只能编辑已知类型") };return }
+                if(s.zoneName==null || s.fromCache || DnsSchemas.forType(intent.type)==null) { mutable.update { it.copy(error="请先读取 Zone，且只能编辑已知类型") };return }
                 invalidate(true)
                 mutable.update { it.copy(draft=DnsRecordInput(intent.type,s.zoneName,JsonObject(emptyMap())),mode=DnsWriteMode.CREATE,editingRecordId=null,error=null) }
             }
@@ -177,21 +190,30 @@ class DnsController(
             catch(failure:Exception) { if(valid()) mutable.update { it.copy(loading=false,error=managementFailure(failure)) } }
         }
     }
-    private fun load(scope:ZoneScope,filter:DnsFilter,page:PageRequest,append:Boolean) {
+    private fun load(scope:ZoneScope,filter:DnsFilter,page:PageRequest,append:Boolean,preferCache:Boolean=false) {
         val stamp=try { context(scope) } catch(_:Exception) { clearError();return }
         val generation=++readGeneration;pageLimit=page.limit
         if(state.value.scope!=scope) mutable.value=DnsPageState(scope=scope,revision=state.value.revision+1,editorRevision=state.value.editorRevision+1,demo=stamp.connection.demo)
         invalidate(false)
-        mutable.update { it.copy(scope=scope,zoneName=null,filter=filter,loading=true,error=null) }
+        mutable.update { it.copy(scope=scope,filter=filter,loading=true,error=null) }
         appScope.launch {
             try {
+                if(!append && filter==DnsFilter() && !stamp.connection.demo && state.value.observedAtMs==null) {
+                    val stored=cache?.dns(scope,nowMs())
+                    if(!current(scope,stamp,generation)) return@launch
+                    if(stored!=null) {
+                        mutable.update { it.copy(zoneName=stored.zoneName,rows=stored.rows,total=stored.total,observedAtMs=stored.observedAtMs,fromCache=true,loading=true) }
+                        // Fresh owner evidence is still needed to enable write forms; refresh quietly.
+                    }
+                }
                 val api=session(scope); val owner=requireDnsZone(api.zone(scope),scope)
                 val pageResult=api.list(scope,filter,page)
                 val task=actions.pendingManagement(scope)
                 val rows=pageResult.items.map { requireDnsDocument(it,scope,it.id,owner.name) }
                 if(!current(scope,stamp,generation)) return@launch
                 val all=if(append) (state.value.records+rows).distinctBy { it.id } else rows
-                mutable.update { it.copy(zoneName=owner.name,records=all,rows=all.map(::dnsRecordView),next=pageResult.next,total=pageResult.total,loading=false,pendingTask=task) }
+                mutable.update { it.copy(zoneName=owner.name,records=all,rows=all.map(::dnsRecordView),next=pageResult.next,total=pageResult.total,loading=false,pendingTask=task,observedAtMs=nowMs(),fromCache=false) }
+                if(!stamp.connection.demo && filter==DnsFilter()) cache?.saveDns(scope,owner.name,all.map(::dnsRecordView),pageResult.total,pageResult.next==null && pageResult.total==all.size.toLong(),nowMs()) { current(scope,stamp,generation) }
             } catch(cancelled:CancellationException) { throw cancelled }
             catch(_:Exception) { if(current(scope,stamp,generation)) mutable.update { it.copy(loading=false,error="DNS 读取失败，请刷新后重试") } }
         }

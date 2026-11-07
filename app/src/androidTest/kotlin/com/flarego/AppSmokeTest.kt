@@ -141,6 +141,28 @@ class AppSmokeTest {
     }
 
     @Test
+    fun searchIsRetainedAcrossTabs() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNodeWithTag("search-field").performTextInput("media")
+        compose.onNodeWithTag("nav-domains").performClick()
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithTag("search-field").assertTextContains("media")
+        compose.onNodeWithText("api-gateway").assertDoesNotExist()
+    }
+
+    @Test
+    fun systemBackFromRootTabReturnsHomeInsteadOfFinishingActivity() {
+        installDemoFixture()
+        compose.onNodeWithTag("nav-resources").performClick()
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("nav-overview").assertIsSelected()
+        assertFalse(compose.activity.isFinishing)
+        screenshot("back-home")
+    }
+
+    @Test
     fun systemBackClosesDrawerThenSearchWithoutLeavingResources() {
         installDemoFixture()
         compose.onNodeWithTag("nav-resources").performClick()

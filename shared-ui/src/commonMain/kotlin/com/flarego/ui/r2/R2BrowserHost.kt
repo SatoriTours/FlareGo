@@ -56,6 +56,7 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boole
         return
     }
     Column(Modifier.fillMaxSize().testTag("r2-browser")) {
+        if(current) com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.buckets.loading)
         if (!configState.open) {
             Text("当前显示默认 jurisdiction 的桶。${if (browser.writesAvailable) R2Browser.WRITE_READY_NOTICE else R2Browser.WRITE_NOTICE}",
                 modifier = Modifier.fillMaxWidth().padding(12.dp).testTag("r2-read-only-notice"), style = MaterialTheme.typography.bodySmall)

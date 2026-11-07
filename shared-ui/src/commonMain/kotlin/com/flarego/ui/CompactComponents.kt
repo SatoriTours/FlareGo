@@ -1,6 +1,7 @@
 package com.flarego.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -37,10 +38,14 @@ fun CompactListRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (icon != null) Icon(icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (icon != null) Surface(shape=RoundedCornerShape(12.dp),color=MaterialTheme.colorScheme.primaryContainer) {
+                Box(Modifier.size(38.dp),contentAlignment=Alignment.Center) {
+                    Icon(icon,null,Modifier.size(20.dp),tint=MaterialTheme.colorScheme.primary)
+                }
+            }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
-                if (!subtitle.isNullOrEmpty()) Text(subtitle, style = MaterialTheme.typography.labelMedium,
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                if (!subtitle.isNullOrEmpty()) Text(subtitle, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (value != null) Text(value, Modifier.widthIn(max = 100.dp),
@@ -62,14 +67,14 @@ fun CompactTabs(
 ) {
     Column(modifier.fillMaxWidth()) {
         Row(Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             labels.forEach { (key, label) ->
                 val active = key == selected
                 Column(Modifier.selectable(active, role = Role.Tab, onClick = { onSelect(key) })
-                    .testTag("$tagPrefix-$key").heightIn(min = 48.dp).widthIn(min = 48.dp),
+                    .testTag("$tagPrefix-$key").padding(vertical=6.dp).background(if(active) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent,RoundedCornerShape(12.dp)).heightIn(min = 48.dp).widthIn(min = 64.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.heightIn(min = 46.dp).padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                        Text(label, color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    Box(Modifier.heightIn(min = 46.dp).padding(horizontal=12.dp,vertical = 12.dp), contentAlignment = Alignment.Center) {
+                        Text(label, color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelLarge)
                     }
                     Box(Modifier.width(16.dp).height(2.dp).background(

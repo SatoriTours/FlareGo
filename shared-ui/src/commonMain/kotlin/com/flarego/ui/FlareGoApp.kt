@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
@@ -84,6 +85,8 @@ fun FlareGoApp(
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
+    val managementDns = management?.dns?.state?.collectAsState()?.value
+    var discardEdit by remember { mutableStateOf(false) }
     val managementZones = management?.zones?.state?.collectAsState()?.value
     // A late publisher from another account must not expose its content or error.
     val zonePageState = managementZones?.takeIf { it.account == account }
@@ -114,6 +117,7 @@ fun FlareGoApp(
         focusManager.clearFocus()
     }
     val updateState = updater?.state?.collectAsState()?.value
+    val pageStates = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     var dialog by remember(connectionDraft) {
@@ -131,11 +135,10 @@ fun FlareGoApp(
             dialog = DialogState.Connect
         }
     }
-    var searchOpen by
-        remember(state.page, state.selected?.id) {
-            mutableStateOf(state.page == Page.BUY && state.selected?.demo == true)
-        }
-    var query by remember(state.page, state.selected?.id) { mutableStateOf("") }
+    val searchFlags = remember(account) { mutableMapOf<Page, MutableState<Boolean>>() }
+    val searchQueries = remember(account) { mutableMapOf<Page, MutableState<String>>() }
+    var searchOpen by searchFlags.getOrPut(state.page) { mutableStateOf(state.page == Page.BUY && state.selected?.demo == true) }
+    var query by searchQueries.getOrPut(state.page) { mutableStateOf("") }
     var searched by remember(state.page, state.selected?.id) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
@@ -147,9 +150,10 @@ fun FlareGoApp(
         management?.let { pages ->
             pages.dns.onIntent(DnsIntent.Clear)
             pages.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
-            pages.zones.onIntent(ZoneIntent.Clear)
+            if (pages.zones.state.value.account != account) pages.zones.onIntent(ZoneIntent.Clear)
+            else pages.zones.onIntent(ZoneIntent.BackToList)
             if (account != null && state.page in setOf(Page.DOMAINS, Page.DNS)) {
-                pages.zones.onIntent(ZoneIntent.Load(account))
+                pages.zones.onIntent(ZoneIntent.Ensure(account))
                 if (state.page == Page.DNS) state.domain?.takeIf { it.connectionId == account.connectionId }?.let {
                     pages.zones.onIntent(ZoneIntent.Open(ZoneScope(account, it.id)))
                 }
@@ -195,18 +199,28 @@ fun FlareGoApp(
         keyboard?.hide()
         focusManager.clearFocus()
         if (activeModule != null) clearPanel()
+        else if (managementDns != null && managementDns.scope?.account == account && managementDns.scope == managementZone?.ref &&
+            (state.page == Page.DNS || zoneTab == ZoneManagementTab.DNS) && management != null &&
+            (managementDns.preparedChange != null || managementDns.mode != null || managementDns.detail != null)) {
+            when {
+                managementDns.preparedChange != null -> management.dns.onIntent(DnsIntent.BackToDraft)
+                managementDns.mode != null -> discardEdit = true
+                else -> management.dns.onIntent(DnsIntent.CloseDetail)
+            }
+        }
         else if (zoneEditing && management != null) {
-            if (!zonePageState.loading) management.zones.onIntent(
-                if (zonePageState.preparedChange != null) ZoneIntent.BackToDraft else ZoneIntent.Cancel)
+            if (!zonePageState.loading) {
+                if (zonePageState.preparedChange != null) management.zones.onIntent(ZoneIntent.BackToDraft)
+                else discardEdit = true
+            }
         }
         else if (managementZone != null && account != null && management != null) {
             management.dns.onIntent(DnsIntent.Clear)
             management.batch?.onIntent(DnsBatchIntent.Clear)
-            management.zones.onIntent(ZoneIntent.Clear)
-            management.zones.onIntent(ZoneIntent.Load(account))
+            management.zones.onIntent(ZoneIntent.BackToList)
         } else controller.back()
     }
-    AppBackHandler(enabled = dialog == null && (drawer.isOpen || detail || (searchOpen && searchEnabled))) {
+    AppBackHandler(enabled = dialog == null && !discardEdit && (drawer.isOpen || detail || activeModule != null || state.page != Page.OVERVIEW || (searchOpen && searchEnabled))) {
         if (drawer.isOpen) scope.launch { drawer.close() }
         else if (searchOpen && searchEnabled) closeSearch()
         else navigateBack()
@@ -221,6 +235,17 @@ fun FlareGoApp(
     }
 
     FlareGoTheme {
+        if(discardEdit) AlertDialog(
+            onDismissRequest = { discardEdit = false },
+            title = { Text("放弃未保存的修改？") },
+            text = { Text("返回后将丢弃当前草稿，已保存的云端数据不会改变。") },
+            confirmButton = { TextButton(onClick = {
+                discardEdit = false
+                if(zoneEditing) management?.zones?.onIntent(ZoneIntent.Cancel)
+                else management?.dns?.onIntent(DnsIntent.Cancel)
+            }) { Text("放弃修改") } },
+            dismissButton = { TextButton(onClick = { discardEdit = false }) { Text("继续编辑") } },
+        )
         ModalNavigationDrawer(
             drawerState = drawer,
             drawerContent = {
@@ -491,8 +516,8 @@ fun FlareGoApp(
                         management?.let { pages ->
                             pages.dns.onIntent(DnsIntent.Clear)
                             pages.batch?.onIntent(DnsBatchIntent.Clear)
-                            pages.zones.onIntent(ZoneIntent.Clear)
-                            if (page == state.page && page == Page.DOMAINS && account != null) pages.zones.onIntent(ZoneIntent.Load(account))
+                            pages.zones.onIntent(ZoneIntent.BackToList)
+                            if (page == state.page && page == Page.DOMAINS && account != null) pages.zones.onIntent(ZoneIntent.Ensure(account))
                         }
                         controller.navigate(page)
                     }
@@ -506,6 +531,8 @@ fun FlareGoApp(
                         }
                     }
                     Box(Modifier.weight(1f)) {
+                        val pageKey=listOf(state.selected?.id.orEmpty(),state.selected?.accountId.orEmpty(),state.page.name).joinToString { "${it.length}:$it" }
+                        pageStates.SaveableStateProvider(pageKey) {
                         if (state.selected == null && state.page != Page.ACCOUNTS) {
                             ServiceSetupScreen(openConnection)
                         } else if(activeModule!=null && actualPanelContext!=null && panelPorts!=null) {
@@ -530,7 +557,7 @@ fun FlareGoApp(
                                 }
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
-                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Load(zone.ref)) }
+                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
                                     if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
                                         managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
                                     else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
@@ -557,7 +584,7 @@ fun FlareGoApp(
                                 }
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
-                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Load(zone.ref)) }
+                                    LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
                                     if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
                                         managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
                                     else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
@@ -607,6 +634,7 @@ fun FlareGoApp(
                                     { name, price -> dialog = DialogState.Purchase(name, price) },
                                     { openConsole(Page.BUY) },
                                 )
+                        }
                         }
                     }
                 }

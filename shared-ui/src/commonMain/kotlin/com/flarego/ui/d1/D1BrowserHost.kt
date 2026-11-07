@@ -40,9 +40,10 @@ fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boole
     if (protected) DisposableEffect(private.surface) { val surface = private.surface; onDispose { browser.content.surfaceRemoved(surface) } }
     LazyColumn(Modifier.fillMaxSize().testTag("d1-content"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("D1 数据库", style = MaterialTheme.typography.headlineSmall); Text("任意 SQL 均按潜在写入处理；写入不自动重试。导入、导出、恢复及删除恢复的生产入口因官方证据不足保持关闭。") }
+        item { com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.loading) }
         state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("d1-error")) } }
         state.notice?.let { item { Text(it, Modifier.testTag("d1-notice")) } }
-        if (state.loading || state.writing) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if ((state.loading && state.observedAtMs==null) || state.writing) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (state.database == null) {
             item {
                 OutlinedTextField(state.filter, browser::filterName, label = { Text("按名称筛选") }, modifier = Modifier.fillMaxWidth().testTag("d1-filter"))

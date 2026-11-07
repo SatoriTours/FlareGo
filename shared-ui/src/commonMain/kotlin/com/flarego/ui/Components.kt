@@ -28,7 +28,7 @@ fun SectionCard(
     Surface(
         modifier,
         shape = MaterialTheme.shapes.large,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp,
         color = MaterialTheme.colorScheme.surface,
     ) {
         Column(
@@ -53,9 +53,10 @@ fun Muted(text: String, modifier: Modifier = Modifier) {
 fun Pill(text: String, warning: Boolean = false) {
     Text(
         text,
-        Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+        Modifier.background(if(warning) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer,
+            RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
         color = if (warning) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelMedium,
     )
 }
 

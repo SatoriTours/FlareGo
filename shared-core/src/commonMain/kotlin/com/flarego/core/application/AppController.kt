@@ -20,6 +20,7 @@ class AppController(
     private val credentialRevisionQuery: ((String) -> Long)? = null,
     private val nowMs: () -> Long = { 0L },
     private val availableProducts: (Connection) -> Set<ProductKey> = { ProductKey.entries.toSet() },
+    private val readCache: com.flarego.core.application.cache.ReadSnapshotStore? = null,
 ) {
     private val mutable =
         MutableStateFlow(
@@ -56,7 +57,7 @@ class AppController(
     private val loader = productFactory?.let {
         ProductLoader(scope, it, selectedScope,
             { id -> credentialRevisionQuery?.invoke(id) ?: (sessionVersions[id] ?: 0).toLong() },
-            { account -> state.value.connections.find { it.id == account.connectionId && it.accountId == account.accountId } }, nowMs, availableProducts)
+            { account -> state.value.connections.find { it.id == account.connectionId && it.accountId == account.accountId } }, nowMs, availableProducts, readCache?.let { com.flarego.core.application.cache.ProductSnapshots(it) })
     }
     val operationEpoch: Long get() = uiEpoch.toLong()
 
@@ -87,8 +88,8 @@ class AppController(
         else -> null
     }
     private fun loadActive(force: Boolean = false) {
-        val key = activeProduct() ?: return
-        if (force || loader?.states?.value?.get(key) == null) loader?.load(key)
+        val key = activeProduct() ?: run { if(state.value.page==Page.OVERVIEW) loader?.restoreOverview();return }
+        if (force) loader?.load(key) else loader?.ensure(key)
     }
     private fun resetProducts() {
         selectedScope.value = account(state.value.selected)

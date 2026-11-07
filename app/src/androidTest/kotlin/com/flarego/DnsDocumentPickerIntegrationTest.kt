@@ -105,6 +105,7 @@ class DnsDocumentPickerIntegrationTest {
         compose.runOnIdle { m.management.zones.onIntent(ZoneIntent.Open(z)) }
         compose.waitUntil(10000) { m.management.zones.state.value.selected?.ref==z && m.panelContext?.scope==z }
         compose.onNodeWithTag("zone-tab-dns").performClick()
+        compose.onNodeWithTag("dns-more").performClick()
         compose.onNodeWithTag("management-open-FILES").performScrollTo().performClick()
         compose.waitUntil(10000) { m.panelPorts.files!!.state.value.lease!=null && m.panelPorts.files!!.state.value.state.snapshot!=null && !m.panelPorts.files!!.state.value.state.loading }
         return m to z

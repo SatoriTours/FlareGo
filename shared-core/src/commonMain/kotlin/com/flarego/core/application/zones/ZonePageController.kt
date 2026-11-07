@@ -1,5 +1,7 @@
 package com.flarego.core.application.zones
 
+import com.flarego.core.application.cache.*
+
 import com.flarego.core.model.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.*
@@ -38,10 +40,14 @@ data class ZonePageState(
     val revision: Long = 0,
     val editorRevision: Long = 0,
     val demo: Boolean = false,
+    val observedAtMs: Long? = null,
+    val fromCache: Boolean = false,
 )
 
 sealed interface ZoneIntent {
     data class Load(val account: AccountScope, val page: PageRequest = PageRequest()) : ZoneIntent
+    data class Ensure(val account: AccountScope) : ZoneIntent
+    data object BackToList : ZoneIntent
     data object LoadMore : ZoneIntent
     data class Open(val scope: ZoneScope) : ZoneIntent
     data object BeginCreate : ZoneIntent
@@ -71,6 +77,8 @@ class ZonePageController(
     private val session:suspend(CloudScope)->ZoneManagementSession,
     private val context:(CloudScope)->ManagementContext,
     private val actions:ManagementActions,
+    private val cache: ManagementSnapshots? = null,
+    private val nowMs: () -> Long = { 0L },
 ) : ZonePagePort {
     private val mutable = MutableStateFlow(ZonePageState())
     override val state: StateFlow<ZonePageState> = mutable.asStateFlow()
@@ -80,6 +88,11 @@ class ZonePageController(
     override fun onIntent(intent:ZoneIntent) {
         when(intent) {
             is ZoneIntent.Load -> load(intent.account,intent.page,false)
+            is ZoneIntent.Ensure -> {
+                val s=state.value
+                if(s.account!=intent.account || s.observedAtMs==null || (!s.loading && nowMs()-s.observedAtMs>=SNAPSHOT_FRESH_MS)) load(intent.account,PageRequest(),false,true)
+            }
+            ZoneIntent.BackToList -> { prepared=null;generation++;invalidate(true);mutable.update { it.copy(selected=null,editorTarget=null,editorMode=null,draft=null,loading=false) } }
             ZoneIntent.LoadMore -> state.value.let { s -> if(!s.loading && s.account!=null && s.next!=null) load(s.account,PageRequest(pageLimit,s.next),true) }
             is ZoneIntent.Open -> open(intent.scope,null)
             is ZoneIntent.BeginEdit -> open(intent.scope,ZoneEditorMode.EDIT)
@@ -153,18 +166,28 @@ class ZonePageController(
             catch(failure:Exception) { if(valid()) mutable.update { it.copy(loading=false,error=managementFailure(failure)) } }
         }
     }
-    private fun load(account:AccountScope,page:PageRequest,append:Boolean) {
+    private fun load(account:AccountScope,page:PageRequest,append:Boolean,preferCache:Boolean=false) {
         val stamp=try { context(account) } catch(_:Exception) { clearError();return }
         val read=++generation;pageLimit=page.limit
         if(state.value.account!=account) mutable.value=ZonePageState(account=account,revision=state.value.revision+1,editorRevision=state.value.editorRevision+1,demo=stamp.connection.demo)
         invalidate(false);mutable.update { it.copy(loading=true,error=null) }
         appScope.launch {
             try {
+                if(!append && !stamp.connection.demo && state.value.observedAtMs==null) {
+                    val stored=cache?.zones(account,nowMs())
+                    if(!current(account,stamp,read)) return@launch
+                    if(stored!=null) {
+                        val fresh=preferCache && nowMs()-stored.observedAtMs<SNAPSHOT_FRESH_MS
+                        mutable.update { it.copy(zones=stored.items,total=stored.total,observedAtMs=stored.observedAtMs,fromCache=true,loading=!fresh) }
+                        if(fresh) return@launch
+                    }
+                }
                 val result=session(account).list(account,page)
                 val task=actions.pendingManagement(account)
                 val items=result.items.map { if(it.ref.account!=account) throw scopeMismatchFailure();requireDnsZone(it,it.ref) }
                 if(!current(account,stamp,read)) return@launch
-                mutable.update { it.copy(zones=if(append) (it.zones+items).distinctBy { it.ref } else items,next=result.next,total=result.total,loading=false,pendingTask=task) }
+                mutable.update { it.copy(zones=if(append) (it.zones+items).distinctBy { it.ref } else items,next=result.next,total=result.total,loading=false,pendingTask=task,observedAtMs=nowMs(),fromCache=false) }
+                if(!stamp.connection.demo) cache?.saveZones(account,state.value.zones,result.total,result.next==null && result.total==state.value.zones.size.toLong(),nowMs()) { current(account,stamp,read) }
             } catch(cancelled:CancellationException) { throw cancelled }
             catch(_:Exception) { if(current(account,stamp,read)) mutable.update { it.copy(loading=false,error="Zone 读取失败，请刷新后重试") } }
         }
@@ -173,7 +196,8 @@ class ZonePageController(
         if(scope.account!=state.value.account) return
         val stamp=try { context(scope) } catch(_:Exception) { clearError();return }
         val read=++generation;invalidate(true)
-        mutable.update { it.copy(loading=true,editorTarget=null,editorMode=null,draft=null) }
+        mutable.update { it.copy(loading=true,editorTarget=null,editorMode=null,draft=null,
+            selected=if(mode==null) it.zones.firstOrNull { zone -> zone.ref==scope } ?: it.selected else it.selected) }
         appScope.launch {
             try {
                 val result=requireDnsZone(session(scope).get(scope),scope)

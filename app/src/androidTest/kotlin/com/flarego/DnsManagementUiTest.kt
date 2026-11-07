@@ -390,6 +390,38 @@ class DnsManagementUiTest {
         compose.runOnIdle { assertEquals(0, confirmed); assertEquals(1, cancelled) }
     }
 
+    @Test fun compactListHidesSecondaryControlsAndKeepsMetadataInDetail() {
+        val port = pagePort()
+        port.mutable.value = port.state.value.copy(detail = null)
+        installPage(port)
+        compose.onNodeWithTag("dns-record-page-record").assertExists()
+        compose.onNodeWithTag("dns-create").assertDoesNotExist()
+        compose.onNodeWithTag("dns-filter-name").assertDoesNotExist()
+        compose.onNodeWithTag("dns-detail-ttl").assertDoesNotExist()
+        screenshot("dns-compact-list")
+        click("dns-record-page-record")
+        screenshot("dns-compact-detail")
+        compose.onNodeWithTag("dns-detail-ttl").assertTextContains("3600", substring = true)
+        click("dns-detail-close")
+        compose.onNodeWithTag("dns-record-detail").assertDoesNotExist()
+        compose.onNodeWithTag("dns-more").performClick()
+        compose.onNodeWithTag("dns-create").assertExists()
+        compose.onNodeWithTag("dns-refresh").assertExists()
+        screenshot("dns-compact-more")
+        compose.runOnIdle { assertTrue(port.intents.none { it is DnsIntent.BeginEdit || it is DnsIntent.Preview || it is DnsIntent.Confirm }) }
+    }
+
+    @Test fun cachedRowCanBeInspectedWithoutGrantingWriteAuthority() {
+        val port = pagePort()
+        port.mutable.value = port.state.value.copy(detail = null, fromCache = true, error = "离线")
+        installPage(port)
+        click("dns-record-page-record")
+        compose.onNodeWithTag("dns-detail-ttl").assertExists()
+        compose.onNodeWithTag("dns-detail-patch").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("dns-detail-delete").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { assertTrue(port.intents.none { it is DnsIntent.Preview || it is DnsIntent.Confirm }) }
+    }
+
     private fun pagePort(type: String = "SRV"): TestDnsPagePort {
         val fields = if (type == "SRV") obj("""{"data":{"priority":10,"weight":5,"port":443,"target":"sip.example.com"},"ttl":3600,"comment":"keep"}""")
             else obj("""{"content":"opaque"}""")
@@ -443,7 +475,7 @@ class DnsManagementUiTest {
         val port = pagePort("FUTURE")
         port.mutable.value = port.state.value.copy(detail = null, next = PageToken.Number(2))
         installPage(port)
-        edit("dns-filter-name", "www"); edit("dns-filter-type", "TXT"); click("dns-filter-apply")
+        compose.onNodeWithTag("dns-more").performClick(); click("dns-filter-open"); edit("dns-filter-name", "www"); edit("dns-filter-type", "TXT"); compose.onNodeWithTag("dns-filter-apply").performClick()
         compose.runOnIdle { assertEquals(DnsIntent.Load(pageScope, DnsFilter(name = "www", type = "TXT")), port.intents.last()) }
         click("dns-load-more")
         compose.runOnIdle { assertEquals(DnsIntent.LoadMore, port.intents.last()) }
@@ -491,7 +523,7 @@ class DnsManagementUiTest {
 
     @Test fun pageCreateAndDeleteBothWaitForExplicitPreviewAndConfirm() {
         val port = pagePort(); installPage(port)
-        click("dns-create"); click("dns-type-TXT"); edit("dns-content", "  \"new\"\nline  "); preview()
+        click("dns-detail-close"); compose.onNodeWithTag("dns-more").performClick(); click("dns-create"); click("dns-type-TXT"); edit("dns-content", "  \"new\"\nline  "); preview()
         compose.runOnIdle {
             val intent = port.intents.filterIsInstance<DnsIntent.Preview>().single()
             assertEquals(DnsWriteMode.CREATE, intent.mode)
@@ -499,6 +531,7 @@ class DnsManagementUiTest {
             assertTrue(port.intents.none { it is DnsIntent.Confirm })
         }
         click("dns-preview-cancel")
+        click("dns-record-page-record")
         click("dns-detail-delete")
         compose.runOnIdle { assertEquals(1, port.intents.filterIsInstance<DnsIntent.Preview>().size) }
         click("dns-delete-preview")
@@ -572,6 +605,7 @@ private class TestDnsPagePort(initial: DnsPageState) : DnsPagePort {
                     s.detail?.let { DnsRecordInput(it.type, it.name, it.fields) }, intent.input))
             DnsIntent.BackToDraft -> mutable.value = s.copy(preparedChange = null)
             DnsIntent.Cancel -> mutable.value = s.copy(mode = null, draft = null, preparedChange = null, editorRevision = s.editorRevision + 1)
+            DnsIntent.CloseDetail -> mutable.value = s.copy(detail = null, selected = null)
             DnsIntent.Clear -> mutable.value = DnsPageState()
             else -> Unit
         }

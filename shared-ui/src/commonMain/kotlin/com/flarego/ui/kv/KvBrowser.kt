@@ -1,5 +1,7 @@
 package com.flarego.ui.kv
 
+import com.flarego.core.application.cache.*
+
 import com.flarego.core.application.kv.*
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
@@ -24,6 +26,7 @@ data class KvBrowserState(
     val editor: KvEditor? = null, val form: KvForm = KvForm(), val confirmation: KvConfirmationView? = null,
     val error: String? = null, val notice: String? = null, val tasks: List<OperationTask> = emptyList(),
     val failedKeys: List<String> = emptyList(),
+    val observedAtMs: Long? = null, val fromCache: Boolean = false,
 )
 enum class KvDocumentKind { IMPORT_VALUE, IMPORT_BULK_WRITE, IMPORT_BULK_DELETE, EXPORT_VALUE, EXPORT_BULK }
 data class KvDocumentRequest(val id: Long, val kind: KvDocumentKind)
@@ -32,6 +35,7 @@ class KvBrowser(
     private val scope: CoroutineScope, private val actual: () -> KvBrowserContext?,
     private val runtime: KvWriteRuntime, store: KvContentStore, secureWindow: () -> SecureWindowPort?,
     private val nowSeconds: () -> Long, private val session: suspend (KvBrowserContext) -> KvSession,
+    private val cache: ResourceDirectorySnapshots? = null,
 ) {
     private val mutable=MutableStateFlow(KvBrowserState())
     val state=mutable.asStateFlow()
@@ -50,17 +54,26 @@ class KvBrowser(
         val current=actual()
         if(current==mutable.value.context)return
         background();seenCursors=emptySet();mutable.value=KvBrowserState(context=current)
-        if(current!=null){refreshNamespaces();refreshTasks()}
+        if(current!=null){refreshNamespaces(preferCache=true);refreshTasks()}
     }
-    fun refreshNamespaces(more:Boolean=false) {
+    fun refreshNamespaces(more:Boolean=false,preferCache:Boolean=false) {
         val ctx=current()?:return
         if(mutable.value.namespace!=null)return
         val page=if(more)(mutable.value.namespaceNext as? PageToken.Number)?.value?:return else 1
         read(ctx){ticket->
+            if(!more && mutable.value.observedAtMs==null && !ctx.connection.demo) {
+                val stored=cache?.restore(ctx.account,"KV",nowSeconds()*1000)
+                if(!valid(ctx,ticket))return@read
+                if(stored!=null) {
+                    mutable.value=mutable.value.copy(namespaces=stored.rows.map { KvNamespace(KvNamespaceRef(ctx.account,it.id),it.name,it.supportsUrlEncoding) },observedAtMs=stored.observedAtMs,fromCache=true)
+                    if(preferCache && nowSeconds()*1000-stored.observedAtMs<SNAPSHOT_FRESH_MS) { mutable.value=mutable.value.copy(loading=false);return@read }
+                }
+            }
             val result=session(ctx).listNamespaces(ctx.account,KvNamespacePageRequest(page))
             if(!valid(ctx,ticket))return@read
             if(result.items.any{it.ref.account!=ctx.account})throw stale()
-            mutable.value=mutable.value.copy(namespaces=(if(more)mutable.value.namespaces else emptyList()).plus(result.items).distinctBy{it.ref},namespaceNext=result.next,loading=false)
+            mutable.value=mutable.value.copy(namespaces=(if(more)mutable.value.namespaces else emptyList()).plus(result.items).distinctBy{it.ref},namespaceNext=result.next,loading=false,observedAtMs=nowSeconds()*1000,fromCache=false)
+            if(!ctx.connection.demo)cache?.save(ctx.account,"KV",mutable.value.namespaces.map { DirectoryRow(it.ref.id,it.title,supportsUrlEncoding=it.supportsUrlEncoding) },directoryComplete(result.next,result.total,mutable.value.namespaces.size),nowSeconds()*1000) { valid(ctx,ticket) }
         }
     }
     fun openNamespace(ref:KvNamespaceRef) {
@@ -81,7 +94,7 @@ class KvBrowser(
     fun backToNamespaces() {
         cancel();readSerial++;readJob?.cancel();seenCursors=emptySet()
         mutable.value=mutable.value.copy(namespace=null,keys=emptyList(),keyNext=null,selectedKey=null,prefix="",loading=false)
-        refreshNamespaces()
+        if(mutable.value.observedAtMs==null || nowSeconds()*1000-mutable.value.observedAtMs!!>=SNAPSHOT_FRESH_MS) refreshNamespaces()
     }
     fun refreshKeys(more:Boolean=false) {
         val ctx=current()?:return;val ref=mutable.value.namespace?.ref?:return

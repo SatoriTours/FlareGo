@@ -37,7 +37,8 @@ fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=tr
     }
     Column(Modifier.fillMaxSize().testTag("kv-browser")){
         if(s.context?.account!=account||account==null){Text("正在绑定当前账号的 KV…",Modifier.padding(16.dp));return@Column}
-        if(s.loading||s.writing)LinearProgressIndicator(Modifier.fillMaxWidth())
+        com.flarego.ui.ReadStatus(s.observedAtMs,s.fromCache,s.loading)
+        if((s.loading && s.observedAtMs==null)||s.writing)LinearProgressIndicator(Modifier.fillMaxWidth())
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal=12.dp).testTag("kv-content"),verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=12.dp)){
             item{
                 Text("标准 Workers KV",style=MaterialTheme.typography.titleLarge)

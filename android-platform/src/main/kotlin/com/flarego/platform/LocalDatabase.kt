@@ -17,6 +17,7 @@ class LocalDatabase internal constructor(
     val database: FlareGoDatabase,
 ) : AutoCloseable {
     val localStore: AndroidLocalStore = AndroidLocalStore(database)
+    val readSnapshots = AndroidReadSnapshotStore(database)
     val operationStore: AndroidOperationStore = AndroidOperationStore(database)
 
     override fun close() {

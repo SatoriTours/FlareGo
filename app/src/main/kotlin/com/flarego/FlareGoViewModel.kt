@@ -89,6 +89,7 @@ class FlareGoViewModel private constructor(
     /** One database owner for the whole app; both stores share it. */
     private val localDatabase = LocalDatabase.open(application)
     private val store = localDatabase.localStore
+    private val directoryCache = com.flarego.core.application.cache.ResourceDirectorySnapshots(localDatabase.readSnapshots)
 
     /** Recoverable task metadata, consumed by the operation lifecycle work. */
     val operationStore = localDatabase.operationStore
@@ -139,7 +140,7 @@ class FlareGoViewModel private constructor(
             val bundle=credentialBundle(connection)
             AuthorizedManagementSessions(connection,bundle.gateway,bundle.issuer,AndroidFingerprint(),
                 AuthorizedDnsFilesDependencies(bundle.transfers,managementPlatformOwner.importLimiter,operationDispatcher)).services()
-        },managementPlatform=ManagementPlatformPorts(managementPlatformOwner.files,operationDispatcher))
+        },managementPlatform=ManagementPlatformPorts(managementPlatformOwner.files,operationDispatcher),readCache=localDatabase.readSnapshots)
     val management get()=operationRuntime.management
     private fun actualR2Context(): com.flarego.ui.r2.R2BrowserContext? {
         if (!::controllerRef.isInitialized) return null
@@ -287,7 +288,7 @@ class FlareGoViewModel private constructor(
     }
     private val kvBrowserLazy=lazy {
         KvBrowser(viewModelScope,::actualKvContext,kvWrites,kvContents,{secureWindowPort},
-            {System.currentTimeMillis()/1000},{ctx->kvSessionFor(ctx.connection,ctx.credentialRevision)})
+            {System.currentTimeMillis()/1000},{ctx->kvSessionFor(ctx.connection,ctx.credentialRevision)},cache=directoryCache)
     }
     val kvBrowser:KvBrowser get()=kvBrowserLazy.value
     private val kvDocumentsLazy=lazy{KvDocumentBridge(getApplication(),viewModelScope,kvBrowser,::actualKvContext)}
@@ -332,7 +333,7 @@ class FlareGoViewModel private constructor(
             { ctx -> d1SessionFor(ctx.connection,ctx.credentialRevision) },{ ctx,outcome ->
                 if (actualD1Context() != ctx) throw CloudFailure(CloudFailureCode.CONFLICT,"D1 范围已变化")
                 D1FilePipeline(d1SessionFor(ctx.connection,ctx.credentialRevision),d1Transfers,d1Contents,System::currentTimeMillis).downloadExport(outcome)
-            })
+            },cache=directoryCache,nowMs=System::currentTimeMillis)
     }
     val d1Browser: D1Browser get() = d1BrowserLazy.value
     private val d1DocumentsLazy = lazy { D1DocumentBridge(getApplication(),viewModelScope,d1Browser,::actualD1Context) }
@@ -422,6 +423,7 @@ class FlareGoViewModel private constructor(
             jobsSession = { context -> r2JobsSessionFor(context.connection, context.credentialRevision) },
             notificationSession = { context -> r2NotificationSessionFor(context.connection, context.credentialRevision) },
             metricsSession = { context -> r2MetricsFor(context.connection) },
+            cache=directoryCache,nowMs=System::currentTimeMillis,
             session = { context -> r2SessionFor(context.connection, context.credentialRevision) },
         )
     }
@@ -505,6 +507,7 @@ class FlareGoViewModel private constructor(
 
     val controller = AppController(viewModelScope,sessionFactory,store,initialConnections,
         dnsOperations = operationRuntime,
+        readCache = localDatabase.readSnapshots,
         availableProducts = { if (it.demo || d1Synthetic != null) ProductKey.entries.toSet() else CloudflareOAuthReadProfile.products },
         productFactory = ProductSessionFactory { connection ->
             if (connection.demo) {

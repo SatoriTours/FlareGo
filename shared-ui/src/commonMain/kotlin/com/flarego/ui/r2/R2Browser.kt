@@ -1,5 +1,7 @@
 package com.flarego.ui.r2
 
+import com.flarego.core.application.cache.*
+
 import com.flarego.core.model.*
 import com.flarego.core.application.r2.*
 import com.flarego.core.ports.*
@@ -24,6 +26,7 @@ data class R2BrowserState(
     val notice: String? = null,
     val preview: R2PreparedPreview? = null,
     val writing: Boolean = false,
+    val observedAtMs: Long? = null, val fromCache: Boolean = false,
 )
 
 /** Main/UI-dispatcher owner. Never authorizes writes from a successful directory read. */
@@ -42,6 +45,8 @@ class R2Browser(
     private val jobsSession: (suspend (R2BrowserContext) -> R2JobSession)? = null,
     private val notificationSession: (suspend (R2BrowserContext) -> R2NotificationSession)? = null,
     private val metricsSession: (suspend (R2BrowserContext) -> R2MetricsPort)? = null,
+    private val cache: ResourceDirectorySnapshots? = null,
+    private val nowMs: () -> Long = { 0L },
     private val session: suspend (R2BrowserContext) -> R2Session,
 ) {
     constructor(scope: CoroutineScope, actual: () -> R2BrowserContext?, session: suspend (R2BrowserContext) -> R2Session) : this(scope, actual, null, null, null, null, session = session)
@@ -354,7 +359,7 @@ class R2Browser(
         c.close()
         mutable.value = R2BrowserState(context = current, notice = if (writesAvailable) WRITE_READY_NOTICE else WRITE_NOTICE)
         if (current != null) scope.launch { runCatching { writeRuntime?.refreshTasks() } }
-        if (current != null) loadBuckets(false)
+        if (current != null) loadBuckets(false,preferCache=true)
     }
     private fun valid(context: R2BrowserContext?, generation: Long) =
         !closed && context != null && context == bound && context == actual() && generation == epoch
@@ -514,7 +519,7 @@ class R2Browser(
         }
     }
 
-    private fun loadBuckets(append: Boolean) {
+    private fun loadBuckets(append: Boolean,preferCache: Boolean=false) {
         val context = bound ?: return
         val old = mutable.value.buckets
         if (append && (old.loading || old.nextCursor == null)) return
@@ -524,6 +529,14 @@ class R2Browser(
         mutable.value = mutable.value.copy(buckets = old.copy(loading = true, error = null))
         job = scope.launch {
             try {
+                if(!append && mutable.value.observedAtMs==null && !context.connection.demo) {
+                    val stored=cache?.restore(context.account,"R2",nowMs())
+                    if(!valid(context,generation))return@launch
+                    if(stored!=null) {
+                        mutable.value=mutable.value.copy(buckets=mutable.value.buckets.copy(rows=stored.rows.map { R2BucketRow(it.name,it.location,it.storageClass,it.createdAt) }),observedAtMs=stored.observedAtMs,fromCache=true)
+                        if(preferCache && nowMs()-stored.observedAtMs<SNAPSHOT_FRESH_MS) { mutable.value=mutable.value.copy(buckets=mutable.value.buckets.copy(loading=false));return@launch }
+                    }
+                }
                 val api = session(context)
                 if (!valid(context, generation)) return@launch
                 val page = api.listBuckets(context.account, PageRequest(50, token))
@@ -533,7 +546,8 @@ class R2Browser(
                 val merged = if (append) old.rows + rows else rows
                 if (merged.map { it.name }.toSet().size != merged.size) throw invalidPage()
                 mutable.value = mutable.value.copy(buckets = mutable.value.buckets.copy(
-                    rows = merged, nextCursor = (page.next as? PageToken.Cursor)?.value, loading = false, error = null))
+                    rows = merged, nextCursor = (page.next as? PageToken.Cursor)?.value, loading = false, error = null),observedAtMs=nowMs(),fromCache=false)
+                if(!context.connection.demo)cache?.save(context.account,"R2",merged.map { DirectoryRow(it.name,it.name,it.location,it.storageClass,it.createdAt) },directoryComplete(page.next,page.total,merged.size),nowMs()) { valid(context,generation) }
             } catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { if (valid(context, generation)) mutable.value = mutable.value.copy(buckets = mutable.value.buckets.copy(loading = false, error = safe(e))) }
         }

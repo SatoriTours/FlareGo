@@ -162,7 +162,7 @@ class DnsBatchRuntimeIntegrationTest {
         compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         click("zone-row-batch-zone");compose.waitUntil(10000) { m.management.zones.state.value.selected!=null }
         compose.onNodeWithTag("zone-tab-dns").performClick();compose.waitUntil(10000) { m.management.dns.state.value.rows.isNotEmpty() }
-        click("dns-open-batch");compose.waitUntil(10000) { m.management.batch!!.state.value.zoneName!=null }
+        compose.onNodeWithTag("dns-more").performClick();click("dns-open-batch");compose.waitUntil(10000) { m.management.batch!!.state.value.zoneName!=null }
         click("db-add-PATCH");click("db-select-batch-record");compose.onNodeWithTag("dns-comment").performScrollTo().performTextReplacement("native confirmed")
         click("dns-preview");click("db-preview");compose.waitUntil(10000) { m.management.batch!!.state.value.preparedChange!=null }
         compose.runOnIdle { assertTrue(posts().isEmpty());assertTrue(m.operationStore.list(scope(m).connectionId).isEmpty()) }
@@ -200,7 +200,7 @@ class DnsBatchRuntimeIntegrationTest {
         compose.onNodeWithTag("nav-domains").performClick();compose.waitUntil(10000) { m.management.zones.state.value.zones.isNotEmpty() }
         click("zone-row-zone-demo");compose.waitUntil(10000) { m.management.zones.state.value.selected!=null }
         compose.onNodeWithTag("zone-tab-dns").performClick();compose.waitUntil(10000) { m.management.dns.state.value.rows.isNotEmpty() }
-        click("dns-open-batch");compose.waitUntil(10000) { m.management.batch!!.state.value.zoneName!=null }
+        compose.onNodeWithTag("dns-more").performClick();click("dns-open-batch");compose.waitUntil(10000) { m.management.batch!!.state.value.zoneName!=null }
         compose.onNodeWithTag("db-demo").performScrollTo().assertExists()
         click("db-add-POST");click("dns-type-TXT")
         compose.onNodeWithTag("dns-name").performScrollTo().performTextReplacement("native-example")

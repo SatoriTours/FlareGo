@@ -30,6 +30,7 @@ class AndroidLocalStore internal constructor(private val database: FlareGoDataba
     override fun removeConnection(id: String) {
         // One owner transaction: the account, its operations and its tasks leave together.
         database.transaction {
+            database.readSnapshotsQueries.removeConnectionSnapshots(id)
             queries.removeConnection(id)
             queries.removeOperations(id)
             database.tasksQueries.removeTasksForConnection(id)

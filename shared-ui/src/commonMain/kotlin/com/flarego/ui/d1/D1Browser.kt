@@ -1,5 +1,7 @@
 package com.flarego.ui.d1
 
+import com.flarego.core.application.cache.*
+
 import com.flarego.core.application.d1.*
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
@@ -25,6 +27,7 @@ data class D1BrowserState(
     val error: String? = null, val notice: String? = null, val browsePage: Int = 0,
     val failureCode: CloudFailureCode? = null,
     val browseKind: D1BrowseKind? = null,
+    val observedAtMs: Long? = null, val fromCache: Boolean = false,
 )
 enum class D1DocumentKind { SQL_TEXT, SQL_JSON, IMPORT_SQL, EXPORT_RESULT }
 data class D1DocumentRequest(val id: Long, val kind: D1DocumentKind, val editor: D1Editor? = null)
@@ -35,6 +38,8 @@ class D1Browser(
     private val store: D1ContentStore, window: () -> SecureWindowPort?, private val md5: D1ContentFingerprint,
     private val session: suspend (D1BrowserContext) -> D1Session,
     private val download: suspend (D1BrowserContext, D1FileOutcome) -> D1Content,
+    private val cache: ResourceDirectorySnapshots? = null,
+    private val nowMs: () -> Long = { 0L },
 ) {
     private val mutable = MutableStateFlow(D1BrowserState())
     val state = mutable.asStateFlow()
@@ -54,17 +59,26 @@ class D1Browser(
         val ctx = actual()
         if (ctx == mutable.value.context) return
         background(); mutable.value = D1BrowserState(context = ctx)
-        if (ctx != null) { refreshDatabases(); refreshTasks() }
+        if (ctx != null) { refreshDatabases(preferCache=true); refreshTasks() }
     }
-    fun refreshDatabases(more: Boolean = false) {
+    fun refreshDatabases(more: Boolean = false, preferCache: Boolean = false) {
         val ctx = current() ?: return
         val page = if (more) (mutable.value.next as? PageToken.Number)?.value ?: return else 1
         val filter = mutable.value.filter
         read(ctx) { ticket ->
+            if(!more && filter.isEmpty() && mutable.value.observedAtMs==null && !ctx.connection.demo) {
+                val stored=cache?.restore(ctx.account,"D1",nowMs())
+                if(!valid(ctx,ticket))return@read
+                if(stored!=null) {
+                    mutable.value=mutable.value.copy(databases=stored.rows.map { D1DatabaseRow(D1DatabaseRef(ctx.account,it.id),it.name,it.fileSize,it.replication?.let { r -> D1Replication.entries.firstOrNull { it.name==r } }) },observedAtMs=stored.observedAtMs,fromCache=true)
+                    if(preferCache && nowMs()-stored.observedAtMs<SNAPSHOT_FRESH_MS)return@read
+                }
+            }
             val result = session(ctx).listDatabases(ctx.account, D1PageRequest(page, name = filter.takeIf { it.isNotBlank() }))
             if (!valid(ctx, ticket) || mutable.value.filter != filter) return@read
             if (result.items.any { it.ref.account != ctx.account }) throw stale()
-            mutable.value = mutable.value.copy(databases = ((if (more) mutable.value.databases else emptyList()) + result.items.map(::row)).distinctBy { it.ref }, next = result.next)
+            mutable.value = mutable.value.copy(databases = ((if (more) mutable.value.databases else emptyList()) + result.items.map(::row)).distinctBy { it.ref }, next = result.next,observedAtMs=nowMs(),fromCache=false)
+            if(!ctx.connection.demo && filter.isEmpty())cache?.save(ctx.account,"D1",mutable.value.databases.map { DirectoryRow(it.ref.id,it.name,fileSize=it.fileSize,replication=it.replication?.name) },directoryComplete(result.next,result.total,mutable.value.databases.size),nowMs()) { valid(ctx,ticket) }
         }
     }
     fun filterName(value: String) { if (value.length > 256) return; cancel(); mutable.value = mutable.value.copy(filter = value); refreshDatabases() }
@@ -81,7 +95,7 @@ class D1Browser(
     }
     fun back() {
         background(); mutable.value = mutable.value.copy(database = null, editor = null, loading = false, writing = false)
-        refreshDatabases()
+        if(mutable.value.observedAtMs==null || nowMs()-mutable.value.observedAtMs!!>=SNAPSHOT_FRESH_MS) refreshDatabases()
     }
     fun begin(editor: D1Editor) {
         if (current() == null || mutable.value.writing) return

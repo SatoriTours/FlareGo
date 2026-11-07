@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -65,12 +66,13 @@ private fun ZonePageContent(
             else -> ZoneFormDraft(type = editorTarget?.type ?: "full", paused = editorTarget?.paused ?: false)
         })
     }
-    var statusFilter by remember(account) { mutableStateOf("all") }
-    var localTab by remember(account, selected?.ref) { mutableStateOf("details") }
+    var statusFilter by rememberSaveable(account) { mutableStateOf("all") }
+    var localTab by rememberSaveable(account, selected?.ref) { mutableStateOf("details") }
     val tab = slots?.selectedTab?.name?.lowercase() ?: localTab
     Column(modifier.fillMaxSize()) {
         if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(12.dp).testTag("zone-demo-notice"))
-        if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.loading)
+        if (state.loading && state.observedAtMs==null) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.error?.let { Text(it, Modifier.padding(12.dp).testTag("zone-page-error"), color = MaterialTheme.colorScheme.error) }
         Box(Modifier.weight(1f)) {
             val prepared = state.preparedChange
@@ -152,7 +154,7 @@ private fun ZonePageContent(
                                     modifier = Modifier.fillMaxWidth().testTag("zone-detail-delete")) { Text("删除整个 Zone") }
                                 OutlinedButton(onClick = { onIntent(ZoneIntent.ActivationCheck(selected.ref)) }, enabled = !blocked && !state.loading && selected.status == "pending",
                                     modifier = Modifier.fillMaxWidth().testTag("zone-activation-check")) { Text("预览激活检查") }
-                                TextButton(onClick = { onIntent(ZoneIntent.Clear); onIntent(ZoneIntent.Load(account)) },
+                                TextButton(onClick = { onIntent(ZoneIntent.BackToList) },
                                     modifier = Modifier.fillMaxWidth().testTag("zone-back-list")) { Text("返回 Zone 列表") }
                             }
                         }

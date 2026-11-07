@@ -25,12 +25,13 @@ class AppOperationRuntime(
     private val publish: (List<OperationTask>) -> Unit,
     private val managementFactory: ManagementSessionFactory? = null,
     private val managementPlatform: ManagementPlatformPorts? = null,
+    readCache: com.flarego.core.application.cache.ReadSnapshotStore? = null,
 ) : DnsOperations, ManagementActions, DnsBatchActions, ExtendedManagementActions {
     private val taskStore=ManagementOperationStore(store,fingerprint) { id -> currentState().connections.any { it.id==id && it.demo } }
     private val examples=mutableMapOf<Connection,com.flarego.core.demo.DemoDnsManagement>()
     val management = com.flarego.core.application.management.CloudflareManagement(
-        com.flarego.core.application.dns.DnsController(appScope,{ scope -> managementSession(scope).dns },::managementContext,this),
-        com.flarego.core.application.zones.ZonePageController(appScope,{ scope -> managementSession(scope).zones },::managementContext,this),
+        com.flarego.core.application.dns.DnsController(appScope,{ scope -> managementSession(scope).dns },::managementContext,this,readCache?.let { com.flarego.core.application.cache.ManagementSnapshots(it) },clock::nowMs),
+        com.flarego.core.application.zones.ZonePageController(appScope,{ scope -> managementSession(scope).zones },::managementContext,this,readCache?.let { com.flarego.core.application.cache.ManagementSnapshots(it) },clock::nowMs),
         batch = DnsBatchPageController(appScope,::batchSession,::managementContext,this,this),
     )
     private class ExtendedActual(val command: ExtendedManagementCommand, val revision: Long, val stillCurrent: () -> Boolean, val context:ManagementContext) {

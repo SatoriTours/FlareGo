@@ -587,7 +587,8 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
 @Composable
 fun ProductStatus(state: ProductLoadState?, refresh: () -> Unit, more: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp,vertical = 6.dp),verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (state?.loading == true) LinearProgressIndicator(Modifier.fillMaxWidth())
+        ReadStatus(state?.observedAtMs,state?.fromCache==true,state?.loading==true)
+        if (state?.loading == true && state.observedAtMs==null) LinearProgressIndicator(Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceBetween,verticalAlignment = Alignment.CenterVertically) {
             Muted(if (state?.observedAtMs == null) {
                 if (state?.loading == true) "正在读取…" else "未加载"

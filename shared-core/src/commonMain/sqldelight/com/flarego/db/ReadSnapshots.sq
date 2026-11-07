@@ -1,0 +1,28 @@
+CREATE TABLE read_snapshot (
+    connection_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    observed_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (connection_id, account_id, cache_key)
+);
+
+snapshot:
+SELECT payload, observed_at_ms FROM read_snapshot
+WHERE connection_id = ? AND account_id = ? AND cache_key = ?;
+
+putSnapshot:
+INSERT OR REPLACE INTO read_snapshot(connection_id, account_id, cache_key, payload, observed_at_ms)
+SELECT :connectionId, :accountId, :cacheKey, :payload, :observedAtMs
+WHERE EXISTS (SELECT 1 FROM connection WHERE id = :connectionId AND account_id = :accountId);
+
+removeConnectionSnapshots:
+DELETE FROM read_snapshot WHERE connection_id = ?;
+
+removeExpired:
+DELETE FROM read_snapshot WHERE observed_at_ms < ? OR observed_at_ms > ?;
+
+trimSnapshots:
+DELETE FROM read_snapshot WHERE rowid NOT IN (
+    SELECT rowid FROM read_snapshot ORDER BY observed_at_ms DESC, rowid DESC LIMIT 64
+);

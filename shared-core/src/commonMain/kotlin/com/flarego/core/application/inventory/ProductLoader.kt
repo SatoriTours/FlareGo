@@ -1,6 +1,7 @@
 package com.flarego.core.application.inventory
 
 import com.flarego.core.model.*
+import com.flarego.core.application.cache.*
 import com.flarego.core.ports.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -15,6 +16,7 @@ data class ProductLoadState(
     val content: ProductContent, val next: PageToken?, val total: Long?,
     val loading: Boolean, val error: CloudFailure?, val scope: AccountScope,
     val credentialRevision: Long, val observedAtMs: Long?, val allPagesLoaded: Boolean,
+    val fromCache: Boolean = false,
 )
 class ProductLoader(
     private val coroutineScope: CoroutineScope,
@@ -24,6 +26,7 @@ class ProductLoader(
     private val connection: (AccountScope) -> Connection?,
     private val nowMs: () -> Long = { 0L },
     private val availableProducts: (Connection) -> Set<ProductKey> = { ProductKey.entries.toSet() },
+    private val cache: ProductSnapshots? = null,
 ) {
     private val mutable = MutableStateFlow<Map<ProductKey, ProductLoadState>>(emptyMap())
     val states: StateFlow<Map<ProductKey, ProductLoadState>> = mutable.asStateFlow()
@@ -62,6 +65,37 @@ class ProductLoader(
 
     fun invalidate(connectionId: String) {
         if (boundSelection?.connectionId == connectionId) resetSelection()
+        cacheDeletes[connectionId] = coroutineScope.launch { cache?.removeConnection(connectionId) }
+    }
+    private val cacheDeletes = mutableMapOf<String, Job>()
+
+    /** Navigation is cache-first; explicit refresh still calls load directly. */
+    fun restoreOverview() { if(cache!=null) ProductKey.entries.forEach { ensure(it,cachedOnly=true) } }
+
+    fun ensure(product: ProductKey, cachedOnly: Boolean=false) {
+        if (boundSelection != selected.value) resetSelection()
+        if (jobs[product]?.isActive == true) return
+        val account = selected.value ?: return
+        val owner = connection(account) ?: return
+        if (product !in availableProducts(owner)) return
+        val revision = credentialRevision(owner.id)
+        val existing = mutable.value[product]
+        if (existing != null && existing.scope == account && existing.credentialRevision == revision) {
+            val observed = existing.observedAtMs
+            if (observed == null || nowMs() - observed >= SNAPSHOT_FRESH_MS || nowMs() < observed) load(product)
+            return
+        }
+        val stamp = epoch
+        val mode = workersMode
+        jobs[product] = coroutineScope.launch {
+            cacheDeletes[owner.id]?.join()
+            val restored = if(owner.demo) null else cache?.restore(account, product, mode, revision, nowMs())
+            ensureActive()
+            if (stamp != epoch || selected.value != account || credentialRevision(owner.id) != revision || workersMode != mode) return@launch
+            if (restored != null) mutable.update { it + (product to restored) }
+            jobs.remove(product)
+            if ((restored == null && !cachedOnly) || (restored != null && nowMs() - restored.observedAtMs!! >= SNAPSHOT_FRESH_MS)) load(product)
+        }
     }
 
     fun load(product: ProductKey, request: PageRequest = PageRequest()) {
@@ -87,6 +121,7 @@ class ProductLoader(
             credentialRevision(owner.id) == revision && connection(account) == owner
         jobs[product] = coroutineScope.launch {
             try {
+                cacheDeletes[owner.id]?.join()
                 val services = factory.create(owner)
                 ensureActive()
                 if (!current()) return@launch
@@ -109,7 +144,9 @@ class ProductLoader(
                 // A missing pagination total does not prove that the provider returned everything.
                 val complete = page.next == null && page.total != null && page.total == count
                 seen[product] = visited
-                mutable.update { it + (product to ProductLoadState(content, page.next, page.total, false, null, account, revision, nowMs(), complete)) }
+                val loaded = ProductLoadState(content, page.next, page.total, false, null, account, revision, nowMs(), complete)
+                mutable.update { it + (product to loaded) }
+                if (!owner.demo) cache?.save(loaded, product, directoryMode,::current)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {

@@ -20,7 +20,7 @@ class ManagementRuntimeTest {
     private fun obj(value: String) = Json.parseToJsonElement(value).jsonObject
     private fun details(ref: ZoneScope = zone, name: String = "example.com") = ZoneDetails(ref,name,"pending",false,"full",listOf("ns.example.net"),obj("""{"id":"${ref.zoneId}","account":{"id":"${ref.account.accountId}"},"name":"$name","status":"pending","paused":false,"type":"full","name_servers":["ns.example.net"]}"""))
     private fun record(id: String = "one", type: String = "A", fields: JsonObject = obj("""{"content":"192.0.2.1","ttl":60,"comment":"old"}""")) = DnsRecordDocument(id,zone,JsonObject(fields + obj("""{"id":"$id","type":"$type","name":"www.example.com","modified_on":"yesterday"}""")))
-    private inner class Harness(val scope: TestScope) {
+    private inner class Harness(val scope: TestScope, val cache:com.flarego.core.application.cache.ReadSnapshotStore?=null) {
         var state = AppState(listOf(connection),connection, page = Page.DNS, domain = Domain("zone","untrusted-parent.test","active",connection.id))
         var epoch = 0L; var revision = 0L; var ids = 0
         val tasks = linkedMapOf<String,OperationTask>()
@@ -75,11 +75,57 @@ class ManagementRuntimeTest {
                 try { afterWrite() } catch(_:Exception) { return ExecutionReceipt.Unknown() }; return ExecutionReceipt.Completed()
             }
         }
-        fun runtime():AppOperationRuntime = AppOperationRuntime(scope.backgroundScope,store,StandardTestDispatcher(scope.testScheduler),{state},{epoch},{revision},SessionFactory { DemoSession(it) },FingerprintPort { bytes -> MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } },OperationClock { 100 }, OperationIds { "plan-${++ids}" },{},ManagementSessionFactory { acquire();ManagementServices(api,api) })
+        fun runtime():AppOperationRuntime = AppOperationRuntime(scope.backgroundScope,store,StandardTestDispatcher(scope.testScheduler),{state},{epoch},{revision},SessionFactory { DemoSession(it) },FingerprintPort { bytes -> MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } },OperationClock { 100 }, OperationIds { "plan-${++ids}" },{},ManagementSessionFactory { acquire();ManagementServices(api,api) },readCache=cache)
         val runtime by lazy { runtime() }
         val dns get() = runtime.management.dns
         val zones get() = runtime.management.zones
         fun load() { dns.onIntent(DnsIntent.Load(zone)) }
+    }
+
+    @Test fun coldOfflineZoneToDnsRestoresDisplayRowsWithoutWriteAuthority() = runTest {
+        val data=mutableMapOf<String,com.flarego.core.application.cache.ReadSnapshot>()
+        val disk=object:com.flarego.core.application.cache.ReadSnapshotStore {
+            override suspend fun read(account:AccountScope,key:String)=data[key]
+            override suspend fun write(account:AccountScope,key:String,value:com.flarego.core.application.cache.ReadSnapshot,isCurrent:()->Boolean){if(isCurrent())data[key]=value}
+            override suspend fun removeConnection(connectionId:String){data.clear()}
+        }
+        val first=Harness(this,disk)
+        first.zones.onIntent(ZoneIntent.Load(account));first.load();runCurrent()
+        assertEquals(2,data.size)
+        val cold=Harness(this,disk);cold.failRead=true
+        cold.zones.onIntent(ZoneIntent.Ensure(account));runCurrent()
+        assertTrue(cold.zones.state.value.fromCache)
+        cold.zones.onIntent(ZoneIntent.Open(zone));runCurrent()
+        val selected=cold.zones.state.value.selected!!.ref
+        cold.dns.onIntent(DnsIntent.Ensure(selected));runCurrent()
+        assertEquals(listOf("one"),cold.dns.state.value.rows.map{it.id})
+        assertTrue(cold.dns.state.value.fromCache)
+        assertTrue(cold.dns.state.value.records.isEmpty())
+        cold.dns.onIntent(DnsIntent.BeginCreate());runCurrent()
+        assertNull(cold.dns.state.value.mode);assertEquals(0,cold.writes)
+    }
+
+    @Test fun offlineCachedZoneCanOpenReadOnlyDnsRouteButCannotOpenAnEditor() = runTest {
+        val h=Harness(this)
+        h.zones.onIntent(ZoneIntent.Load(account));runCurrent()
+        h.failRead=true
+        h.zones.onIntent(ZoneIntent.Open(zone));runCurrent()
+        assertEquals(zone,h.zones.state.value.selected?.ref)
+        assertNotNull(h.zones.state.value.error)
+        h.zones.onIntent(ZoneIntent.BeginEdit(zone));runCurrent()
+        assertNull(h.zones.state.value.editorMode)
+        assertEquals(0,h.writes)
+    }
+    @Test fun listReturnAndEnsureReuseSuccessfulSnapshotWithoutReloading() = runTest {
+        val h=Harness(this);var reads=0;h.beforeRead={reads++}
+        h.zones.onIntent(ZoneIntent.Ensure(account));runCurrent()
+        h.zones.onIntent(ZoneIntent.Open(zone));runCurrent()
+        val before=reads
+        h.zones.onIntent(ZoneIntent.BackToList)
+        h.zones.onIntent(ZoneIntent.Ensure(account));runCurrent()
+        assertNull(h.zones.state.value.selected)
+        assertEquals(1,h.zones.state.value.zones.size)
+        assertEquals(before,reads)
     }
 
     @Test fun dnsReadsFreshOwnedZoneNameInsteadOfParentDisplayName() = runTest {

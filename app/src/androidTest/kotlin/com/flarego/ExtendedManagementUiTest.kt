@@ -179,7 +179,7 @@ class ExtendedManagementUiTest {
     @Test fun nativeAppEntriesUseActualOwnedZoneAndPreserveFiveTabsAndReturnTab() {
         val h=install(app=true);openDns(h)
         for((module,header) in listOf(ManagementPanelModule.FILES to "df-header",ManagementPanelModule.SCAN to "ds-header",ManagementPanelModule.DNS_SETTINGS to "dz-header")) {
-            click("management-open-${module.name}");visible(header)
+            compose.onNodeWithTag("dns-more").performClick(); click("management-open-${module.name}");visible(header)
             listOf("overview","domains","resources","billing","accounts").forEach { compose.onNodeWithTag("nav-$it").assertExists() }
             compose.onNodeWithTag("management-back").performClick()
             compose.onNodeWithTag("zone-tab-dns").assertIsSelected()
@@ -190,7 +190,7 @@ class ExtendedManagementUiTest {
     }
     @Test fun systemBackReleasesPanelAndKeepsZoneAndTab() {
         val h = install(app = true); openDns(h)
-        click("management-open-FILES"); visible("df-header")
+        compose.onNodeWithTag("dns-more").performClick(); click("management-open-FILES"); visible("df-header")
         val lease = h.active
         androidx.test.espresso.Espresso.pressBack()
         compose.onNodeWithTag("management-host").assertDoesNotExist()
@@ -204,6 +204,7 @@ class ExtendedManagementUiTest {
     }
     @Test fun appWithoutActualContextCannotNavigateFromPanelState() {
         val h=UiOwner();h.actual.value=h.actual.value.copy(scope=ZoneScope(h.scope.account,"different"));install(h,app=true);openDns(h)
+        compose.onNodeWithTag("dns-more").performClick()
         compose.onNodeWithTag("management-open-FILES").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithTag("management-host").assertDoesNotExist()
     }
@@ -324,7 +325,7 @@ class ExtendedManagementUiTest {
         }
     }
     @Test fun appFontTwoWithImeHasNonzeroIndependentPanelAndReachableConfirm() {
-        val h=install(app=true,font=2f);openDns(h);click("management-open-DNS_SETTINGS")
+        val h=install(app=true,font=2f);openDns(h);compose.onNodeWithTag("dns-more").performClick();click("management-open-DNS_SETTINGS")
         compose.onNodeWithTag("dz-ns_ttl").performScrollTo().performClick().performTextReplacement("601")
         assertTrue(compose.onNodeWithTag("management-body").fetchSemanticsNode().boundsInRoot.height>0)
         screenshot("native-font2-ime")
@@ -465,6 +466,8 @@ class UiOwner {
             when(intent) {
                 is ZoneIntent.Open -> state.value=state.value.copy(selected=owner.takeIf { it.ref==intent.scope })
                 ZoneIntent.Clear -> state.value=state.value.copy(selected=null)
+                is ZoneIntent.Ensure -> if(state.value.account != intent.account) state.value=ZonePageState(account=intent.account,zones=listOf(owner).filter { it.ref.account==intent.account })
+                ZoneIntent.BackToList -> state.value=state.value.copy(selected=null)
                 is ZoneIntent.Load -> state.value=ZonePageState(account=intent.account,zones=listOf(owner).filter { it.ref.account==intent.account },selected=state.value.selected)
                 else -> Unit
             }
@@ -472,7 +475,7 @@ class UiOwner {
     }
     val dns=object:DnsPagePort {
         override val state=MutableStateFlow(DnsPageState())
-        override fun onIntent(intent:DnsIntent) { if(intent is DnsIntent.Load) state.value=DnsPageState(scope=intent.scope,zoneName=owner.name) }
+        override fun onIntent(intent:DnsIntent) { when(intent) { is DnsIntent.Load -> state.value=DnsPageState(scope=intent.scope,zoneName=owner.name); is DnsIntent.Ensure -> if(state.value.scope != intent.scope) state.value=DnsPageState(scope=intent.scope,zoneName=owner.name); DnsIntent.Clear -> state.value=DnsPageState(); else -> Unit } }
     }
     val management=CloudflareManagement(dns,zones)
 }

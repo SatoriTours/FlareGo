@@ -342,7 +342,7 @@ class DnsBatchUiTest {
         val h=BatchHarness(scope)
         val current=mutableStateOf(scope)
         compose.setContent { FlareGoTheme { DnsPage(DnsPageState(scope=current.value,zoneName="example.com",rows=h.records),{},batch=h) } }
-        click("dns-open-batch")
+        compose.onNodeWithTag("dns-more").performClick();click("dns-open-batch")
         compose.runOnIdle { assertTrue(h.intents.any { it==DnsBatchIntent.Bind(scope) }) }
         compose.onNodeWithTag("db-add-POST").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { current.value=ZoneScope(scope.account,"other-zone") }
@@ -357,16 +357,16 @@ class DnsBatchUiTest {
         val dns=object:DnsPagePort {
             val mutable=MutableStateFlow(DnsPageState())
             override val state:StateFlow<DnsPageState> = mutable
-            override fun onIntent(intent:DnsIntent) { when(intent) { is DnsIntent.Load -> mutable.value=DnsPageState(scope=intent.scope,zoneName="example.com",rows=h.records); DnsIntent.Clear -> mutable.value=DnsPageState();else->Unit } }
+            override fun onIntent(intent:DnsIntent) { when(intent) { is DnsIntent.Ensure -> mutable.value=DnsPageState(scope=intent.scope,zoneName="example.com",rows=h.records); is DnsIntent.Load -> mutable.value=DnsPageState(scope=intent.scope,zoneName="example.com",rows=h.records); DnsIntent.Clear -> mutable.value=DnsPageState();else->Unit } }
         }
         val zones=object:ZonePagePort {
             val mutable=MutableStateFlow(ZonePageState())
             override val state:StateFlow<ZonePageState> = mutable
-            override fun onIntent(intent:ZoneIntent) { when(intent) { is ZoneIntent.Load->mutable.value=ZonePageState(account=intent.account,zones=listOf(zone));is ZoneIntent.Open->mutable.value=mutable.value.copy(selected=zone);ZoneIntent.Clear->mutable.value=ZonePageState();else->Unit } }
+            override fun onIntent(intent:ZoneIntent) { when(intent) { is ZoneIntent.Ensure->mutable.value=ZonePageState(account=intent.account,zones=listOf(zone));is ZoneIntent.Load->mutable.value=ZonePageState(account=intent.account,zones=listOf(zone));is ZoneIntent.Open->mutable.value=mutable.value.copy(selected=zone);ZoneIntent.Clear->mutable.value=ZonePageState();else->Unit } }
         }
         compose.setContent { FlareGoTheme { val coroutine=rememberCoroutineScope();val controller=remember { AppController(coroutine,SessionFactory { DemoSession(it) },MemoryStore(),demoConnections) }
             FlareGoApp(controller,{},{},management=CloudflareManagement(dns,zones,h)) } }
-        compose.onNodeWithTag("nav-domains").performClick();click("zone-row-batch-app-zone");compose.onNodeWithTag("zone-tab-dns").performClick();click("dns-open-batch")
+        compose.onNodeWithTag("nav-domains").performClick();click("zone-row-batch-app-zone");compose.onNodeWithTag("zone-tab-dns").performClick();screenshot("dns-native-list");compose.onNodeWithTag("dns-more").performClick();screenshot("dns-native-more");click("dns-open-batch")
         compose.onNodeWithTag("db-add-POST").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(h.intents.any { it==DnsBatchIntent.Bind(zone.ref) });assertTrue(confirms(h).isEmpty()) }
     }
