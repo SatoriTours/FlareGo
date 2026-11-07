@@ -2,6 +2,13 @@ package com.flarego
 
 import android.graphics.Bitmap
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.flarego.core.application.AppController
+import com.flarego.core.demo.DemoSession
+import com.flarego.core.demo.demoConnections
+import com.flarego.core.ports.MemoryStore
+import com.flarego.core.ports.SessionFactory
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.*
@@ -53,33 +60,28 @@ class OAuthConnectionUiTest {
         compose.onNodeWithTag("oauth-token-fallback").assertDoesNotExist()
         compose.onNodeWithText("验证并连接").assertDoesNotExist()
     }
-    @Test fun catalogDiscoveryOffersNormalProductConsentWithoutDeveloperInstructions() {
+    @Test fun lostCallbackSessionOpensRecoveryOverExistingAccountAndCanBeDismissed() {
         val auth = Authorization()
-        auth.mutable.value = OAuthConnectionState(authorized = true, productAuthorizationRequired = true)
-        var opened: String? = null
         compose.setContent {
-            CompositionLocalProvider(LocalUriHandler provides object : UriHandler {
-                override fun openUri(uri: String) { opened = uri }
-            }) { FlareGoTheme { ConnectionDialog({}, auth) } }
+            val scope = rememberCoroutineScope()
+            val controller = remember {
+                AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), demoConnections)
+            }
+            FlareGoApp(controller, {}, {}, oauthConnection = auth)
         }
-        compose.onNodeWithText("授权产品读取").assertIsDisplayed()
-        compose.onNodeWithText("继续授权产品").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("oauth-screen").assertDoesNotExist()
+        // A callback can arrive after the app has already composed its old account overview.
+        compose.runOnIdle {
+            auth.mutable.value = OAuthConnectionState(reauthorizationRequired = true,
+                error = "授权会话已丢失，请重新开始授权。已有账号连接未更改。")
+        }
+        compose.onNodeWithTag("oauth-error").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("oauth-authorize").assertIsEnabled()
         assertNoManualEntry()
-        screenshot("product-consent")
-        compose.onNodeWithTag("oauth-authorize").performClick()
-        compose.runOnIdle { assertTrue(opened!!.startsWith("https://dash.cloudflare.com/oauth2/auth")); assertNull(auth.selected) }
-    }
-
-    @Test fun catalogFailureRetriesMetadataInsteadOfAskingUsersToInspectBrowserRequests() {
-        val auth = Authorization()
-        auth.mutable.value = OAuthConnectionState(authorized = true, scopeDiscoveryFailed = true,
-            error = "读取产品授权范围未完成，请重试")
-        compose.setContent { FlareGoTheme { ConnectionDialog({}, auth) } }
-        compose.onNodeWithText("重新读取权限").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(1, auth.discoveries); assertNull(auth.selected) }
-        compose.onNodeWithText("重新读取账号").assertDoesNotExist()
-        assertNoManualEntry()
-        screenshot("catalog-error")
+        screenshot("lost-session")
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("oauth-screen").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(OAuthConnectionState(), auth.mutable.value) }
     }
 
     @Test fun unconfiguredBuildExplainsUnavailableAuthorizationWithoutManualFallback() {

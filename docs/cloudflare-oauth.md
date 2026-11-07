@@ -1,22 +1,30 @@
 # Cloudflare OAuth 接入
 
-## 六项只读权限自动识别（2026-11-01）
+## 一次只读授权（当前方案）
 
-用户已在客户端中配置 Account Settings Read、Zone Read、DNS Read、Workers Metadata Read-Only、Workers KV Storage Read、Workers R2 Storage Read；本轮不申请 D1、账单、Workers Content 或写权限。界面显示名称不是 scope ID，App 不拼接猜测值，也不要求用户抓包、提供 Token 或查内部代号。
+权限 ID 来自维护者提供的 FlareGo OAuth 客户端范围截图，已包含准确 ID，运行时不再查询 `/oauth/scopes`，也不再执行基础授权后追加产品授权。
 
-连接流程：
-1. 用构建中的 `account-settings.read`（加 `offline_access`）完成引导授权。
-2. App 使用这次临时 OAuth 凭据，只读请求官方 `GET /oauth/scopes`。官方文档要求认证，但不要求额外授权角色。
-3. 按上述六个完整名称精确匹配官方返回的 ID；缺失、歧义、非法 ID 或目录不完整均失败关闭，不申请更大的替代权限。目录查询失败提供 App 内重试，不自动重复浏览器授权。
-4. 显示「继续授权产品」，以六项真实 ID 发起新的 PKCE 授权。首次连接可能需要两次官方确认；App 生命周期内可复用已识别的公开 ID，此后不重复引导步骤。
-5. 仅使用最终产品授权的凭据读取账号、验证并保存；引导令牌只在内存中用于目录查询，查询成功即丢弃，不先保存半成品连接。取消、旧回调及迟到的目录结果不能恢复旧授权。
+固定请求范围由 `CloudflareOAuthReadProfile` 唯一维护：
 
-目录返回的是可申请权限定义，不是用户已授予权限的证明；资源是否可读仍以最终授权及真实 API 响应为准。写操作既有权限证明链保持不变。OAuth 参数、state、PKCE verifier 与所有令牌不进入 UI、日志或数据库。
+```text
+account-settings.read
+zone.read
+dns.read
+workers-scripts.metadata_read
+workers-kv-storage.read
+workers-r2.read
+offline_access
+```
 
-Actions／Gradle 的 `flarego.oauthScopes=account-settings.read` 现在是**引导范围**，不是最终产品范围；不需在构建中硬编码尚未确认的产品 ID。旧 APK 不包含新流程，仍需新构建和正常重新授权。以下带日期的章节保留历史连接流程边界；本节为当前六项权限识别流程。
+首次连接和旧账号重新授权都只发起一次 Authorization Code + PKCE S256 浏览器授权。回调换取令牌后读取账号，完整列表只有一个账号时自动验证并保存，多账号时由用户选择。账号验证通过才替换原连接凭据；取消、拒绝、旧回调和验证失败不覆盖原连接。进程丢失 PKCE 会话时提示重新开始，不静默返回总览，不接受旧授权码。
 
-本地隔离测试已验证目录解析、两阶段令牌隔离、失败重试与取消、产品授权入口；真实 Cloudflare OAuth 凭据能否读取目录、浏览器同意及实际产品读取仍须 Actions 签名 APK 在用户设备补验，不能以测试替代真实云验收。
+令牌响应明确返回 scope 时，必须包含本次全部请求范围，否则拒绝保存；根据 OAuth 2.0 RFC 6749 §5.1，响应省略 scope 表示与请求范围一致。续期不会升级旧授权，旧版基础权限账号必须重新授权。请求范围和令牌响应检查不是实际产品 API 可读的证明，仍需真实云验证。
 
+本方案不申请 D1、账单、Workers 内容或写权限。正式应用的 D1/账单入口显示当前未支持，不发送目录/后台加载/旧账单接口请求，不计入刷新失败；演示和已有隔离合成适配器保留独立测试范围。总览正常刷新四类目录（域名、Workers、KV、R2），DNS 在域名内读取。
+
+Actions 只注入公开 Client ID 与回调 URL，不再注入 `flarego.oauthScopes`，历史 Gradle scope 配置不再控制请求。缺少客户端配置时仍禁用授权入口；不会回退到手动 Token。客户端七项范围截图不等于真实接口验收通过，实际浏览器授权、App Links、续期和支持产品读取仍需签名 APK 验证。
+
+以下带日期的章节保留历史记录；与范围配置有关的当前行为以本节为准。
 
 ## 仅跳转授权的连接流程（2026-10-31）
 
@@ -80,7 +88,7 @@ flarego.oauthRedirectUri=https://<已验证域名>/cloudflare/callback
 flarego.oauthScopes=account-settings.read
 ```
 
-构建默认以 `account-settings.read` 引导，与维护者确认的 Account Settings Read 范围一致；当前 App 随后通过已认证目录解析六项产品读取 ID，再引导产品授权。实际账号与资源能力仍须真实授权后核验。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
+当前固定范围见顶部“一次只读授权”；构建不再提供引导 scope，也不再运行时解析目录。实际账号与资源能力仍须真实授权后核验。App 会另请求 `offline_access` 供续期；它不是控制台资源权限列表中的普通产品权限，不必在该列表中搜索勾选。客户端应允许 `refresh_token` grant，续期能否成功仍需实际授权验证。不同功能的 scope ID 应从 Cloudflare 官方 OAuth scopes 列表确认，不能把 API Token 展示名称或 Wrangler scope 直接当成第三方 OAuth scope。维护者按实际功能配置最小读取范围，勿一开始授予全部读写；本版尚无按功能增量授权 UI。
 
 Client ID 不是密钥；不需要向用户索取 Client Secret 或 Global API Key。OAuth 配置随构建生效，Gradle 默认构建不读取云端凭据。缺省回调为不可用的 `.invalid` 域名。未配置的构建禁用授权入口并提示联系维护者，没有手动 Token 备用入口。
 

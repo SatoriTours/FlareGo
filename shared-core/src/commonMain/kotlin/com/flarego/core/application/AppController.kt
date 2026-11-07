@@ -19,10 +19,12 @@ class AppController(
     private val productFactory: ProductSessionFactory? = null,
     private val credentialRevisionQuery: ((String) -> Long)? = null,
     private val nowMs: () -> Long = { 0L },
+    private val availableProducts: (Connection) -> Set<ProductKey> = { ProductKey.entries.toSet() },
 ) {
     private val mutable =
         MutableStateFlow(
-            AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = productFactory != null)
+            AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = productFactory != null,
+                supportedProducts = connections.firstOrNull()?.let(availableProducts).orEmpty())
         )
     val state: StateFlow<AppState> = mutable.asStateFlow()
     private var management: com.flarego.core.application.management.CloudflareManagement? = null
@@ -54,7 +56,7 @@ class AppController(
     private val loader = productFactory?.let {
         ProductLoader(scope, it, selectedScope,
             { id -> credentialRevisionQuery?.invoke(id) ?: (sessionVersions[id] ?: 0).toLong() },
-            { account -> state.value.connections.find { it.id == account.connectionId && it.accountId == account.accountId } }, nowMs)
+            { account -> state.value.connections.find { it.id == account.connectionId && it.accountId == account.accountId } }, nowMs, availableProducts)
     }
     val operationEpoch: Long get() = uiEpoch.toLong()
 
@@ -91,7 +93,8 @@ class AppController(
     private fun resetProducts() {
         selectedScope.value = account(state.value.selected)
         loader?.resetSelection()
-        if (loader != null) mutable.update { it.copy(products = emptyMap(), inventory = Inventory(emptyList(),emptyList()), billing = null, loading = false) }
+        if (loader != null) mutable.update { it.copy(products = emptyMap(), inventory = Inventory(emptyList(),emptyList()), billing = null, loading = false,
+            supportedProducts = it.selected?.let(availableProducts).orEmpty()) }
     }
     fun start() { if (loader == null) refresh() else loadActive() }
     fun selectBillingSource(source: BillingSource) {
@@ -237,6 +240,7 @@ class AppController(
     }
 
     fun refresh() {
+        if (state.value.page == Page.BILLING && ProductKey.BILLING !in state.value.supportedProducts) return
         if (loader != null && state.value.page == Page.BILLING && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY) {
             val connection = state.value.selected ?: return
             val request = ++revision

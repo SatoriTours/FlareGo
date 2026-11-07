@@ -16,6 +16,45 @@ import org.junit.Test
 class CloudflareOAuthTest {
     private val config = OAuthConfig("test-client", "https://login.example.org/cloudflare/callback", listOf("account-settings.read"))
 
+    @Test fun tokenResponseCannotSilentlyReduceRequestedScopes() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val full = OAuthConfig(config.clientId, config.redirectUri, listOf("account-settings.read", "zone.read"))
+            val flow = OAuthFlow(full, endpoint(server))
+            val request = flow.begin().toHttpUrl()
+            server.enqueue(tokenResponse()) // explicitly only account-settings.read + offline_access
+            assertFailsWith<CloudException> { flow.complete(callback(request)) }
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test fun fullOrOmittedScopeIsAcceptedButMalformedScopeIsRejected() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val full = OAuthConfig(config.clientId, config.redirectUri, listOf("account-settings.read", "zone.read"))
+            for (scopeField in listOf("", ",\"scope\":\"zone.read offline_access account-settings.read\"", ",\"scope\":null", ",\"scope\":[\"zone.read\"]")) {
+                val flow = OAuthFlow(full, endpoint(server))
+                val request = flow.begin().toHttpUrl()
+                server.enqueue(MockResponse().setBody("""{"access_token":"fixture","token_type":"bearer","expires_in":900$scopeField}"""))
+                if (scopeField.contains("null") || scopeField.contains("[")) {
+                    assertFailsWith<CloudException> { flow.complete(callback(request)) }
+                } else assertEquals("fixture", flow.complete(callback(request)).accessToken)
+            }
+        }
+    }
+
+    @Test fun refreshDoesNotPretendToUpgradeAnOlderNarrowGrant() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(tokenResponse())
+            val full = OAuthConfig(config.clientId, config.redirectUri, listOf("account-settings.read", "zone.read"))
+            assertEquals("access-fixture", endpoint(server).refresh(full, "old-refresh", 0).accessToken)
+            val fields = ("https://example.org/?" + server.takeRequest().body.readUtf8()).toHttpUrl()
+            assertEquals("refresh_token", fields.queryParameter("grant_type"))
+            assertNull(fields.queryParameter("scope"))
+        }
+    }
+
     @Test fun reopeningPendingAuthorizationPreservesPkceUntilExpiryOrExplicitCancellation() {
         var now = 0L
         val flow = OAuthFlow(config, nowMs = { now })

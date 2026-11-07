@@ -39,6 +39,29 @@ class ProductLoaderTest {
         ProductLoader(backgroundScope, f, selected, rev, { s -> listOf(a,b).find { it.id == s.connectionId && it.accountId == s.accountId } }, {123})
     private fun account(c:Connection) = AccountScope(c.id,c.accountId)
 
+    @Test fun unsupportedProductsNeverReadOrCountAsFailuresIncludingDirectAndLegacyEntries() = runTest {
+        val supported = setOf(ProductKey.ZONES, ProductKey.WORKERS, ProductKey.R2, ProductKey.KV)
+        val controller = AppController(backgroundScope, SessionFactory { error("No legacy billing access") },
+            MemoryStore(), listOf(a, b), productFactory = factory,
+            availableProducts = { if (it == a) supported else ProductKey.entries.toSet() })
+        controller.refreshAllProducts(); runCurrent()
+        assertEquals(supported, calls.toSet())
+        assertEquals(4, calls.size)
+        assertEquals(supported, controller.state.value.products.keys)
+        assertTrue(controller.state.value.products.values.all { it.error == null })
+        controller.navigate(Page.RESOURCES); controller.selectResourceKind(ResourceKind.D1)
+        controller.refresh(); controller.loadMore(ProductKey.D1); runCurrent()
+        controller.navigate(Page.BILLING); controller.refresh()
+        controller.selectBillingSource(BillingSource.USER_HISTORY_LEGACY); runCurrent()
+        assertEquals(4, calls.size)
+        assertFalse(controller.state.value.loading)
+        assertNull(controller.state.value.billing)
+        controller.selectConnection(b); controller.navigate(Page.OVERVIEW)
+        controller.refreshAllProducts(); runCurrent()
+        assertEquals(ProductKey.entries.toSet(), controller.state.value.supportedProducts)
+        assertTrue(ProductKey.D1 in calls && ProductKey.BILLING in calls)
+    }
+
     @Test fun productRequestsAreLazyAndIndependent() = runTest {
         val l=loader(MutableStateFlow(account(a))); runCurrent(); assertTrue(calls.isEmpty())
         l.load(ProductKey.ZONES); runCurrent(); assertEquals(listOf(ProductKey.ZONES),calls)

@@ -135,6 +135,7 @@ data class AppState(
     val error: String? = null,
     val operations: List<Operation> = emptyList(),
     val productLoading: Boolean = false,
+    val supportedProducts: Set<ProductKey> = ProductKey.entries.toSet(),
     val products: Map<ProductKey, ProductLoadState> = emptyMap(),
     val resourceKind: ResourceKind = ResourceKind.WORKER,
     val tasks: List<OperationTask> = emptyList(),

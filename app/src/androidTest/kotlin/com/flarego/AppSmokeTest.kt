@@ -28,6 +28,33 @@ import org.junit.Test
 class AppSmokeTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
+    @Test
+    fun coldOAuthCallbackShowsRecoveryThroughActivityCallback() {
+        compose.runOnUiThread {
+            val activity = compose.activity
+            val launchIntent = activity.intent
+            val callback = Intent(activity, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = android.net.Uri.parse(BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI +
+                    "?code=synthetic-never-exchange&state=lost-session")
+            }
+            try {
+                InstrumentationRegistry.getInstrumentation().callActivityOnNewIntent(activity, callback)
+                assertEquals(null, callback.data)
+                assertEquals(null, activity.intent.data)
+            } finally {
+                // ActivityScenario matches lifecycle events against its original launch intent.
+                // Restore that test identity only after checking production callback scrubbing.
+                activity.intent = launchIntent
+            }
+        }
+        compose.onNodeWithTag("oauth-error").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("授权会话已丢失，请重新开始授权。已有账号连接未更改。").assertIsDisplayed()
+        screenshot("cold-callback-recovery")
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("oauth-screen").assertDoesNotExist()
+    }
+
     // Demo interactions are explicit test fixtures; production startup never seeds them.
     private fun installDemoFixture() {
         compose.runOnUiThread {

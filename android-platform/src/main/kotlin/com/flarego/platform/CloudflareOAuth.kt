@@ -96,10 +96,10 @@ class OAuthTokenEndpoint(private val client: OkHttpClient) {
     constructor() : this(cloudflareHttpClient().newBuilder().retryOnConnectionFailure(false).build())
     suspend fun exchange(config: OAuthConfig, code: String, verifier: String, nowMs: Long): OAuthTokens =
         request(config, FormBody.Builder().add("grant_type", "authorization_code").add("code", code)
-            .add("redirect_uri", config.redirectUri).add("code_verifier", verifier), nowMs)
+            .add("redirect_uri", config.redirectUri).add("code_verifier", verifier), nowMs, validateScopes = true)
     suspend fun refresh(config: OAuthConfig, refresh: String, nowMs: Long): OAuthTokens =
         request(config, FormBody.Builder().add("grant_type", "refresh_token").add("refresh_token", refresh), nowMs)
-    private suspend fun request(config: OAuthConfig, form: FormBody.Builder, nowMs: Long): OAuthTokens {
+    private suspend fun request(config: OAuthConfig, form: FormBody.Builder, nowMs: Long, validateScopes: Boolean = false): OAuthTokens {
         config.requireConfigured()
         val request = Request.Builder().url("https://dash.cloudflare.com/oauth2/token")
             .header("Accept", "application/json").post(form.add("client_id", config.clientId).build()).build()
@@ -133,6 +133,14 @@ class OAuthTokenEndpoint(private val client: OkHttpClient) {
                             val seconds = (root["expires_in"] as? JsonPrimitive)?.longOrNull?.takeIf { n -> n in 1..31_536_000 } ?: throw oauthFailure()
                             val refresh = text("refresh_token")
                             if (refresh != null && (refresh.isBlank() || refresh.any(Char::isWhitespace))) throw oauthFailure()
+                            // RFC 6749 §5.1: omission means the originally requested scope;
+                            // an explicit narrower grant must not be saved as a full connection.
+                            // Refreshing legacy credentials must not pretend to upgrade their scopes.
+                            if (validateScopes && root.containsKey("scope")) {
+                                val granted = text("scope")?.split(' ')?.filter(String::isNotBlank)?.toSet()
+                                    ?: throw oauthFailure()
+                                if (!granted.containsAll(config.scopes + "offline_access")) throw oauthFailure()
+                            }
                             OAuthTokens(access, refresh, Math.addExact(nowMs, seconds * 1000))
                         }
                         if (continuation.isActive) continuation.resume(tokens)

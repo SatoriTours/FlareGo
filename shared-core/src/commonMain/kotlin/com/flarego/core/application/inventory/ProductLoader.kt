@@ -23,6 +23,7 @@ class ProductLoader(
     private val credentialRevision: (String) -> Long,
     private val connection: (AccountScope) -> Connection?,
     private val nowMs: () -> Long = { 0L },
+    private val availableProducts: (Connection) -> Set<ProductKey> = { ProductKey.entries.toSet() },
 ) {
     private val mutable = MutableStateFlow<Map<ProductKey, ProductLoadState>>(emptyMap())
     val states: StateFlow<Map<ProductKey, ProductLoadState>> = mutable.asStateFlow()
@@ -67,6 +68,7 @@ class ProductLoader(
         if (boundSelection != selected.value) resetSelection()
         val account = selected.value ?: return
         val owner = connection(account) ?: return
+        if (product !in availableProducts(owner)) return
         ScopeGuard.requireOwned(account, owner)
         val revision = credentialRevision(owner.id)
         val previous = mutable.value[product]?.takeIf { it.scope == account && it.credentialRevision == revision }

@@ -9,7 +9,6 @@ fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\
 val oauthClientId = providers.gradleProperty("flarego.oauthClientId").orElse("").get()
 val oauthRedirect = providers.gradleProperty("flarego.oauthRedirectUri")
     .orElse("https://oauth-unconfigured.invalid/cloudflare/callback").get()
-val oauthScopes = providers.gradleProperty("flarego.oauthScopes").orElse("account-settings.read").get()
 val oauthUri = URI(oauthRedirect)
 require(oauthUri.scheme == "https" && oauthUri.host != null && oauthUri.rawQuery == null &&
     oauthUri.rawFragment == null && oauthUri.rawUserInfo == null && (oauthUri.port == -1 || oauthUri.port == 443) &&
@@ -27,7 +26,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", quoted(oauthClientId))
         buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", quoted(oauthRedirect))
-        buildConfigField("String", "CLOUDFLARE_OAUTH_SCOPES", quoted(oauthScopes))
         manifestPlaceholders["oauthCallbackHost"] = oauthUri.host
         manifestPlaceholders["oauthCallbackPath"] = oauthUri.rawPath
     }

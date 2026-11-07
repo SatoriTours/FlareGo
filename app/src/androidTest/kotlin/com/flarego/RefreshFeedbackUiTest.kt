@@ -32,11 +32,12 @@ class RefreshFeedbackUiTest {
     private var forbidden = false
     private var unavailable = false
     private val calls = mutableListOf<ProductKey>()
-    private fun install(dark: Boolean = false, large: Boolean = false) {
+    private fun install(dark: Boolean = false, large: Boolean = false, readProfile: Boolean = false) {
         compose.setContent {
             val scope = rememberCoroutineScope()
             val controller = remember {
                 AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), listOf(connection),
+                    availableProducts = { if (readProfile) com.flarego.platform.CloudflareOAuthReadProfile.products else ProductKey.entries.toSet() },
                     productFactory = ProductSessionFactory {
                         ProductServices(object : ProductDirectoryPort {
                             override suspend fun zones(account: AccountScope, request: PageRequest): CloudPage<Domain> {
@@ -83,6 +84,25 @@ class RefreshFeedbackUiTest {
     private fun refreshAll() {
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("overview-refresh-all"))
         compose.onNodeWithTag("overview-refresh-all").performClick()
+    }
+
+    @Test fun readProfileExcludesUnsupportedProductsFromRefreshAndShowsHonestEntries() {
+        install(readProfile = true)
+        refreshAll()
+        compose.onNodeWithText("读取完成：4 项成功").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(setOf(ProductKey.ZONES, ProductKey.WORKERS, ProductKey.R2, ProductKey.KV), calls.toSet()) }
+        compose.onNodeWithTag("overview-d1").performScrollTo().assert(hasAnyDescendant(hasText("当前授权方案未支持")))
+        compose.onNodeWithTag("overview-d1").performClick()
+        compose.onNodeWithText("当前授权方案未支持 D1 数据库").assertIsDisplayed()
+        capture("unsupported-d1")
+        compose.onNodeWithContentDescription("创建资源").assertDoesNotExist()
+        compose.onNodeWithContentDescription("刷新").assertDoesNotExist()
+        compose.onNodeWithTag("nav-billing").performClick()
+        compose.onNodeWithText("当前授权方案未支持账单读取").assertIsDisplayed()
+        compose.onNodeWithText("用户账单（旧接口）").assertDoesNotExist()
+        compose.onNodeWithTag("toolbar-refresh").assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(4, calls.size) }
+        capture("unsupported-billing")
     }
 
     @Test fun toolbarRefreshActuallyReadsAndReportsCompletion() {

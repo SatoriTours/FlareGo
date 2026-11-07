@@ -119,6 +119,18 @@ fun FlareGoApp(
     var dialog by remember(connectionDraft) {
         mutableStateOf<DialogState?>(if (connectionDraft.isOpen) DialogState.Connect else null)
     }
+    val authorizationState = oauthConnection?.state?.collectAsState()?.value
+    val lostAuthorization = authorizationState?.let {
+        it.reauthorizationRequired && !it.authorized && it.error != null
+    } == true
+    // A cold callback has no retained dialog draft. Also observe callbacks arriving after
+    // composition; do not rely only on the initial remember(connectionDraft) value.
+    LaunchedEffect(oauthConnection, lostAuthorization) {
+        if (lostAuthorization && dialog == null) {
+            connectionDraft.isOpen = true
+            dialog = DialogState.Connect
+        }
+    }
     var searchOpen by
         remember(state.page, state.selected?.id) {
             mutableStateOf(state.page == Page.BUY && state.selected?.demo == true)
@@ -388,7 +400,7 @@ fun FlareGoApp(
                                     }, modifier = Modifier.testTag("zone-create")) {
                                         Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
                                     }
-                                Page.RESOURCES -> if (!(
+                                Page.RESOURCES -> if (state.resourceKind.product() in state.supportedProducts && !(
                                     (r2Browser != null && state.resourceKind == ResourceKind.R2) ||
                                     (kvBrowser != null && state.resourceKind == ResourceKind.KV) ||
                                     (d1Browser != null && state.resourceKind == ResourceKind.D1)))
@@ -409,7 +421,7 @@ fun FlareGoApp(
                                         Icon(Icons.Default.Add, "连接账号")
                                     }
                                 else ->
-                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading, modifier = Modifier.testTag("toolbar-refresh")) {
+                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading && (state.page != Page.BILLING || ProductKey.BILLING in state.supportedProducts), modifier = Modifier.testTag("toolbar-refresh")) {
                                         if (state.loading) CircularProgressIndicator(
                                             modifier = Modifier.size(21.dp).semantics { contentDescription = "正在刷新" },
                                             strokeWidth = 2.dp,
@@ -561,7 +573,10 @@ fun FlareGoApp(
                                     }
                                 }
                             Page.RESOURCE -> ResourceScreen(state) { openConsole(Page.RESOURCE) }
-                            Page.BILLING -> if (state.productLoading) Column {
+                            Page.BILLING -> if (ProductKey.BILLING !in state.supportedProducts) Column {
+                                Notice("当前授权方案未支持账单读取")
+                                TextButton(onClick = { openConsole(Page.BILLING) }) { Text("在 Cloudflare 官方控制台查看") }
+                            } else if (state.productLoading) Column {
                                 Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceEvenly) {
                                     TextButton(onClick = { controller.selectBillingSource(BillingSource.ACCOUNT_HISTORY) }) { Text("账号账单") }
                                     TextButton(onClick = { controller.selectBillingSource(BillingSource.USER_HISTORY_LEGACY) }) { Text("用户账单（旧接口）") }

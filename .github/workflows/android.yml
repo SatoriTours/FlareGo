@@ -56,9 +56,8 @@ jobs:
         env:
           FLAREGO_OAUTH_CLIENT_ID: 9bd1b2bf245bd1b78506a7c0b6fbc11a
           FLAREGO_OAUTH_REDIRECT_URI: https://satori.tours/flarego/cloudflare/callback
-          FLAREGO_OAUTH_SCOPES: account-settings.read
         run: |
-          printf '\nflarego.oauthClientId=%s\nflarego.oauthRedirectUri=%s\nflarego.oauthScopes=%s\n' "$FLAREGO_OAUTH_CLIENT_ID" "$FLAREGO_OAUTH_REDIRECT_URI" "$FLAREGO_OAUTH_SCOPES" >> gradle.properties
+          printf '\nflarego.oauthClientId=%s\nflarego.oauthRedirectUri=%s\n' "$FLAREGO_OAUTH_CLIENT_ID" "$FLAREGO_OAUTH_REDIRECT_URI" >> gradle.properties
       - name: CI contract tests
         run: python3 -m unittest discover -s tools/ci/tests -v
       - name: Prepare signing

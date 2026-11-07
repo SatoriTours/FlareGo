@@ -31,13 +31,14 @@ fun OverviewScreen(
     openResource: (ResourceKind) -> Unit = { navigate(Page.RESOURCES) },
     reauthorize: () -> Unit = {},
 ) {
-    val loading = state.products.values.any { it.loading }
-    val failures = state.products.filterValues { it.error != null }
-    val completed = state.products.values.count { !it.loading }
-    val succeeded = state.products.values.count { !it.loading && it.error == null && it.observedAtMs != null }
+    val readable = state.products.filterKeys { it in state.supportedProducts }
+    val loading = readable.values.any { it.loading }
+    val failures = readable.filterValues { it.error != null }
+    val completed = readable.values.count { !it.loading }
+    val succeeded = readable.values.count { !it.loading && it.error == null && it.observedAtMs != null }
     LazyColumn(contentPadding = ListPadding) {
-        if (state.productLoading && state.products.isNotEmpty()) item {
-            if (loading) Muted("已完成 $completed/${state.products.size} 项读取", Modifier.padding(vertical = 8.dp))
+        if (state.productLoading && readable.isNotEmpty()) item {
+            if (loading) Muted("已完成 $completed/${readable.size} 项读取", Modifier.padding(vertical = 8.dp))
             else Muted("读取完成：$succeeded 项成功" + if (failures.isEmpty()) "" else "，${failures.size} 项失败",
                 Modifier.padding(vertical = 8.dp))
         }
@@ -118,6 +119,7 @@ private fun ProductKey.overviewLabel(): String = when (this) {
 
 private fun overviewLoadedCount(state: AppState, product: ProductKey): String {
     if (state.productLoading) {
+        if (product !in state.supportedProducts) return "当前授权方案未支持"
         val loaded = state.products[product] ?: return "未加载"
         if (loaded.observedAtMs == null) return when {
             loaded.loading -> "读取中"
@@ -212,6 +214,10 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
                 if (state.productLoading && kind != null) selectKind(kind) else filter = kind
             }, modifier = Modifier.padding(horizontal = 20.dp), tagPrefix = "resource-tab",
         )
+        if (state.productLoading && state.resourceKind.product() !in state.supportedProducts) {
+            Notice("当前授权方案未支持 ${state.resourceKind.name} ${state.resourceKind.label}")
+            return@Column
+        }
         if (state.resourceKind == ResourceKind.R2 && r2Content != null) {
             Box(Modifier.weight(1f)) { r2Content() }
             return@Column

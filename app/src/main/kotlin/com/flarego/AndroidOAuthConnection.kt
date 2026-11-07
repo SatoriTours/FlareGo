@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.*
 internal fun cloudflareOAuthConfig() = OAuthConfig(
     BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID,
     BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI,
-    BuildConfig.CLOUDFLARE_OAUTH_SCOPES.split(' ').filter(String::isNotBlank),
+    CloudflareOAuthReadProfile.scopes,
 )
 
 /** One app-wide credential lock owner: refresh/replace/remove cannot resurrect a disconnected grant. */
@@ -35,32 +35,31 @@ internal class AndroidOAuthConnection(
     private val identity: (String) -> CloudflareIdentityClient,
     private val save: suspend (String, String, OAuthTokens) -> Unit,
     private val endpoint: OAuthTokenEndpoint = OAuthTokenEndpoint(),
-    private val resolveReadScopes: (suspend (String) -> List<String>)? = null,
 ) : OAuthConnection {
     private val mutable = MutableStateFlow(OAuthConnectionState())
     override val state: StateFlow<OAuthConnectionState> = mutable.asStateFlow()
     override val configured get() = config.configured
-    private var activeConfig = config
-    private var flow = OAuthFlow(activeConfig, endpoint)
-    // Only public catalog IDs are cached. No bootstrap credential is persisted.
-    private var resolvedConfig: OAuthConfig? = null
+    private var flow = OAuthFlow(config, endpoint)
     private var tokens: OAuthTokens? = null
     private var next: PageToken? = null
     private var generation = 0L
     private var job: Job? = null
+    // Fresh owners have no PKCE request after process death. Explicit cancellation/replays
+    // in this owner must remain inert rather than reopening a dismissed authorization.
+    private var hasLocalSessionHistory = false
 
     override fun begin(): String {
         check(!state.value.busy) { "连接正在处理中" }
         if (!state.value.waiting) {
             cancel()
-            activeConfig = resolvedConfig ?: config
-            flow = OAuthFlow(activeConfig, endpoint)
+            flow = OAuthFlow(config, endpoint)
         }
         val url = flow.begin()
         mutable.value = OAuthConnectionState(waiting = true)
         return url
     }
     override fun cancel() {
+        hasLocalSessionHistory = true
         generation++
         job?.cancel(); job = null
         flow.cancel(); tokens = null; next = null
@@ -72,6 +71,12 @@ internal class AndroidOAuthConnection(
     }
     fun acceptCallback(value: String): Boolean {
         if (!flow.matchesCallback(value)) return false
+        if (!hasLocalSessionHistory) {
+            hasLocalSessionHistory = true
+            mutable.value = OAuthConnectionState(reauthorizationRequired = true,
+                error = "授权会话已丢失，请重新开始授权。已有账号连接未更改。")
+            return true
+        }
         // An unsolicited/replayed callback must not cancel an already accepted exchange.
         if (!state.value.waiting || state.value.busy || !flow.matchesPendingCallback(value)) return true
         val expected = generation
@@ -81,10 +86,8 @@ internal class AndroidOAuthConnection(
                 val result = flow.complete(value)
                 if (generation != expected) return@launch
                 tokens = result
-                mutable.value = OAuthConnectionState(authorized = true, busy = true,
-                    readingScopes = resolveReadScopes != null && resolvedConfig == null)
-                if (resolveReadScopes != null && resolvedConfig == null) prepareProductGrant(expected)
-                else discover(expected, null)
+                mutable.value = OAuthConnectionState(authorized = true, busy = true)
+                discover(expected, null)
             } catch (cancel: CancellationException) { throw cancel }
             catch (failure: Exception) {
                 if (generation == expected) mutable.value = OAuthConnectionState(error =
@@ -99,35 +102,12 @@ internal class AndroidOAuthConnection(
         val current = tokens ?: throw CloudException("请先完成 Cloudflare 授权")
         if (current.expiresAtMs > System.currentTimeMillis() + 30_000) return current
         val refresh = current.refreshToken ?: throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "授权已过期，请重新授权")
-        val renewed = try { endpoint.refresh(activeConfig, refresh, System.currentTimeMillis()) }
+        val renewed = try { endpoint.refresh(config, refresh, System.currentTimeMillis()) }
         catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { throw CloudFailure(CloudFailureCode.CREDENTIAL_EXPIRED, "授权无法续期，请重新授权") }
         if (generation != expected || tokens !== current) throw CloudException("授权已变化，请重新连接")
         return OAuthTokens(renewed.accessToken, renewed.refreshToken ?: refresh, renewed.expiresAtMs).also { tokens = it }
     }
-    private suspend fun prepareProductGrant(expected: Long) {
-        try {
-            val granted = freshTokens(expected)
-            val ids = resolveReadScopes?.invoke(granted.accessToken) ?: throw CloudException("未配置权限目录")
-            if (generation != expected || tokens !== granted) return
-            val upgraded = OAuthConfig(config.clientId, config.redirectUri, ids)
-            if (!upgraded.configured || ids.size != 6 || ids.distinct().size != 6 ||
-                ids.any { it in setOf("openid", "offline", "offline_access") }) throw CloudException("权限目录不完整")
-            resolvedConfig = upgraded
-            // The first grant only discovers public scope IDs. Only the second grant may be saved.
-            tokens = null
-            next = null
-            mutable.value = OAuthConnectionState(authorized = true, productAuthorizationRequired = true)
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) {
-            if (generation == expected) mutable.value = OAuthConnectionState(
-                authorized = true, scopeDiscoveryFailed = true,
-                reauthorizationRequired = failure is CloudFailure && failure.code == CloudFailureCode.CREDENTIAL_EXPIRED,
-                error = "读取产品授权范围未完成，请重试或重新授权；不会猜测权限，也不会保存未验证的连接。",
-            )
-        }
-    }
-
     private suspend fun discover(expected: Long, page: PageToken?) {
         try {
             val result = identity(freshTokens(expected).accessToken).discover(PageRequest(token = page))
@@ -155,14 +135,11 @@ internal class AndroidOAuthConnection(
     }
     override fun loadMore() {
         val page = next
-        if (page == null && !state.value.discoveryFailed && !state.value.scopeDiscoveryFailed) return
+        if (page == null && !state.value.discoveryFailed) return
         if (state.value.busy || !state.value.authorized || state.value.connected || state.value.reauthorizationRequired) return
         val expected = generation
-        val retryScopes = state.value.scopeDiscoveryFailed
-        mutable.value = state.value.copy(busy = true, error = null, readingScopes = retryScopes)
-        job = scope.launch {
-            if (retryScopes) prepareProductGrant(expected) else discover(expected, page)
-        }
+        mutable.value = state.value.copy(busy = true, error = null)
+        job = scope.launch { discover(expected, page) }
     }
     override fun connect(accountId: String) {
         if (state.value.busy || !state.value.authorized || state.value.connected || state.value.reauthorizationRequired) return

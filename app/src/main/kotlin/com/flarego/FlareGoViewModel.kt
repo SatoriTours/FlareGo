@@ -3,6 +3,7 @@ package com.flarego
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.flarego.core.application.inventory.ProductKey
 import com.flarego.core.application.AppController
 import com.flarego.core.application.operations.*
 import com.flarego.core.application.r2.*
@@ -93,10 +94,7 @@ class FlareGoViewModel private constructor(
     val operationStore = localDatabase.operationStore
     private val oauthConfig = cloudflareOAuthConfig()
     private val credentials = OAuthCredentialOwner.get(application, oauthConfig)
-    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection,
-        resolveReadScopes = { token -> withContext(operationDispatcher) {
-            OAuthReadScopes(transportForToken(token)).resolve()
-        } })
+    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection)
     fun acceptOAuthCallback(value: String) = oauthConnection.acceptCallback(value)
     val connectionDraft = ConnectionDraft()
     private val managementPlatformOwner = ManagementPlatformOwner.forApplication(application)
@@ -302,7 +300,7 @@ class FlareGoViewModel private constructor(
     private fun actualD1Context(): D1BrowserContext? {
         if (!::controllerRef.isInitialized) return null
         val state = controllerRef.state.value
-        if (state.page != Page.RESOURCES || state.resourceKind != ResourceKind.D1) return null
+        if (state.page != Page.RESOURCES || state.resourceKind != ResourceKind.D1 || ProductKey.D1 !in state.supportedProducts) return null
         val selected = state.selected?.takeIf { it in state.connections } ?: return null
         val stamp = managementPlatformOwner.currentCredentialStamp(selected) ?: return null
         return D1BrowserContext(selected,stamp.revision,controllerRef.operationEpoch)
@@ -507,6 +505,7 @@ class FlareGoViewModel private constructor(
 
     val controller = AppController(viewModelScope,sessionFactory,store,initialConnections,
         dnsOperations = operationRuntime,
+        availableProducts = { if (it.demo || d1Synthetic != null) ProductKey.entries.toSet() else CloudflareOAuthReadProfile.products },
         productFactory = ProductSessionFactory { connection ->
             if (connection.demo) {
                 ProductServices(DemoDirectory(connection),object : ScopedBillingPort {

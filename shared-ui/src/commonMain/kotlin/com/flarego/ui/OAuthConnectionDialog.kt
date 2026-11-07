@@ -51,18 +51,15 @@ fun ConnectionDialog(onDismiss: () -> Unit, oauthConnection: OAuthConnection? = 
                             if (state.busy || state.connecting) Row(verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Text(if (state.readingScopes) "正在读取授权范围…" else "正在连接账号…",
+                                Text("正在连接账号…",
                                     style = MaterialTheme.typography.headlineSmall)
                             } else Text(when {
-                                state.productAuthorizationRequired -> "授权产品读取"
                                 state.waiting -> "等待 Cloudflare 授权"
                                 state.error != null -> "连接未完成"
                                 else -> "连接 Cloudflare"
                             }, style = MaterialTheme.typography.headlineSmall)
                             Spacer(Modifier.height(10.dp))
                             if (state.error == null) Muted(when {
-                                state.productAuthorizationRequired -> "账号授权已完成。接下来在 Cloudflare 确认域名、DNS、Workers、KV 和 R2 的只读权限。"
-                                state.readingScopes -> "正在自动识别本次所需的只读权限…"
                                 state.connecting -> "正在保存连接…"
                                 state.busy -> "正在读取账号…"
                                 state.waiting -> "完成授权后返回这里"
@@ -95,17 +92,16 @@ fun ConnectionDialog(onDismiss: () -> Unit, oauthConnection: OAuthConnection? = 
                             }
                         }
                         if (state.authorized && !state.connecting && !state.connected) {
-                            if ((state.discoveryFailed || state.scopeDiscoveryFailed || state.hasMore) && !state.reauthorizationRequired) TextButton(
+                            if ((state.discoveryFailed || state.hasMore) && !state.reauthorizationRequired) TextButton(
                                 enabled = !state.busy, onClick = { oauthConnection?.loadMore() },
                                 modifier = Modifier.fillMaxWidth().testTag("oauth-discover"),
                             ) { Text(when {
-                                state.scopeDiscoveryFailed -> "重新读取权限"
                                 state.discoveryFailed -> "重新读取账号"
                                 else -> "加载更多账号"
                             }) }
                             TextButton(enabled = !state.busy, onClick = openAuthorization,
                                 modifier = Modifier.fillMaxWidth().testTag("oauth-authorize")) {
-                                Text(if (state.productAuthorizationRequired) "继续授权产品" else "重新前往 Cloudflare 授权")
+                                Text("重新前往 Cloudflare 授权")
                             }
                         } else if (!state.connected && !state.connecting && !state.busy) {
                             Spacer(Modifier.height(24.dp))
