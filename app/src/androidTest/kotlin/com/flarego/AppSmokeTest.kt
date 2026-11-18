@@ -13,11 +13,16 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import com.flarego.core.application.AppController
+import com.flarego.core.application.registrar.RegistrarController
+import com.flarego.core.model.AppState
+import com.flarego.core.model.Connection
 import com.flarego.core.demo.DemoSession
 import com.flarego.core.demo.demoConnections
+import com.flarego.core.model.RegistrarCandidate
 import com.flarego.core.ports.MemoryStore
 import com.flarego.core.ports.SessionFactory
 import com.flarego.ui.FlareGoApp
+import com.flarego.ui.FlareGoTheme
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,30 +34,52 @@ class AppSmokeTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun coldOAuthCallbackShowsRecoveryThroughActivityCallback() {
+    fun aLegacyOAuthConnectionIsKeptAndMarkedAsNeedingAToken() {
+        val legacy = Connection("legacy-oauth", "旧账号", "a".repeat(32))
+        // The real Activity already owns a ComposeView; render into it instead of the test rule.
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                FlareGoTheme {
+                    com.flarego.ui.AccountsScreen(
+                        AppState(listOf(legacy), legacy),
+                        connect = {},
+                        remove = {},
+                        needsToken = { true },
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("旧账号").assertIsDisplayed()
+        compose.onNodeWithText("需要 Token").assertIsDisplayed()
+        compose.onNodeWithTag("account-needs-token-legacy-oauth").assertIsDisplayed()
+        // The record is kept: disconnecting stays an explicit user action.
+        compose.onNodeWithText("断开连接").assertIsDisplayed()
+    }
+
+    @Test
+    fun aLegacyOAuthCallbackIntentHasNoSideEffect() {
+        // OAuth is retired: a stale App Link callback must not open a dialog, swap accounts or
+        // touch stored data. The build no longer registers the callback host at all.
         compose.runOnUiThread {
             val activity = compose.activity
             val launchIntent = activity.intent
             val callback = Intent(activity, MainActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
-                data = android.net.Uri.parse(BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI +
-                    "?code=synthetic-never-exchange&state=lost-session")
+                data = android.net.Uri.parse(
+                    "https://oauth-unconfigured.invalid/cloudflare/callback?code=synthetic&state=lost-session",
+                )
             }
             try {
                 InstrumentationRegistry.getInstrumentation().callActivityOnNewIntent(activity, callback)
-                assertEquals(null, callback.data)
-                assertEquals(null, activity.intent.data)
             } finally {
-                // ActivityScenario matches lifecycle events against its original launch intent.
-                // Restore that test identity only after checking production callback scrubbing.
                 activity.intent = launchIntent
             }
         }
-        compose.onNodeWithTag("oauth-error").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("授权会话已丢失，请重新开始授权。已有账号连接未更改。").assertIsDisplayed()
-        screenshot("cold-callback-recovery")
-        compose.onNodeWithText("取消").performClick()
-        compose.onNodeWithTag("oauth-screen").assertDoesNotExist()
+        compose.waitForIdle()
+        compose.onNodeWithTag("token-screen").assertDoesNotExist()
+        compose.onNodeWithTag("token-error").assertDoesNotExist()
+        compose.onNodeWithText("添加你的云账号").assertIsDisplayed()
     }
 
     // Demo interactions are explicit test fixtures; production startup never seeds them.
@@ -63,7 +90,23 @@ class AppSmokeTest {
                 val controller = remember {
                     AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), demoConnections)
                 }
-                FlareGoApp(controller, {}, {})
+                // Mirrors the ViewModel demo branch: three clearly marked sample candidates and
+                // no network. The real wiring lives in FlareGoViewModel.registrarSearch.
+                val tokenConnection = remember { FakeTokenConnection() }
+                val registrar = remember {
+                    RegistrarController(scope, { _, keyword, limit ->
+                        listOf(".com" to "8.57", ".dev" to "10.11", ".app" to "11.00").take(limit)
+                            .map { (suffix, cost) ->
+                                RegistrarCandidate(
+                                    name = if (keyword.endsWith(suffix)) keyword else keyword + suffix,
+                                    registrable = true, tier = "standard", currency = "USD",
+                                    registrationCost = "示例 $cost", renewalCost = "示例 $cost",
+                                    reason = "示例数据 · 未调用云 API",
+                                )
+                            }
+                    }, { true }, { 0L })
+                }
+                FlareGoApp(controller, {}, {}, registrar = registrar, tokenConnection = tokenConnection)
             }
         }
         compose.waitForIdle()
@@ -80,10 +123,12 @@ class AppSmokeTest {
             compose.onNodeWithTag("setup-connect").performScrollTo().assertIsDisplayed()
         }
         compose.onNodeWithTag("setup-connect").performClick()
-        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
-        compose.onNodeWithTag("oauth-token-fallback").assertDoesNotExist()
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onNodeWithText("取消").performClick()
+        // API Token is the only add-account flow.
+        compose.onNodeWithTag("token-screen").assertIsDisplayed()
+        compose.onNodeWithTag("token-purpose-billing").assertIsOn()
+        enterExistingToken()
+        assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
+        compose.onNodeWithContentDescription("取消").performClick()
         compose.onNodeWithContentDescription("切换云账号").performClick()
         compose.onNodeWithText("Production · 演示").assertDoesNotExist()
         compose.onNodeWithText("Dev sandbox · 演示").assertDoesNotExist()
@@ -182,14 +227,15 @@ class AppSmokeTest {
     }
 
     @Test
-    fun accountTabOffersOnlyOfficialAuthorization() {
+    fun accountTabOffersOnlyTheTokenEntry() {
         installDemoFixture()
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onNodeWithTag("oauth-token-fallback").assertDoesNotExist()
-        compose.onNodeWithText("取消").performClick()
+        enterExistingToken()
+        compose.onNodeWithTag("token-field").assertIsDisplayed()
+        compose.onNodeWithTag("token-use-oauth").assertDoesNotExist()
+        compose.onNodeWithTag("token-cancel").performClick()
+        compose.onNodeWithTag("token-screen").assertDoesNotExist()
     }
 
     @Test
@@ -230,25 +276,38 @@ class AppSmokeTest {
     @Test
     fun authorizationContainsNoSecretFieldsAndAllowsScreenshots() {
         compose.onNodeWithContentDescription("连接账号").performClick()
+        // 用途页不显示凭据；已有 Token 页只有一个空的掩码输入框。
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        enterExistingToken()
+        compose.onNodeWithTag("token-field").assertIsDisplayed()
+        assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
         compose.runOnIdle {
             assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         }
-        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("token-cancel").performClick()
+        compose.onNodeWithTag("token-screen").assertDoesNotExist()
     }
 
     @Test
     fun authorizationDialogSurvivesActivityRecreationAndCancelClosesIt() {
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
+        compose.onNodeWithTag("token-purpose-domains").performClick()
+        enterExistingToken()
+        compose.onNodeWithTag("token-field").performTextInput("fake-token-never-save")
         compose.activityRule.scenario.recreate()
-        compose.onNodeWithTag("oauth-title").assertIsDisplayed()
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("token-title").assertIsDisplayed()
+        assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
+        compose.onNodeWithTag("token-purpose-back").performScrollTo().performClick()
+        compose.onNodeWithTag("token-purpose-domains").assertIsOff()
+        compose.onNodeWithContentDescription("取消").performClick()
         compose.activityRule.scenario.recreate()
-        compose.onNodeWithTag("oauth-title").assertDoesNotExist()
+        compose.onNodeWithTag("token-title").assertDoesNotExist()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
+        // The same Token entry comes back, with no OAuth alternative anywhere in the flow.
+        enterExistingToken()
+        compose.onNodeWithTag("token-field").assertIsDisplayed()
+        compose.onNodeWithTag("token-use-oauth").assertDoesNotExist()
     }
 
     @Test
@@ -265,16 +324,35 @@ class AppSmokeTest {
         }
         instrumentation.addMonitor(monitor)
         try {
-            compose.onNodeWithText("Cloudflare 授权帮助").performClick()
+            compose.onNodeWithText("如何创建 API Token").performClick()
             compose.onNodeWithTag("setup-connect").performScrollTo().assertIsDisplayed()
             compose.onNodeWithTag("nav-accounts").performClick()
             compose.onNodeWithContentDescription("连接账号").performClick()
             compose.runOnIdle {
-                assertEquals(listOf("https://developers.cloudflare.com/fundamentals/oauth/"), opened)
+                assertEquals(
+                    listOf("https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"),
+                    opened,
+                )
             }
-            compose.onNodeWithTag("oauth-authorize").assertIsDisplayed()
+            compose.onNodeWithTag("token-screen").assertIsDisplayed()
+            compose.onNodeWithTag("token-use-oauth").assertDoesNotExist()
             compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-            compose.onNodeWithText("取消").performClick()
+            compose.onNodeWithTag("token-create").performScrollTo().performClick()
+            compose.runOnIdle {
+                val uri = android.net.Uri.parse(opened[1])
+                assertEquals("https://dash.cloudflare.com/profile/api-tokens", uri.buildUpon().clearQuery().build().toString())
+                val groups = org.json.JSONArray(uri.getQueryParameter("permissionGroupKeys"))
+                val keys = (0 until groups.length()).map { index ->
+                    val group = groups.getJSONObject(index)
+                    assertEquals("read", group.getString("type"))
+                    group.getString("key")
+                }
+                assertEquals(listOf("account_settings", "zone", "dns", "billing"), keys)
+            }
+            compose.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+            assertTrue(emptyMaskedTokenField())
+            compose.onNodeWithTag("token-submit").assertIsNotEnabled()
+            compose.onNodeWithContentDescription("取消").performClick()
             compose.onNodeWithText("获取 API Token").assertDoesNotExist()
         } finally {
             instrumentation.removeMonitor(monitor)
@@ -282,16 +360,32 @@ class AppSmokeTest {
     }
 
     @Test
-    fun purchaseIsClearlyDemoAndRequiresConfirmation() {
+    fun domainSearchIsReadOnlyAndShowsDemoCandidates() {
         installDemoFixture()
         compose.onNodeWithTag("nav-domains").performClick()
+        // The demo connection keeps the toolbar "+" entry that opens the registrar page.
         compose.onNodeWithContentDescription("购买域名").performClick()
-        compose.onNodeWithTag("search-field").performTextInput("my-cloud")
-        compose.onNodeWithContentDescription("提交搜索").performClick()
-        compose.onAllNodesWithText("选择")[0].performClick()
-        compose.onNodeWithText("确认模拟购买").assertIsDisplayed()
-        screenshot("purchase-confirm")
-        compose.onNodeWithText("确认模拟购买").performClick()
-        compose.onNodeWithText("演示操作，无真实注册或扣款").assertIsDisplayed()
+        compose.onNodeWithTag("registrar-search-field").assertIsDisplayed()
+        compose.onNodeWithTag("registrar-search-field").performTextInput("my-cloud")
+        compose.onNodeWithTag("registrar-search-submit").performClick()
+        compose.onNodeWithTag("registrar-result-my-cloud.com").assertIsDisplayed()
+        // Every candidate offers the same read-only "open console" action, so more than one
+        // node is expected; the first visible card must expose it.
+        compose.onAllNodesWithTag("registrar-open-console").onFirst().assertIsDisplayed()
+        compose.onNodeWithText("示例 · 未调用云 API").assertIsDisplayed()
+        // Search only suggests candidates: the removed demo purchase dialog must be gone.
+        compose.onNodeWithText("确认模拟购买").assertDoesNotExist()
+        screenshot("domain-search")
+    }
+
+    private fun enterExistingToken() {
+        compose.onNodeWithTag("token-existing").performScrollTo().performClick()
+    }
+
+    /** The Token field must start empty and be masked before anything is typed. */
+    private fun emptyMaskedTokenField(): Boolean {
+        val config = compose.onNodeWithTag("token-field").fetchSemanticsNode().config
+        val text = config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text
+        return text.isEmpty() && config.contains(androidx.compose.ui.semantics.SemanticsProperties.Password)
     }
 }

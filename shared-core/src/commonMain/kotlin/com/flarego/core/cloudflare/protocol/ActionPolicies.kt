@@ -245,6 +245,7 @@ private fun defaultRegistrations(): Array<ActionRegistration> {
         read("account-api-tokens-verify-token", "/accounts/{account_id}/tokens/verify", ActionScope.ACCOUNT),
         read("listWorkers", "/accounts/{account_id}/workers/workers", ActionScope.ACCOUNT),
         read("account-billing-history-get-billing-history", "/accounts/{account_id}/billing/history", ActionScope.ACCOUNT),
+        *registrarRegistrations(),
         ActionRegistration(writePolicy("zones-post", RiskLevel.CHANGE), "POST", "/zones", ActionScope.ACCOUNT),
         read("zones-0-get", "/zones/{zone_id}", ActionScope.ZONE),
         write("zones-0-patch", "PATCH", "/zones/{zone_id}", RiskLevel.DESTRUCTIVE),

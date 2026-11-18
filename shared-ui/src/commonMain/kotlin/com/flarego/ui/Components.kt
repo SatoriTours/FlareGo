@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.model.*
@@ -50,12 +51,18 @@ fun Muted(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun Pill(text: String, warning: Boolean = false) {
+fun Pill(
+    text: String,
+    warning: Boolean = false,
+    containerColor: androidx.compose.ui.graphics.Color? = null,
+    contentColor: androidx.compose.ui.graphics.Color? = null,
+) {
+    val bg = containerColor ?: if (warning) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer
+    val fg = contentColor ?: if (warning) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
     Text(
         text,
-        Modifier.background(if(warning) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer,
-            RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
-        color = if (warning) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+        Modifier.background(bg, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
+        color = fg,
         style = MaterialTheme.typography.labelMedium,
     )
 }
@@ -69,43 +76,92 @@ fun ResourceKind.icon(): ImageVector =
     }
 
 @Composable
-fun ResourceRow(resource: CloudResource, demo: Boolean, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+fun ResourceRow(
+    resource: CloudResource,
+    demo: Boolean,
+    showDivider: Boolean = true,
+    onClick: () -> Unit,
+) {
+    // At large font scales the trailing usage column would squeeze the name to a few
+    // characters, so the usage moves under the title instead of competing for width.
+    val stackedValue = LocalDensity.current.fontScale >= 1.5f
+    Column(Modifier.fillMaxWidth().clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)) {
         Row(
-            Modifier.heightIn(min = 62.dp).padding(vertical = 12.dp),
+            // Minimum height, not a fixed one: at 2x font scale the two text lines must grow
+            // instead of being clipped. The 1x visual height stays the same as before.
+            Modifier.fillMaxWidth()
+                .heightIn(min = 68.dp)
+                .padding(horizontal = 20.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                resource.kind.icon(),
-                null,
-                Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                    Icon(
+                        resource.kind.icon(),
+                        null,
+                        Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     resource.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Muted(resource.detail, Modifier.fillMaxWidth())
+                Text(
+                    resource.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (stackedValue) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(resource.usage ?: "—", style = MaterialTheme.typography.labelLarge)
+                        Muted(if (demo) "示例用量" else "已读取")
+                    }
+                }
             }
-            Column(
+            if (!stackedValue) Column(
                 horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(5.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(resource.usage ?: "—", style = MaterialTheme.typography.titleSmall)
+                Text(resource.usage ?: "—", style = MaterialTheme.typography.labelLarge)
                 Muted(if (demo) "示例用量" else "已读取")
             }
+            Icon(
+                Icons.Outlined.ChevronRight,
+                null,
+                Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 20.dp),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+        }
     }
 }
 
 @Composable
-fun EmptyState(title: String, subtitle: String, action: String? = null, onAction: () -> Unit = {}) {
-    SectionCard(Modifier.fillMaxWidth()) {
+fun EmptyState(
+    title: String,
+    subtitle: String,
+    action: String? = null,
+    onAction: () -> Unit = {},
+    modifier: Modifier = Modifier.fillMaxWidth(),
+) {
+    SectionCard(modifier) {
         Icon(
             Icons.Default.CloudQueue,
             null,

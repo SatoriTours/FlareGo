@@ -16,8 +16,11 @@ import com.flarego.ui.CompactTabs
 import com.flarego.ui.CompactListRow
 import com.flarego.ui.Muted
 import com.flarego.ui.EmptyState
+import com.flarego.ui.Pill
 import com.flarego.ui.management.ZoneManagementSlots
 import com.flarego.ui.management.ZoneManagementTab
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
 fun ZonePage(
@@ -26,7 +29,8 @@ fun ZonePage(
     modifier: Modifier = Modifier,
     query: String = "",
     dnsContent: @Composable (ZoneDetails) -> Unit = {},
- ) = ZonePageContent(state,onIntent,modifier,null,query,dnsContent)
+    onRegisterDomain: (() -> Unit)? = null,
+ ) = ZonePageContent(state,onIntent,modifier,null,query,dnsContent,onRegisterDomain)
 
 /** Required slots keep the original trailing-lambda overload source-compatible. */
 @Composable
@@ -37,12 +41,14 @@ fun ZonePage(
     modifier:Modifier=Modifier,
     query:String="",
     dnsContent:@Composable (ZoneDetails)->Unit = {},
-) = ZonePageContent(state,onIntent,modifier,slots,query,dnsContent)
+    onRegisterDomain:(()->Unit)?=null,
+) = ZonePageContent(state,onIntent,modifier,slots,query,dnsContent,onRegisterDomain)
 
 @Composable
 private fun ZonePageContent(
     state:ZonePageState,onIntent:(ZoneIntent)->Unit,modifier:Modifier,
     slots:ZoneManagementSlots?,query:String,dnsContent:@Composable (ZoneDetails)->Unit,
+    onRegisterDomain:(()->Unit)?=null,
 ) {
     val account = state.account
     val editorMode = state.editorMode
@@ -70,14 +76,13 @@ private fun ZonePageContent(
     var localTab by rememberSaveable(account, selected?.ref) { mutableStateOf("details") }
     val tab = slots?.selectedTab?.name?.lowercase() ?: localTab
     Column(modifier.fillMaxSize()) {
-        if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(12.dp).testTag("zone-demo-notice"))
-        com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.loading)
-        if (state.loading && state.observedAtMs==null) LinearProgressIndicator(Modifier.fillMaxWidth())
-        state.error?.let { Text(it, Modifier.padding(12.dp).testTag("zone-page-error"), color = MaterialTheme.colorScheme.error) }
+        if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(horizontal = 20.dp, vertical = 6.dp).testTag("zone-demo-notice"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        if (state.loading && state.observedAtMs == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        state.error?.let { Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp).testTag("zone-page-error"), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
         Box(Modifier.weight(1f)) {
             val prepared = state.preparedChange
             when {
-                account == null -> Text("请选择账号后加载 Cloudflare Zone。", Modifier.padding(16.dp))
+                account == null -> Box(Modifier.padding(20.dp)) { Text("请选择账号后加载 Cloudflare Zone。", style = MaterialTheme.typography.bodyMedium) }
                 prepared != null -> {
                     val previewAccount = when (val scope = prepared.preview.scope) { is AccountScope -> scope; is ZoneScope -> scope.account; else -> null }
                     if (previewAccount == account && prepared.revision == state.revision && !blocked) ZoneChangeConfirmation(
@@ -86,10 +91,10 @@ private fun ZonePageContent(
                             if (!state.loading) onIntent(ZoneIntent.Confirm(prepared.id, prepared.revision,
                                 (prepared.action as? ZoneAction.Delete)?.typedName))
                         }, onBack = { onIntent(ZoneIntent.BackToDraft) }, onCancel = { onIntent(ZoneIntent.Cancel) }, busy = state.loading)
-                    else Column(Modifier.padding(16.dp)) {
-                        Text("预览已失效或上一操作尚未核对。")
+                    else Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("预览已失效或上一操作尚未核对。", style = MaterialTheme.typography.titleMedium)
                         ZoneTaskSummary(task, onIntent)
-                        OutlinedButton(onClick = { onIntent(ZoneIntent.BackToDraft) }) { Text("返回编辑") }
+                        OutlinedButton(onClick = { onIntent(ZoneIntent.BackToDraft) }, modifier = Modifier.fillMaxWidth()) { Text("返回编辑") }
                     }
                 }
                 editorMode != null && !blocked -> ZoneForm(
@@ -98,64 +103,204 @@ private fun ZonePageContent(
                     onDraftChange = { value -> onIntent(ZoneIntent.DraftInvalidated); draft = value },
                     onPreview = { if (!state.loading) onIntent(ZoneIntent.Preview(it)) },
                     onCancel = { onIntent(ZoneIntent.Cancel) }, busy = state.loading)
-                selected == null -> Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp)) {
-                    CompactTabs(listOf("all" to "全部", "active" to "已激活", "pending" to "待激活"),
-                        statusFilter, { statusFilter = it }, tagPrefix = "zone-filter")
-                    ZoneTaskSummary(task, onIntent)
+                selected == null -> {
                     val matchingZones = state.zones.filter { it.ref.account == account &&
                         (statusFilter == "all" || it.status == statusFilter) && it.name.contains(query.trim(), true) }
-                    if (query.isNotBlank()) Text("已加载域名中匹配 ${matchingZones.size} 个")
-                    matchingZones.forEach { zone ->
-                        CompactListRow(zone.name, Modifier.testTag("zone-row-${zone.ref.zoneId}"),
-                            subtitle = when (zone.status) {
-                                "active" -> "已激活 · DNS 托管"
-                                "pending" -> "等待名称服务器"
-                                else -> zone.status
-                            }, onClick = { onIntent(ZoneIntent.Open(zone.ref)) })
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            CompactTabs(
+                                listOf("all" to "全部", "active" to "已激活", "pending" to "待激活"),
+                                statusFilter,
+                                { statusFilter = it },
+                                modifier = Modifier.weight(1f),
+                                tagPrefix = "zone-filter",
+                            )
+                            Text(
+                                "${matchingZones.size} 个",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (query.isNotBlank()) {
+                            Text(
+                                "已加载域名中匹配 ${matchingZones.size} 个",
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        ZoneTaskSummary(task, onIntent)
+                        matchingZones.forEachIndexed { index, zone ->
+                            CompactListRow(
+                                title = zone.name,
+                                modifier = Modifier.testTag("zone-row-${zone.ref.zoneId}"),
+                                subtitle = when (zone.status) {
+                                    "active" -> "已激活 · DNS 托管"
+                                    "pending" -> "等待名称服务器"
+                                    else -> zone.status
+                                },
+                                trailing = {
+                                    Pill(
+                                        text = when (zone.status) {
+                                            "active" -> "已激活"
+                                            "pending" -> "待激活"
+                                            else -> zone.status
+                                        },
+                                        warning = zone.status != "active",
+                                    )
+                                },
+                                showDivider = index < matchingZones.lastIndex,
+                                onClick = { onIntent(ZoneIntent.Open(zone.ref)) },
+                            )
+                        }
+                        if (matchingZones.isEmpty() && !state.loading && state.error == null) {
+                            Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                                EmptyState(
+                                    if (query.isNotBlank() || statusFilter != "all") "没有匹配的域名" else "已加载列表暂无域名",
+                                    if (query.isNotBlank() || statusFilter != "all") "尝试其他关键词或筛选；仅搜索已加载域名。"
+                                    else if (state.next != null) "还有更多页面，可继续加载。"
+                                    else "可刷新列表，或检查 Zone Read 权限。",
+                                )
+                            }
+                        }
+                        Text(
+                            "仅显示已加载的 DNS 托管区域，不是注册商域名目录。",
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (state.next != null) {
+                                TextButton(
+                                    onClick = { onIntent(ZoneIntent.LoadMore) },
+                                    enabled = !state.loading,
+                                    modifier = Modifier.testTag("zone-load-more"),
+                                ) {
+                                    Text("加载更多")
+                                }
+                                Spacer(Modifier.width(16.dp))
+                            }
+                            TextButton(
+                                onClick = { onIntent(ZoneIntent.Load(account)) },
+                                enabled = !state.loading,
+                                modifier = Modifier.testTag("zone-refresh"),
+                            ) {
+                                Text("刷新 Zone")
+                            }
+                        }
+                        if (onRegisterDomain != null) Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // A Zone list is not a registrar catalogue; this opens the separate
+                            // read-only search page instead of mixing purchase into this list.
+                            TextButton(
+                                onClick = onRegisterDomain,
+                                modifier = Modifier.testTag("zone-open-registrar"),
+                            ) {
+                                Text("搜索并注册域名")
+                            }
+                        }
                     }
-                    if (matchingZones.isEmpty() && !state.loading && state.error == null) {
-                        EmptyState(
-                            if (query.isNotBlank() || statusFilter != "all") "没有匹配的域名" else "已加载列表暂无域名",
-                            if (query.isNotBlank() || statusFilter != "all") "尝试其他关键词或筛选；仅搜索已加载域名。"
-                            else if (state.next != null) "还有更多页面，可继续加载。"
-                            else "可刷新列表，或检查 Zone Read 权限。")
-                    }
-                    Muted("仅显示已加载的 DNS 托管区域，不是注册商域名目录。",
-                        Modifier.padding(vertical = 12.dp))
-                    if (state.next != null) OutlinedButton(onClick = { onIntent(ZoneIntent.LoadMore) }, enabled = !state.loading,
-                        modifier = Modifier.fillMaxWidth().testTag("zone-load-more")) { Text("加载更多 Zone") }
-                    OutlinedButton(onClick = { onIntent(ZoneIntent.Load(account)) }, enabled = !state.loading,
-                        modifier = Modifier.fillMaxWidth().testTag("zone-refresh")) { Text("刷新 Zone") }
                 }
-                else -> Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp)) {
-                    CompactTabs(listOf("details" to "概况", "dns" to "DNS", "settings" to "设置", "security" to "安全"),
-                        selected = tab, onSelect = { key ->
-                            if(slots!=null) slots.onTabChanged(ZoneManagementTab.valueOf(key.uppercase())) else localTab=key
-                        }, tagPrefix = "zone-tab")
+                else -> Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
+                    Box(Modifier.padding(horizontal = 20.dp)) {
+                        CompactTabs(
+                            listOf("details" to "概况", "dns" to "DNS", "settings" to "设置", "security" to "安全"),
+                            selected = tab,
+                            onSelect = { key ->
+                                if (slots != null) slots.onTabChanged(ZoneManagementTab.valueOf(key.uppercase())) else localTab = key
+                            },
+                            tagPrefix = "zone-tab",
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Box(Modifier.weight(1f)) {
                         when (tab) {
                             "dns" -> dnsContent(selected)
-                            "settings" -> if(slots!=null) slots.settings(selected) else Text("Zone 设置待接入：通用与专用设置、SSL 和缓存清理尚未在本页面接线。", Modifier.testTag("zone-module-pending"))
-                            "security" -> if(slots!=null) slots.security(selected) else Text("安全待接入：DNSSEC 读取、启停及 ZSK 状态尚未在本页面接线。", Modifier.testTag("zone-module-pending"))
-                            else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("这是 Cloudflare Zone；不会购买或注销注册域名。")
+                            "settings" -> if (slots != null) slots.settings(selected) else Box(Modifier.padding(20.dp)) { Text("Zone 设置待接入：通用与专用设置、SSL 和缓存清理尚未在本页面接线。", Modifier.testTag("zone-module-pending")) }
+                            "security" -> if (slots != null) slots.security(selected) else Box(Modifier.padding(20.dp)) { Text("安全待接入：DNSSEC 读取、启停及 ZSK 状态尚未在本页面接线。", Modifier.testTag("zone-module-pending")) }
+                            else -> Column(
+                                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Muted("这是 Cloudflare Zone；不会购买或注销注册域名。")
                                 SectionCard {
-                                    Text("状态 status：${selected.status}", Modifier.testTag("zone-status"))
-                                    Text("暂停 paused：${selected.paused}", Modifier.testTag("zone-paused-value"))
-                                    Text("类型 type：${selected.type}", Modifier.testTag("zone-type-value"))
-                                    Text("名称服务器：\n${selected.nameservers.joinToString("\n").ifEmpty { "供应商尚未提供" }}", Modifier.testTag("zone-nameservers"))
-                                    if (selected.status == "pending") Text("尚待激活；请按供应商流程设置名称服务器。请求检查不代表已激活。")
+                                    Text("状态属性", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text("状态 status", style = MaterialTheme.typography.bodyMedium)
+                                        Text(selected.status, modifier = Modifier.testTag("zone-status"), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text("暂停 paused", style = MaterialTheme.typography.bodyMedium)
+                                        Text("${selected.paused}", modifier = Modifier.testTag("zone-paused-value"), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text("类型 type", style = MaterialTheme.typography.bodyMedium)
+                                        Text(selected.type, modifier = Modifier.testTag("zone-type-value"), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                    if (selected.status == "pending") {
+                                        Text("尚待激活；请按供应商流程设置名称服务器。请求检查不代表已激活。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                                    }
+                                }
+                                SectionCard {
+                                    Text("名称服务器", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        selected.nameservers.joinToString("\n").ifEmpty { "供应商尚未提供" },
+                                        modifier = Modifier.testTag("zone-nameservers"),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
                                 }
                                 ZoneTaskSummary(task, onIntent)
-                                OutlinedButton(onClick = { onIntent(ZoneIntent.BeginEdit(selected.ref)) }, enabled = !blocked && !state.loading,
-                                    modifier = Modifier.fillMaxWidth().testTag("zone-detail-edit")) { Text("修改 Zone 属性") }
-                                OutlinedButton(onClick = { onIntent(ZoneIntent.BeginDelete(selected.ref)) }, enabled = !blocked && !state.loading,
-                                    modifier = Modifier.fillMaxWidth().testTag("zone-detail-delete")) { Text("删除整个 Zone") }
-                                OutlinedButton(onClick = { onIntent(ZoneIntent.ActivationCheck(selected.ref)) }, enabled = !blocked && !state.loading && selected.status == "pending",
-                                    modifier = Modifier.fillMaxWidth().testTag("zone-activation-check")) { Text("预览激活检查") }
-                                TextButton(onClick = { onIntent(ZoneIntent.BackToList) },
-                                    modifier = Modifier.fillMaxWidth().testTag("zone-back-list")) { Text("返回 Zone 列表") }
+                                SectionCard {
+                                    Text("操作", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = { onIntent(ZoneIntent.BeginEdit(selected.ref)) },
+                                            enabled = !blocked && !state.loading,
+                                            modifier = Modifier.fillMaxWidth().testTag("zone-detail-edit"),
+                                        ) {
+                                            Text("修改 Zone 属性")
+                                        }
+                                        if (selected.status == "pending") {
+                                            OutlinedButton(
+                                                onClick = { onIntent(ZoneIntent.ActivationCheck(selected.ref)) },
+                                                enabled = !blocked && !state.loading,
+                                                modifier = Modifier.fillMaxWidth().testTag("zone-activation-check"),
+                                            ) {
+                                                Text("预览激活检查")
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onIntent(ZoneIntent.BeginDelete(selected.ref)) },
+                                            enabled = !blocked && !state.loading,
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                            modifier = Modifier.fillMaxWidth().testTag("zone-detail-delete"),
+                                        ) {
+                                            Text("删除整个 Zone")
+                                        }
+                                        TextButton(
+                                            onClick = { onIntent(ZoneIntent.BackToList) },
+                                            modifier = Modifier.fillMaxWidth().testTag("zone-back-list"),
+                                        ) {
+                                            Text("返回 Zone 列表")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

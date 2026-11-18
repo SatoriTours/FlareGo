@@ -57,22 +57,31 @@ fun UpdatePanel(controller: UpdateController) {
                 TextButton({ notesOpen = true }) { Text("更新说明") }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
+        if (state.available != null) {
+            Button(
+                controller::download,
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth().testTag("download-update"),
+            ) {
+                Text("下载并安装")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                TextButton(
+                    { controller.check() },
+                    enabled = !state.busy,
+                    modifier = Modifier.testTag("check-update"),
+                ) {
+                    Text("检查更新")
+                }
+            }
+        } else {
+            Button(
                 { controller.check() },
                 enabled = !state.busy,
-                modifier = Modifier.testTag("check-update"),
+                modifier = Modifier.fillMaxWidth().testTag("check-update"),
             ) {
                 Text("检查更新")
             }
-            if (state.available != null)
-                Button(
-                    controller::download,
-                    enabled = !state.busy,
-                    modifier = Modifier.testTag("download-update"),
-                ) {
-                    Text("下载并安装")
-                }
         }
         Muted("下载后校验 SHA-256 与签名，由系统确认安装")
     }

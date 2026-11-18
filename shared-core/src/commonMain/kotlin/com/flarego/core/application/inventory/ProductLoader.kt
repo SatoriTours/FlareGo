@@ -34,6 +34,10 @@ class ProductLoader(
     private val attempts = mutableMapOf<ProductKey, Long>()
     private val seen = mutableMapOf<ProductKey, Set<PageToken>>()
     private val limits = mutableMapOf<ProductKey, Int>()
+    /** Products whose live read was requested while a cache-only probe was still running. */
+    private val needsLiveLoad = mutableSetOf<ProductKey>()
+    /** Products whose in-flight job is a cache-only probe, so a live request must wait for it. */
+    private val cacheOnlyJobs = mutableSetOf<ProductKey>()
     private var boundSelection = selected.value
     private var epoch = 0L
     private var workersMode = WorkersDirectoryMode.MODERN
@@ -48,7 +52,7 @@ class ProductLoader(
     fun resetSelection() {
         epoch++
         jobs.values.forEach { it.cancel() }
-        jobs.clear(); attempts.clear(); seen.clear(); limits.clear()
+        jobs.clear(); attempts.clear(); seen.clear(); limits.clear(); needsLiveLoad.clear(); cacheOnlyJobs.clear()
         boundSelection = selected.value
         mutable.value = emptyMap()
     }
@@ -74,7 +78,12 @@ class ProductLoader(
 
     fun ensure(product: ProductKey, cachedOnly: Boolean=false) {
         if (boundSelection != selected.value) resetSelection()
-        if (jobs[product]?.isActive == true) return
+        if (jobs[product]?.isActive == true) {
+            // A live read requested while a cache-only probe is still running must not be
+            // dropped: remember it and let that job start the real read when it finishes.
+            if (!cachedOnly && product in cacheOnlyJobs) needsLiveLoad += product
+            return
+        }
         val account = selected.value ?: return
         val owner = connection(account) ?: return
         if (product !in availableProducts(owner)) return
@@ -87,18 +96,21 @@ class ProductLoader(
         }
         val stamp = epoch
         val mode = workersMode
+        if (cachedOnly) cacheOnlyJobs += product else cacheOnlyJobs -= product
         jobs[product] = coroutineScope.launch {
             cacheDeletes[owner.id]?.join()
             val restored = if(owner.demo) null else cache?.restore(account, product, mode, revision, nowMs())
             ensureActive()
             if (stamp != epoch || selected.value != account || credentialRevision(owner.id) != revision || workersMode != mode) return@launch
             if (restored != null) mutable.update { it + (product to restored) }
-            jobs.remove(product)
-            if ((restored == null && !cachedOnly) || (restored != null && nowMs() - restored.observedAtMs!! >= SNAPSHOT_FRESH_MS)) load(product)
+            jobs.remove(product); cacheOnlyJobs -= product
+            val live = needsLiveLoad.remove(product)
+            if (live || (restored == null && !cachedOnly) || (restored != null && nowMs() - restored.observedAtMs!! >= SNAPSHOT_FRESH_MS)) load(product)
         }
     }
 
     fun load(product: ProductKey, request: PageRequest = PageRequest()) {
+        needsLiveLoad -= product
         if (boundSelection != selected.value) resetSelection()
         val account = selected.value ?: return
         val owner = connection(account) ?: return

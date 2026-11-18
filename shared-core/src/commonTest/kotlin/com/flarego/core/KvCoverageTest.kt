@@ -124,8 +124,8 @@ class KvCoverageTest {
         val m=matrix();validateOperations(m.getValue("operations").jsonObject)
         assertEquals(JsonPrimitive(14),m["candidate_count"]);assertEquals(JsonPrimitive(13),m["current_count"])
         assertEquals(JsonPrimitive(prefix+"delete-multiple-key-value-pairs"),m.getValue("deprecated_migration").jsonObject[deprecated])
-        assertNull(ActionPolicies.policy(deprecated));assertEquals(131,ActionPolicies.registry.registrations.size)
-        assertEquals(62,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
+        assertNull(ActionPolicies.policy(deprecated));assertEquals(132,ActionPolicies.registry.registrations.size)
+        assertEquals(63,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
         assertEquals(69,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.WRITE})
     }
     @Test fun currentSourcesAndActualNativeEntryMatchAndFrozenHistoryIsUnchanged(){

@@ -59,7 +59,13 @@ class ProductLoadingTest {
         compose.runOnIdle { owner.clear() }
     }
     @Test fun overviewDoesNotInventResourceTotalsOrFetchProducts() {
-        install();compose.onAllNodesWithText("未加载").assertCountEquals(2)
+        install()
+        // The overview renders one honest row per product (域名 + Workers/R2/KV/D1); none is
+        // loaded yet, so every row says 未加载 and no count is invented.
+        listOf("overview-domains","overview-worker","overview-r2","overview-kv","overview-d1").forEach { tag ->
+            compose.onNodeWithTag(tag).assert(hasAnyDescendant(hasText("未加载", substring = true)))
+        }
+        compose.onAllNodesWithText("未加载").assertCountEquals(5)
         compose.onNodeWithText("0 个已激活").assertDoesNotExist()
         compose.runOnIdle {assertTrue(calls.isEmpty())}
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("刷新全部产品"))
@@ -101,7 +107,7 @@ class ProductLoadingTest {
         compose.onNodeWithText("只读核对").performClick()
         compose.runOnIdle {assertEquals(1,checked)}
     }
-    @Test fun productionViewModelUsesModernLazyPortsWithAccountBilling() {
+    @Test fun aTokenConnectionReadsAccountBillingOnDemandAndKeepsLegacyUserBillingExplicit() {
         val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
         compose.runOnIdle {
             val app=InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
@@ -112,8 +118,8 @@ class ProductLoadingTest {
                     r.path.startsWith("/zones?") -> """[{"id":"zone","name":"zone.example","status":"active","account":{"id":"${connection.accountId}"}}]"""
                     r.path.startsWith("/accounts/${connection.accountId}/workers/workers?") -> """[{"id":"worker","name":"modern-worker"}]"""
                     r.path=="/accounts/${connection.accountId}/workers/scripts" -> """[{"id":"old-script"}]"""
+                    r.path.startsWith("/accounts/${connection.accountId}/billing/history?") -> """[{"id":"charge","amount":0,"currency":"USD","description":"account-charge"}]"""
                     r.path.startsWith("/user/billing/history?") -> """[{"id":"user-charge","amount":1,"currency":"USD"}]"""
-                    r.path.startsWith("/accounts/${connection.accountId}/billing/history?") -> """[{"id":"charge","amount":0,"currency":"USD"}]"""
                     else -> error("Unexpected product request")
                 }
                 HttpResponse(200,"""{"success":true,"result":$result,"result_info":{"page":1,"per_page":50,"total_count":1}}""")
@@ -127,18 +133,27 @@ class ProductLoadingTest {
         compose.waitUntil(10000) {model!!.controller.state.value.inventory.domains.isNotEmpty()}
         compose.runOnIdle { model!!.controller.navigate(Page.RESOURCES) }
         compose.waitUntil(10000) {model!!.controller.state.value.inventory.resources.any {it.name=="modern-worker"}}
+        // A Token connection is not limited by an OAuth scope list: account billing is a
+        // registered read and must be attempted on demand, with the amount parsed exactly.
         compose.runOnIdle {model!!.controller.navigate(Page.BILLING)}
         compose.waitUntil(10000) {model!!.controller.state.value.products[ProductKey.BILLING]?.observedAtMs!=null}
         compose.runOnIdle {
-            assertEquals(4,requests.size)
-            assertTrue(requests.none {it.startsWith("/user/") || it.contains("/workers/scripts")})
-            assertEquals("0",(model!!.controller.state.value.products.getValue(ProductKey.BILLING).content as ProductContent.Billing).items.single().amount)
+            assertTrue(ProductKey.BILLING in model!!.controller.state.value.supportedProducts)
+            val billing=model!!.controller.state.value.products.getValue(ProductKey.BILLING)
+            assertEquals("0",(billing.content as ProductContent.Billing).items.single().amount)
+            // The legacy user-level source stays an explicit choice, never an automatic fallback.
+            assertTrue(requests.none { it.startsWith("/user/") })
         }
         compose.runOnIdle {model!!.controller.selectBillingSource(BillingSource.USER_HISTORY_LEGACY)}
-        compose.waitUntil(10000) {model!!.controller.state.value.billing?.invoices?.isNotEmpty()==true}
         compose.runOnIdle {model!!.controller.navigate(Page.RESOURCES);model!!.controller.selectWorkersMode(WorkersDirectoryMode.LEGACY)}
         compose.waitUntil(10000) {model!!.controller.state.value.inventory.resources.any {it.id=="old-script" && it.legacy}}
-        compose.runOnIdle {assertEquals(6,requests.size)}
+        compose.runOnIdle {
+            // verify, zones, modern workers, account billing, explicit legacy user billing, legacy workers.
+            assertEquals(6,requests.size)
+            assertEquals(1,requests.count { it.startsWith("/accounts/${connection.accountId}/billing/history?") })
+            assertEquals(1,requests.count { it.startsWith("/user/billing/history?") })
+            assertEquals(1,requests.count { it=="/accounts/${connection.accountId}/workers/scripts" })
+        }
     }
     @Test fun oldUserBillingIsAnExplicitSeparatelyLabeledChoice() {
         install(Page.BILLING)
@@ -148,9 +163,16 @@ class ProductLoadingTest {
     }
     @Test fun workerLegacyDirectoryRequiresAnExplicitChoice() {
         install(Page.RESOURCES)
-        compose.onNodeWithText("Workers 旧目录").performClick()
+        compose.onNodeWithTag("worker-dir-tab-modern").assertIsSelected()
+        // The legacy directory is a separate, explicit choice: this fixture wires no legacy
+        // adapter, so the app must report the capability gap instead of reusing the modern
+        // rows or silently claiming an empty legacy directory.
+        compose.onNodeWithTag("worker-dir-tab-legacy").performClick()
+        compose.onNodeWithTag("worker-dir-tab-legacy").assertIsSelected()
         compose.onNodeWithText("旧目录未提供，请在官方控制台查看").assertIsDisplayed()
-        compose.runOnIdle { assertEquals(listOf(ProductKey.WORKERS),calls) }
+        compose.onNodeWithText("first-resource").assertDoesNotExist()
+        // No speculative legacy request is sent when the adapter is absent.
+        compose.runOnIdle { assertEquals(1, calls.count { it==ProductKey.WORKERS }) }
     }
 
     @Test fun productionStartupRecoversStoredTaskWithoutLoadingCredentialsOrReplaying() {

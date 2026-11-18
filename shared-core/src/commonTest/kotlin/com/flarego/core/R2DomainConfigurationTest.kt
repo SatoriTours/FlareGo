@@ -155,9 +155,9 @@ class R2DomainConfigurationTest {
             }
         }
         assertEquals(RiskLevel.DESTRUCTIVE, ActionPolicies.policy("r2-delete-custom-domain")!!.risk)
-        // Current131 includes B3, C8, KV and D1; the exact domain per-action sets above stay unchanged.
-        assertEquals(131, ActionPolicies.registry.registrations.size)
-        assertEquals(62, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.READ })
+        // Current132 includes B3, C8, KV, D1 and Registrar; the exact domain per-action sets above stay unchanged.
+        assertEquals(132, ActionPolicies.registry.registrations.size)
+        assertEquals(63, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.READ })
         assertEquals(69, ActionPolicies.registry.registrations.values.count { it.policy.semantics == ActionSemantics.WRITE })
     }
 

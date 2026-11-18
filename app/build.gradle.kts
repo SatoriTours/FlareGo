@@ -1,18 +1,7 @@
-import java.net.URI
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-
-fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-val oauthClientId = providers.gradleProperty("flarego.oauthClientId").orElse("").get()
-val oauthRedirect = providers.gradleProperty("flarego.oauthRedirectUri")
-    .orElse("https://oauth-unconfigured.invalid/cloudflare/callback").get()
-val oauthUri = URI(oauthRedirect)
-require(oauthUri.scheme == "https" && oauthUri.host != null && oauthUri.rawQuery == null &&
-    oauthUri.rawFragment == null && oauthUri.rawUserInfo == null && (oauthUri.port == -1 || oauthUri.port == 443) &&
-    !oauthUri.rawPath.isNullOrBlank() && oauthUri.rawPath != "/") { "OAuth redirect must be an exact HTTPS callback without query/fragment" }
 
 android {
     namespace = "com.flarego"
@@ -24,10 +13,6 @@ android {
         versionCode = providers.gradleProperty("flarego.versionCode").orNull?.toInt() ?: 1
         versionName = providers.gradleProperty("flarego.versionName").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", quoted(oauthClientId))
-        buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", quoted(oauthRedirect))
-        manifestPlaceholders["oauthCallbackHost"] = oauthUri.host
-        manifestPlaceholders["oauthCallbackPath"] = oauthUri.rawPath
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

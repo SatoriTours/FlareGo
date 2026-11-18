@@ -34,12 +34,12 @@ fun ServiceSetupCard(connect: () -> Unit) {
         }
         TextButton(onClick = {
             try {
-                uriHandler.openUri("https://developers.cloudflare.com/fundamentals/oauth/")
+                uriHandler.openUri("https://developers.cloudflare.com/fundamentals/api/get-started/create-token/")
                 error = null
             } catch (_: Exception) {
                 error = "无法打开浏览器，请安装或启用浏览器后重试"
             }
-        }, modifier = Modifier.fillMaxWidth()) { Text("Cloudflare 授权帮助", style = MaterialTheme.typography.bodySmall) }
+        }, modifier = Modifier.fillMaxWidth()) { Text("如何创建 API Token", style = MaterialTheme.typography.bodySmall) }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }

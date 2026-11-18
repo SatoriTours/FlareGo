@@ -37,7 +37,8 @@ class RefreshFeedbackUiTest {
             val scope = rememberCoroutineScope()
             val controller = remember {
                 AppController(scope, SessionFactory { DemoSession(it) }, MemoryStore(), listOf(connection),
-                    availableProducts = { if (readProfile) com.flarego.platform.CloudflareOAuthReadProfile.products else ProductKey.entries.toSet() },
+                    // readProfile stands for a legacy OAuth connection: it may request nothing.
+                    availableProducts = { if (readProfile) emptySet() else ProductKey.entries.toSet() },
                     productFactory = ProductSessionFactory {
                         ProductServices(object : ProductDirectoryPort {
                             override suspend fun zones(account: AccountScope, request: PageRequest): CloudPage<Domain> {
@@ -69,7 +70,9 @@ class RefreshFeedbackUiTest {
             CompositionLocalProvider(LocalConfiguration provides configuration,
                 LocalDensity provides Density(density.density, if (large) 2f else 1f)) {
                 FlareGoTheme(darkTheme = dark) {
-                    Surface(Modifier.fillMaxSize()) { FlareGoApp(controller, {}, {}) }
+                    Surface(Modifier.fillMaxSize()) {
+                        FlareGoApp(controller, {}, {}, tokenConnection = FakeTokenConnection())
+                    }
                 }
             }
         }
@@ -86,11 +89,11 @@ class RefreshFeedbackUiTest {
         compose.onNodeWithTag("overview-refresh-all").performClick()
     }
 
-    @Test fun readProfileExcludesUnsupportedProductsFromRefreshAndShowsHonestEntries() {
+    @Test fun aLegacyOauthConnectionRequestsNothingAndExplainsTheTokenMigration() {
         install(readProfile = true)
         refreshAll()
-        compose.onNodeWithText("读取完成：4 项成功").performScrollTo().assertIsDisplayed()
-        compose.runOnIdle { assertEquals(setOf(ProductKey.ZONES, ProductKey.WORKERS, ProductKey.R2, ProductKey.KV), calls.toSet()) }
+        // OAuth is retired: the old record keeps its row but sends no request at all.
+        compose.runOnIdle { assertTrue("legacy OAuth must not read any product", calls.isEmpty()) }
         compose.onNodeWithTag("overview-d1").performScrollTo().assert(hasAnyDescendant(hasText("当前授权方案未支持")))
         compose.onNodeWithTag("overview-d1").performClick()
         compose.onNodeWithText("当前授权方案未支持 D1 数据库").assertIsDisplayed()
@@ -98,10 +101,13 @@ class RefreshFeedbackUiTest {
         compose.onNodeWithContentDescription("创建资源").assertDoesNotExist()
         compose.onNodeWithContentDescription("刷新").assertDoesNotExist()
         compose.onNodeWithTag("nav-billing").performClick()
-        compose.onNodeWithText("当前授权方案未支持账单读取").assertIsDisplayed()
-        compose.onNodeWithText("用户账单（旧接口）").assertDoesNotExist()
+        // The legacy OAuth record explains the migration: reconfigure with a Token, keep local data.
+        compose.onNodeWithText("该连接需要配置 API Token").assertIsDisplayed()
+        compose.onNodeWithText("旧版 OAuth 授权已停用", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("billing-open-console").assertIsDisplayed()
+        compose.onNodeWithTag("billing-reauthorize").assertDoesNotExist()
         compose.onNodeWithTag("toolbar-refresh").assertIsNotEnabled()
-        compose.runOnIdle { assertEquals(4, calls.size) }
+        compose.runOnIdle { assertEquals(0, calls.size) }
         capture("unsupported-billing")
     }
 
@@ -135,10 +141,13 @@ class RefreshFeedbackUiTest {
         install()
         refreshAll()
         compose.onNodeWithText("读取完成：1 项成功，5 项失败").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("账单：当前授权缺少账单读取权限").performScrollTo().assertIsDisplayed()
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新授权"))
-        compose.onNodeWithText("重新授权").performClick()
-        compose.onNodeWithTag("oauth-screen").assertIsDisplayed()
+        // The failure list is a lazy list; scroll to the last entry instead of assuming it is
+        // already composed. The exact text is still asserted.
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("账单：当前授权缺少账单读取权限"))
+        compose.onNodeWithText("账单：当前授权缺少账单读取权限").assertIsDisplayed()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新配置连接"))
+        compose.onNodeWithText("重新配置连接").performClick()
+        compose.onNodeWithTag("token-screen").assertIsDisplayed()
     }
 
     @Test fun failedRefreshKeepsPreviousCountButMarksItStaleAndCanRecover() {
@@ -161,8 +170,8 @@ class RefreshFeedbackUiTest {
         install(dark = true, large = true)
         refreshAll()
         compose.onNodeWithText("读取完成：1 项成功，5 项失败").performScrollTo().assertIsDisplayed()
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新授权"))
-        compose.onNodeWithText("重新授权").assertIsDisplayed()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新配置连接"))
+        compose.onNodeWithText("重新配置连接").assertIsDisplayed()
         capture("dark-large-errors")
     }
 }

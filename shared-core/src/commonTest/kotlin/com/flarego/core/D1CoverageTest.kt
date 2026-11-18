@@ -122,8 +122,8 @@ class D1CoverageTest {
             assertEquals(row.semantics,registration.policy.semantics.name);assertEquals(ActionScope.ACCOUNT,registration.scope)
             if(row.semantics=="WRITE")assertFalse(registration.policy.retry.enabled)
         }
-        assertEquals(131,ActionPolicies.registry.registrations.size)
-        assertEquals(62,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
+        assertEquals(132,ActionPolicies.registry.registrations.size)
+        assertEquals(63,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
         assertEquals(69,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.WRITE})
         val m=matrix();assertEquals(JsonPrimitive(13),m["current_count"]);assertEquals(JsonPrimitive(12),m["new_count"])
         validateOperations(m.getValue("operations").jsonObject)

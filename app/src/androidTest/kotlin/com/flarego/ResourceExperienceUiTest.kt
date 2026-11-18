@@ -58,7 +58,9 @@ class ResourceExperienceUiTest {
         compose.onNodeWithText("暂无云资源").assertDoesNotExist()
         compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo,
             ProgressBarRangeInfo.Indeterminate)).assertIsDisplayed()
-        compose.onNodeWithText("刷新当前产品").assertIsNotEnabled()
+        // The compact design renders refresh as an icon; its accessible name is unchanged.
+        compose.onNodeWithContentDescription("刷新当前产品").assertIsDisplayed()
+        compose.onNodeWithTag("product-refresh").assertIsNotEnabled()
         capture("resources-loading")
     }
 
@@ -76,7 +78,7 @@ class ResourceExperienceUiTest {
         install(null)
         compose.onNodeWithText("暂无云资源").assertDoesNotExist()
         compose.onNodeWithText("尚未读取资源").assertIsDisplayed()
-        compose.onNodeWithText("刷新当前产品").performClick()
+        compose.onNodeWithTag("product-refresh").performClick()
         compose.onNodeWithText("暂无云资源").assertIsDisplayed()
     }
 

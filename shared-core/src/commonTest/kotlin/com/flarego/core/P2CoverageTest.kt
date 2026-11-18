@@ -92,16 +92,16 @@ class P2CoverageTest {
         (r2Registrations().map { it.policy.key } + r2ConfigurationRegistrations().map { it.policy.key } +
             r2DomainRegistrations().map { it.policy.key } + r2SippyRegistrations().map { it.policy.key } +
             r2JobRegistrations().map { it.policy.key } + r2MetricsRegistrations().map { it.policy.key } +
-            r2NotificationRegistrations().map { it.policy.key } + kvRegistrations().map { it.policy.key } + d1Registrations().map { it.policy.key }).toSet()
+            r2NotificationRegistrations().map { it.policy.key } + kvRegistrations().map { it.policy.key } + d1Registrations().map { it.policy.key } + registrarRegistrations().map { it.policy.key }).toSet()
 
     private fun checkRegistry(actual:JsonObject,rows:List<Map<String,String>>,manifest:JsonObject) {
         denominator(rows)
         val reviewed=expectedIds(rows)+reviewedLaterBatchIds()
         assertEquals(reviewed,actual.keys,"Missing route or unreviewed extra action (including writes)")
         assertEquals(reviewed.size,actual.size)
-        // Current131 = historical69 + A10 + B20 + C8 + KV12 + D1 addition12.
-        assertEquals(131,reviewed.size,"The current reviewed registry is exactly 131 operations")
-        assertEquals(62,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
+        // Current132 = historical69 + A10 + B20 + C8 + KV12 + D1 addition12 + Registrar1.
+        assertEquals(132,reviewed.size,"The current reviewed registry is exactly 132 operations")
+        assertEquals(63,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
         assertEquals(69,actual.values.count { it.jsonObject.text("semantics")=="WRITE" },"Exact current WRITE count")
         val p1=json("docs/cloudflare-audit/p1-runtime-support-2026-10-16.json").getValue("operations").jsonObject
         val candidateIds=rows.map { it.getValue("operation_id") }.toSet()

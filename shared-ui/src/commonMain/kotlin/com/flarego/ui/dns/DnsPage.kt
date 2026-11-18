@@ -5,11 +5,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.dns.*
 import com.flarego.core.model.*
+import com.flarego.ui.Notice
+import com.flarego.ui.SectionCard
 import kotlinx.serialization.json.*
 
 @Composable
@@ -34,22 +37,51 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
             else DnsFormDraft(state.detail?.type ?: "A", state.detail?.name ?: "@", state.detail?.fields ?: JsonObject(emptyMap())))
     }
     Column(modifier.fillMaxSize()) {
-        if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(12.dp).testTag("dns-demo-notice"))
-        if (state.fromCache && !state.loading) Text("正在显示本地缓存，修改前需重新核实。",
-            Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag("dns-cache-notice"), style = MaterialTheme.typography.labelMedium)
-        if (state.loading && state.observedAtMs==null) LinearProgressIndicator(Modifier.fillMaxWidth())
-        state.error?.let { Text(it, Modifier.padding(12.dp).testTag("dns-page-error"), color = MaterialTheme.colorScheme.error) }
+        if (state.demo) Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp).testTag("dns-demo-notice")) {
+            Notice("示例 · 未调用云 API")
+        }
+        if (state.fromCache && !state.loading) Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+            Text(
+                "正在显示本地缓存，修改前需重新核实。",
+                Modifier.testTag("dns-cache-notice"),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (state.loading && state.observedAtMs == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        state.error?.let {
+            Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp).testTag("dns-page-error")) {
+                Notice(it)
+            }
+        }
         Box(Modifier.weight(1f)) {
             val prepared = state.preparedChange
             when {
-                scope == null -> Text("请选择当前账号的 Zone 后加载 DNS。", Modifier.padding(16.dp))
-                zoneName == null -> Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Text("等待供应商确认当前 Zone 完整名称；尚不能打开 DNS 表单。", Modifier.testTag("dns-zone-name-required"))
-                    OutlinedButton(onClick = { onIntent(DnsIntent.Load(scope, state.filter)) }) { Text("重新加载 Zone 与 DNS") }
+                scope == null -> Box(Modifier.padding(20.dp)) {
+                    Text("请选择当前账号的 Zone 后加载 DNS。", style = MaterialTheme.typography.bodyMedium)
+                }
+                zoneName == null -> Column(
+                    Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "等待供应商确认当前 Zone 完整名称；尚不能打开 DNS 表单。",
+                        Modifier.testTag("dns-zone-name-required"),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedButton(onClick = { onIntent(DnsIntent.Load(scope, state.filter)) }) {
+                        Text("重新加载 Zone 与 DNS")
+                    }
                 }
                 batchOpen && batch != null && batchState != null -> Column(Modifier.fillMaxSize()) {
-                    OutlinedButton(onClick = { batch.onIntent(DnsBatchIntent.Cancel); batchOpen = false },
-                        modifier = Modifier.padding(horizontal = 12.dp).testTag("dns-close-batch")) { Text("返回单条 DNS") }
+                    Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                        OutlinedButton(
+                            onClick = { batch.onIntent(DnsBatchIntent.Cancel); batchOpen = false },
+                            modifier = Modifier.testTag("dns-close-batch"),
+                        ) {
+                            Text("返回单条 DNS")
+                        }
+                    }
                     DnsBatchPanel(scope, batchState, batch::onIntent, Modifier.weight(1f), recordsScope = scope, records = state.rows)
                 }
                 prepared != null -> {
@@ -61,26 +93,50 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
                         onConfirm = { if (writable) onIntent(DnsIntent.Confirm(prepared.id, prepared.revision)) },
                         onBack = { onIntent(DnsIntent.BackToDraft) }, onCancel = { onIntent(DnsIntent.Cancel) },
                         fields = previewFields(prepared.before, prepared.after),
-                    ) else Column(Modifier.padding(16.dp)) {
-                        Text("预览已失效或上一操作尚未核对，请返回后重新检查。")
-                        OutlinedButton(onClick = { onIntent(DnsIntent.BackToDraft) }) { Text("返回编辑") }
+                    ) else Column(
+                        Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("预览已失效或上一操作尚未核对，请返回后重新检查。", style = MaterialTheme.typography.bodyMedium)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            TextButton(onClick = { onIntent(DnsIntent.BackToDraft) }) { Text("返回编辑") }
+                        }
                         DnsTaskSummary(task, onIntent)
                     }
                 }
-                mode != null && unsettled -> Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+                mode != null && unsettled -> Column(
+                    Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     DnsTaskSummary(task, onIntent)
-                    OutlinedButton(onClick = { onIntent(DnsIntent.Cancel) }) { Text("取消编辑") }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = { onIntent(DnsIntent.Cancel) }) { Text("取消编辑") }
+                    }
                 }
                 mode == DnsWriteMode.DELETE -> Column(
-                    Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Modifier
+                        .fillMaxSize()
+                        .safeDrawingPadding()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     Text("删除 DNS 记录", style = MaterialTheme.typography.titleLarge)
-                    Text("Zone：${state.zoneName}\n记录：${state.detail?.name.orEmpty()}\n记录 ID：${state.editingRecordId.orEmpty()}")
-                    Text("删除可能中断依赖该记录的服务。先预览，再单独确认。", color = MaterialTheme.colorScheme.error)
-                    Button(enabled = writable && state.editingRecordId != null,
+                    SectionCard {
+                        Text("Zone：${state.zoneName}\n记录：${state.detail?.name.orEmpty()}\n记录 ID：${state.editingRecordId.orEmpty()}", style = MaterialTheme.typography.bodyMedium)
+                        Text("删除可能中断依赖该记录的服务。先预览，再单独确认。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        enabled = writable && state.editingRecordId != null,
                         onClick = { onIntent(DnsIntent.Preview(null, DnsWriteMode.DELETE, state.editingRecordId)) },
-                        modifier = Modifier.fillMaxWidth().testTag("dns-delete-preview")) { Text("预览删除") }
-                    OutlinedButton(onClick = { onIntent(DnsIntent.Cancel) }, modifier = Modifier.fillMaxWidth()) { Text("取消") }
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth().testTag("dns-delete-preview"),
+                    ) {
+                        Text("预览删除")
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = { onIntent(DnsIntent.Cancel) }) { Text("取消") }
+                    }
                 }
                 mode != null -> DnsRecordForm(draft, zoneName,
                     onDraftChange = { value -> onIntent(DnsIntent.DraftInvalidated); draft = value },
@@ -98,17 +154,6 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
                 else -> DnsRecordsBody(state, writable, task, onIntent, if (batch != null) ({ batchOpen = true }) else null, managementActions)
             }
         }
-    }
-}
-
-@Composable
-internal fun DnsTaskSummary(task: OperationTask?, onIntent: (DnsIntent) -> Unit) {
-    task ?: return
-    Text("操作状态：${task.state}\n${task.safeDetail}", Modifier.testTag("dns-task-status"))
-    if (task.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED, TaskState.RECONCILING)) {
-        Text("结果尚未确定；只读核对，不重复发送。")
-        OutlinedButton(enabled = task.state != TaskState.RECONCILING, onClick = { onIntent(DnsIntent.Reconcile(task.id)) },
-            modifier = Modifier.fillMaxWidth().testTag("dns-task-reconcile")) { Text("只读核对结果") }
     }
 }
 

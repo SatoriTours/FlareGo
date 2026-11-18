@@ -50,12 +50,27 @@ class CompactDesignUiTest {
 
     @Test fun connectionUsesAnIndependentScreenAndNeverShowsCredentials() {
         var cancelled = 0
-        content { ConnectionDialog({ cancelled++ }) }
-        compose.onNodeWithTag("oauth-screen").assertWidthIsAtLeast(300.dp).assertHeightIsAtLeast(500.dp)
+        val state = androidx.compose.runtime.mutableStateOf(
+            com.flarego.core.application.connection.TokenConnectionStatus(),
+        )
+        val connection = object : com.flarego.ui.TokenConnection {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow(state.value)
+            override fun submit(token: String) {}
+            override fun retry() {}
+            override fun loadMore() {}
+            override fun selectAccount(accountId: String) {}
+            override fun useAccountId(accountId: String) {}
+            override fun cancel() { cancelled++ }
+        }
+        content { com.flarego.ui.TokenConnectionDialog({}, connection) }
+        compose.onNodeWithTag("token-screen").assertWidthIsAtLeast(300.dp).assertHeightIsAtLeast(500.dp)
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onNodeWithText("CF").assertDoesNotExist()
-        capture("connection", "oauth-screen")
-        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithTag("token-existing").performScrollTo().performClick()
+        // Exactly one field in the paste step: the masked Token input. No pre-filled or legacy credential.
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+        compose.onNodeWithTag("token-field").assertIsDisplayed()
+        capture("connection", "token-screen")
+        compose.onNodeWithContentDescription("取消").performClick()
         compose.runOnIdle { assertEquals(1, cancelled) }
     }
 

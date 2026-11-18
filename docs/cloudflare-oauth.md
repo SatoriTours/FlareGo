@@ -1,10 +1,27 @@
-# Cloudflare OAuth 接入
+# Cloudflare 接入：API Token（OAuth 已停用，本文保留历史）
+
+> **现状（2026-11-15，用户明确要求）**：App **只支持 API Token**。OAuth 不再是默认或高级入口：
+> 构建已移除 OAuth Client ID／回调地址注入、App Link 注册、回调 `code/state` 处理与授权界面，
+> 因此本文件以下内容全部是**历史记录**，不代表当前可用能力。任何"授权按钮被禁用""重新授权补齐权限""改用 OAuth 授权"的描述都已失效。
+>
+> **旧安装迁移**：旧版保存的 OAuth 记录带 `flarego-oauth-v1:` 前缀，升级后可被识别：
+> - 账号名称与本地记录保留，账号页标记「需要 Token」，账单页说明"旧版 OAuth 授权已停用"。
+> - App **不再刷新、不再请求**旧 OAuth 凭据；该格式也**不会被当作 Token 字符串发送**（存储层直接拒绝）。
+> - 用户在同一账号上重新连接并只读验证新的 API Token 后，凭据被**补偿式替换**：加密凭据与本地账号行是两个存储，App 先写凭据（失败即回滚原值，新建账号则删除新密文），再写账号行；普通失败/取消保留原凭据与账号行。
+> - **不承诺跨存储原子性**：两步之间进程被杀时，可能出现「新凭据已存、账号行仍旧」。恢复方式是重新连接（再次提交会同时写两处）；孤儿凭据没有对应账号行，不会被读取。回滚若本身失败，App 会报告该状态，不声称旧凭据已恢复。
+> - **持久提交门禁**：每次凭据提交先在本地 SQLite 的 `credential_gate` 表内**用事务确认**写入 `PENDING`（携带唯一 operationId 与 accountId），确认成功才触碰 Keystore 里的凭据；凭据与账号行都写入后，仅当同一 operation 的 `release` 被事务确认删除，才发布 SAVED 并启用。任何时刻读取到 `PENDING`/`BLOCKED`/损坏/读错都 **fail-closed**：凭据不交出、产品不发请求、写证明链拿不到凭据（不只是 UI 提示）。进程在提交中被杀不会自动解除门禁，重新连接并完成一次确认提交才解锁；`release` 失败或结果未知时保持 blocked 并报 UNCERTAIN。旧安装没有门禁记录时按原有 Token 兼容（视为无门禁）；旧 OAuth 记录依旧需要 Token。
+> - **保存结果三态**（`SAVED / NOT_SAVED / STATE_UNCERTAIN`）：`NOT_SAVED` 表示已恢复到连接前状态、可重试；`STATE_UNCERTAIN` 表示可能已写入部分内容，App 会**失败关闭**——丢弃本次 Token、不自动重试、该账号按「需要重新配置」处理并停止发起请求，直到重新连接确认。写入抛异常不会被当作"未写入"（SharedPreferences 先改内存后 commit），因此所有抛错路径都会先尝试受保护补偿。
+> - 断开仍只删本机凭据；云端 Token 由用户自行在 Cloudflare 控制台吊销。
+>
+> **Token 能力边界**：按凭据类型决定。Token 可尝试全部已登记只读目录（含账号账单历史与 Registrar 只读搜索），单个产品 403 只报该产品；写入仍需既有 verify／Token details／permission-group／owner 证明链。发票 PDF／Alpha 受限用量不在范围。真实云验收仍未完成。
+
+## 历史：一次只读授权（OAuth，已停用）
 
 ## 一次只读授权（当前方案）
 
 权限 ID 来自维护者提供的 FlareGo OAuth 客户端范围截图，已包含准确 ID，运行时不再查询 `/oauth/scopes`，也不再执行基础授权后追加产品授权。
 
-固定请求范围由 `CloudflareOAuthReadProfile` 唯一维护：
+固定请求范围由 `CloudflareOAuthReadProfile` 唯一维护，共七项，全部来自客户端范围截图已确认的 ID；未经核实的 scope 一律不请求：
 
 ```text
 account-settings.read
@@ -16,17 +33,42 @@ workers-r2.read
 offline_access
 ```
 
+**`invalid_scope` 的处理**：若客户端不允许上述任一范围，Cloudflare 会以 `invalid_scope` 拒绝授权。连接页展示可执行说明（指明 App 只请求这七项、请在 OAuth 客户端核对后重新授权），不使用"缺少某项你找不到的权限"这类断言。"仅使用基础只读范围继续"的次要入口只在**存在更窄请求**（即本次比基础范围多请求了额外 scope）时出现；当前请求集等于基础集，因此该按钮不出现，避免重复同一个必然失败的授权。
+
+2026-11-09 更正：此前本节写有"已确认 `billing.read`"与"用七项基础范围降级"的结论，均未获证实。用户在其 OAuth 客户端搜索 Billing 无任何结果，故 `billing.read` 已从默认请求中移除（见下节），账单产品也不再声明为可读。
+
 首次连接和旧账号重新授权都只发起一次 Authorization Code + PKCE S256 浏览器授权。回调换取令牌后读取账号，完整列表只有一个账号时自动验证并保存，多账号时由用户选择。账号验证通过才替换原连接凭据；取消、拒绝、旧回调和验证失败不覆盖原连接。进程丢失 PKCE 会话时提示重新开始，不静默返回总览，不接受旧授权码。
 
 令牌响应明确返回 scope 时，必须包含本次全部请求范围，否则拒绝保存；根据 OAuth 2.0 RFC 6749 §5.1，响应省略 scope 表示与请求范围一致。续期不会升级旧授权，旧版基础权限账号必须重新授权。请求范围和令牌响应检查不是实际产品 API 可读的证明，仍需真实云验证。
 
-本方案不申请 D1、账单、Workers 内容或写权限。正式应用的 D1/账单入口显示当前未支持，不发送目录/后台加载/旧账单接口请求，不计入刷新失败；演示和已有隔离合成适配器保留独立测试范围。总览正常刷新四类目录（域名、Workers、KV、R2），DNS 在域名内读取。
+本方案不申请 D1、Workers 内容或写权限，**也不申请任何账单 scope**（见下节"账单读取（Billing）权限现状"）。D1 与账单入口显示当前未启用，不发送目录/后台加载请求，不计入刷新失败；演示连接仍按全部产品提供示例数据，已有连接与已有数据不受影响。总览正常刷新四类目录（域名、Workers、KV、R2），DNS 在域名内读取。
+
+域名注册搜索已实现**只读 discovery**（代码与 UI 就绪，默认关闭）：`GET /accounts/{id}/registrar/domain-search`，入口在域名页底部「搜索并注册域名」，结果只是缓存建议，页面固定提示「搜索结果为缓存数据，注册前需在官方控制台确认可用性与价格」。因 Registrar 的 OAuth scope ID 未确认（见下节），真实账号走「域名搜索需要具备 Registrar 读取权限」分支且**不发请求**；演示连接返回三条示例候选。注册（`POST /registrar/registrations`）未实现，App 内不会提交注册、不会扣款。
 
 Actions 只注入公开 Client ID 与回调 URL，不再注入 `flarego.oauthScopes`，历史 Gradle scope 配置不再控制请求。缺少客户端配置时仍禁用授权入口；不会回退到手动 Token。客户端七项范围截图不等于真实接口验收通过，实际浏览器授权、App Links、续期和支持产品读取仍需签名 APK 验证。
 
+## 历史：账单读取（Billing）权限调查（OAuth 已停用，结论仅存参考）
+
+- 官方 API 参考确认的账单读取接口路径与权限名（**这些是 API Token 的权限名，不等于 OAuth scope ID**）：
+  - `GET /accounts/{account_id}/billing/history`（Accepted Permissions: `Billing Write` 或 `Billing Read`）— <https://developers.cloudflare.com/api/resources/billing/subresources/history/methods/list/>
+  - `GET /accounts/{account_id}/billing/profile`、`POST /accounts/{account_id}/billing/profile` — <https://developers.cloudflare.com/api/resources/billing/subresources/profiles/methods/get/>
+  - 发票：`PATCH /accounts/{account_id}/invoices`（Invoices 资源，未公开只读列表）— <https://developers.cloudflare.com/api/resources/accounts/subresources/invoices/>
+  - 用量（Alpha/Restricted）：`GET /accounts/{account_id}/billable-usage/info`、`GET /accounts/{account_id}/billable-usage`、v2 `GET /accounts/{account_id}/billable/usage` — <https://developers.cloudflare.com/api/resources/billing/>
+- OAuth 侧是否提供对应 scope、以及其准确点号 ID，**尚未确认**：用户在其 OAuth 客户端的 scope 搜索中查 "Billing" 无任何结果；权威来源是 `GET /oauth/scopes`（<https://developers.cloudflare.com/api/resources/iam/subresources/oauth_scopes/methods/list/>），但它需要认证，本调查未使用任何凭据读取，因此该 ID 记为未知，不猜测。
+- 因此 App **不请求** 账单 scope：`CloudflareOAuthReadProfile.products` 不含 `ProductKey.BILLING`，真实账号不发送账单请求；账单页显示「账单读取尚未启用」，说明只请求了七项已确认范围、准确范围尚未确认，并提供官方控制台入口。若某次读取真的被云端拒绝（`PERMISSION_REQUIRED`/`CREDENTIAL_EXPIRED`），卡片会**原样显示该错误**并提供「重新授权」；未确认能力的静态情况下不显示重新授权按钮，避免让用户循环授权。
+- 未来若确认了准确 ID：只改 `CloudflareOAuthReadProfile` 的请求范围与 `products`，仍需真实账号验收，不能因为"改了常量"就宣称账单可用。
+
 以下带日期的章节保留历史记录；与范围配置有关的当前行为以本节为准。
 
-## 仅跳转授权的连接流程（2026-10-31）
+## 历史：Registrar（域名注册）权限调查（OAuth 已停用，结论仅存参考）
+
+- Registrar 的 API 端点在官方参考中确认存在，例如只读搜索 `GET /accounts/{account_id}/registrar/domain-search` 与注册 `POST /accounts/{account_id}/registrar/registrations` — <https://developers.cloudflare.com/api/resources/registrar/>。官方「Registrar API」指南给出的前提是 **API Token** 具备 Registrar 权限，并需要账号已配置账单资料等 — <https://developers.cloudflare.com/registrar/registrar-api/>。
+- 权限名侧：API Token 创建界面提供 `Registrar Domains: Admin` 与 `Registrar Sandbox Domains: Admin` 这类权限项（社区 issue 亦记录该界面现状与文档兼容性表不一致）— <https://github.com/cloudflare/cloudflare-docs/issues/32939>。**这只证明 Token 权限名存在，不等于 OAuth scope ID。**
+- OAuth 侧：用户在 Manage Account → OAuth clients 的 scope 选择中确实能看到 Registrar Domains Admin/Read 与 Registrar Sandbox Domains Admin/Read 条目，但**准确的点号 scope ID 未确认**；OAuth 客户端会按 `GET /oauth/scopes` 校验 scope 字符串，猜错会被拒绝（<https://developers.cloudflare.com/api/resources/iam/subresources/oauth_scopes/methods/list/>，需认证，本调查未用凭据读取）。早先文档中"Registrar 不提供 OAuth"的说法同样未获证实，已删除。
+- 当前结论：**App 不请求 Registrar scope**（`CloudflareOAuthReadProfile.registrarScope` 为 `null`），真实账号的域名搜索走「域名搜索需要具备 Registrar 读取权限」分支且不发任何请求（API Token 路径下由该 Token 的实际权限决定），只提供跳官方控制台；演示连接返回三条示例候选。这属于能力边界，不是已支持功能。
+- 待确认项与后续：需要在 `GET /oauth/scopes` 或 OAuth 客户端里取得 Registrar 只读范围的准确点号 ID，填入 `registrarScope` 后重新授权，并用真实账号验证 domain-search 是否被授权（"填了常量"不等于可用）。若 OAuth 侧无法提供该范围，App 内真实搜索无法通过 OAuth 实现；是否另设仅限 Registrar 的 API Token 连接需单独评审，当前不做，也不新增 Global API Key 支持。
+
+## 历史：仅跳转授权的连接流程（OAuth，2026-10-31，已停用）
 
 用户已要求移除手动 Token 模式，账号名称和 Account ID 也不再由用户填写。
 采用现有原生 OAuth 与账号接口，避免引入登录后端或额外权限。
@@ -46,7 +88,7 @@ Actions 只注入公开 Client ID 与回调 URL，不再注入 `flarego.oauthSco
 
 代码提供 Android 的 Authorization Code + PKCE S256 授权、HTTPS App Link 回调、账号发现/验证、Keystore 加密保存及 refresh token 续期。已保存的 API Token 保持读取兼容；新增连接仅支持 OAuth，不提供手动凭据输入。维护者已提供 OAuth Client ID，Android Actions 工作流会在构建前注入公开客户端配置；真实云授权和设备回跳仍未验证。缺少配置的其他构建会禁用按钮，不模拟授权成功。
 
-## GitHub Actions 官方构建配置
+## 历史：GitHub Actions OAuth 构建配置（已删除，勿再注入）
 
 `.github/workflows/android.yml` 的 `Configure public Cloudflare OAuth` 步骤在所有 Gradle 构建前追加以下公开配置到该次 CI checkout 的 `gradle.properties`，Debug 检查和签名 Release 构建均使用它们；无需修改本机 Gradle 用户配置，也不读取 Client Secret：
 
@@ -74,7 +116,7 @@ App 将已知错误码映射为明确提示，不显示原始 `error_description
 
 授权说明/账号选择页不显示密钥，允许截图；已移除 API Token 输入页，其他敏感资源编辑器的保护不受影响。
 
-## 维护者配置（不是每个 App 用户都要做）
+## 历史：OAuth 客户端维护者配置（不再需要）
 
 1. 在 Cloudflare 的 Manage Account → OAuth clients 注册 FlareGo 客户端。选择 `authorization_code` 与 `refresh_token` grant、`code` response、`token_endpoint_auth_method=none`；移动端必须使用 PKCE S256，不创建或嵌入 Client Secret。
 2. 登记维护者控制的精确 HTTPS 回调，例如 `https://login.example.org/cloudflare/callback`（仅示例，不能直接用于生产）。本实现不使用自定义 scheme 或本地回调服务。

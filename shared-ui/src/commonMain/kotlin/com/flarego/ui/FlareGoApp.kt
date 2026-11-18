@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -41,8 +42,6 @@ import com.flarego.ui.zones.ZonePage
 import kotlinx.coroutines.launch
 
 private sealed interface DialogState {
-    data object Connect : DialogState
-
     data object Create : DialogState
 
     data class Edit(
@@ -62,7 +61,9 @@ private sealed interface DialogState {
 
     data class Disconnect(val connection: Connection) : DialogState
 
-    data class Purchase(val name: String, val price: String) : DialogState
+    /** Default add-account flow: verified API Token, never the OAuth handoff. */
+    data object TokenConnect : DialogState
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,8 +81,11 @@ fun FlareGoApp(
     panelContext: com.flarego.ui.management.ManagementPanelContext? = null,
     r2Browser: com.flarego.ui.r2.R2Browser? = null,
     kvBrowser: com.flarego.ui.kv.KvBrowser? = null,
-    oauthConnection: OAuthConnection? = null,
+    tokenConnection: TokenConnection? = null,
     d1Browser: com.flarego.ui.d1.D1Browser? = null,
+    registrar: com.flarego.core.application.registrar.RegistrarController? = null,
+    /** True for a legacy OAuth record: it keeps its row and must be reconfigured with a Token. */
+    needsToken: (Connection) -> Boolean = { false },
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
@@ -121,25 +125,16 @@ fun FlareGoApp(
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     var dialog by remember(connectionDraft) {
-        mutableStateOf<DialogState?>(if (connectionDraft.isOpen) DialogState.Connect else null)
+        mutableStateOf<DialogState?>(
+            if (connectionDraft.isOpen) DialogState.TokenConnect else null,
+        )
     }
-    val authorizationState = oauthConnection?.state?.collectAsState()?.value
-    val lostAuthorization = authorizationState?.let {
-        it.reauthorizationRequired && !it.authorized && it.error != null
-    } == true
-    // A cold callback has no retained dialog draft. Also observe callbacks arriving after
-    // composition; do not rely only on the initial remember(connectionDraft) value.
-    LaunchedEffect(oauthConnection, lostAuthorization) {
-        if (lostAuthorization && dialog == null) {
-            connectionDraft.isOpen = true
-            dialog = DialogState.Connect
-        }
-    }
+    // The Registrar page owns its own search field; rebinding also drops any stale result.
+    LaunchedEffect(registrar, account) { registrar?.bind(account) }
     val searchFlags = remember(account) { mutableMapOf<Page, MutableState<Boolean>>() }
     val searchQueries = remember(account) { mutableMapOf<Page, MutableState<String>>() }
-    var searchOpen by searchFlags.getOrPut(state.page) { mutableStateOf(state.page == Page.BUY && state.selected?.demo == true) }
+    var searchOpen by searchFlags.getOrPut(state.page) { mutableStateOf(false) }
     var query by searchQueries.getOrPut(state.page) { mutableStateOf("") }
-    var searched by remember(state.page, state.selected?.id) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
     LaunchedEffect(controller) { controller.start() }
@@ -184,14 +179,13 @@ fun FlareGoApp(
             !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
             !(kvBrowser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.KV) &&
             !(d1Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.D1) &&
-            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.BUY, Page.JOBS)
+            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.JOBS)
     LaunchedEffect(searchOpen, searchEnabled) {
         if (searchOpen && searchEnabled) focus.requestFocus()
     }
     fun closeSearch() {
         searchOpen = false
         query = ""
-        searched = false
         keyboard?.hide()
         focusManager.clearFocus()
     }
@@ -226,12 +220,15 @@ fun FlareGoApp(
         else navigateBack()
     }
     val dismiss = {
-        if (dialog is DialogState.Connect) { oauthConnection?.cancel(); connectionDraft.clear() }
+        if (dialog is DialogState.TokenConnect) { tokenConnection?.cancel(); connectionDraft.clear() }
         dialog = null
     }
     val openConnection = {
-        connectionDraft.isOpen = true
-        dialog = DialogState.Connect
+        // API Token is the only supported connection flow.
+        if (tokenConnection != null) {
+            connectionDraft.isOpen = true
+            dialog = DialogState.TokenConnect
+        }
     }
 
     FlareGoTheme {
@@ -349,16 +346,16 @@ fun FlareGoApp(
                     ) {
                         Row(
                             Modifier.fillMaxWidth()
-                                .heightIn(min = if (detail) 48.dp else 56.dp)
-                                .padding(horizontal = 8.dp),
+                                .heightIn(min = 56.dp)
+                                .padding(end = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             if (detail)
                                 IconButton(
                                     onClick = ::navigateBack,
-                                    modifier = Modifier.size(48.dp),
+                                    modifier = Modifier.size(44.dp),
                                 ) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", modifier = Modifier.size(20.dp))
                                 }
                             Text(
                                 when (state.page) {
@@ -370,33 +367,47 @@ fun FlareGoApp(
                                     Page.ACCOUNTS -> "账号"
                                     else -> state.page.title
                                 },
-                                modifier = Modifier.weight(1f).padding(start = if (detail) 0.dp else 12.dp)
+                                modifier = Modifier.weight(1f).padding(start = if (detail) 0.dp else 20.dp)
                                     .then(if (managementZone != null) Modifier.testTag("zone-detail-name") else Modifier),
                                 style = if (detail) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
-                            TextButton(
-                                onClick = { keyboard?.hide(); scope.launch { drawer.open() } },
-                                modifier = Modifier.widthIn(max = if (detail) 88.dp else 110.dp)
-                                    .semantics { contentDescription = "切换云账号" },
-                                contentPadding = PaddingValues(horizontal = 4.dp),
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier
+                                    .heightIn(min = 32.dp)
+                                    .semantics { contentDescription = "切换云账号" }
+                                    .clickable { keyboard?.hide(); scope.launch { drawer.open() } },
                             ) {
-                                Text(state.selected?.name ?: "云账号", maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Icon(Icons.Default.ExpandMore, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            if (updateState?.available != null)
-                                IconButton(
-                                    onClick = { controller.navigate(Page.ACCOUNTS) },
-                                    modifier = Modifier.size(48.dp),
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Icon(
-                                        Icons.Default.SystemUpdate,
-                                        "发现应用更新",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(21.dp),
+                                        Icons.Default.Cloud,
+                                        null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        state.selected?.name ?: "云账号",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.widthIn(max = 88.dp),
+                                    )
+                                    Spacer(Modifier.width(2.dp))
+                                    Icon(
+                                        Icons.Default.ExpandMore,
+                                        null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
+                            }
                             if (searchEnabled)
                                 IconButton(
                                     onClick = {
@@ -404,58 +415,128 @@ fun FlareGoApp(
                                             closeSearch()
                                         } else searchOpen = true
                                     },
-                                    modifier = Modifier.size(48.dp),
+                                    modifier = Modifier.size(44.dp),
                                 ) {
                                     Icon(
                                         if (searchOpen) Icons.Default.Close
                                         else Icons.Default.Search,
                                         if (searchOpen) "取消搜索" else "搜索",
-                                        modifier = Modifier.size(21.dp),
+                                        modifier = Modifier.size(20.dp),
                                     )
                                 }
                             if (state.selected == null) {
-                                IconButton(onClick = openConnection) {
-                                    Icon(Icons.Default.Add, "连接账号")
+                                IconButton(onClick = openConnection, modifier = Modifier.size(44.dp)) {
+                                    Icon(Icons.Default.Add, "连接账号", modifier = Modifier.size(20.dp))
                                 }
                             } else if(activeModule==null) when (state.page) {
                                 Page.DOMAINS ->
                                     IconButton(onClick = {
                                         if (management != null) management.zones.onIntent(ZoneIntent.BeginCreate)
                                         else controller.navigate(Page.BUY)
-                                    }, modifier = Modifier.testTag("zone-create")) {
-                                        Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名")
+                                    }, modifier = Modifier.size(44.dp).testTag("zone-create")) {
+                                        Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名", modifier = Modifier.size(20.dp))
                                     }
                                 Page.RESOURCES -> if (state.resourceKind.product() in state.supportedProducts && !(
                                     (r2Browser != null && state.resourceKind == ResourceKind.R2) ||
                                     (kvBrowser != null && state.resourceKind == ResourceKind.KV) ||
                                     (d1Browser != null && state.resourceKind == ResourceKind.D1)))
-                                    IconButton(onClick = { dialog = DialogState.Create }) {
-                                        Icon(Icons.Default.Add, "创建资源")
+                                    IconButton(onClick = { dialog = DialogState.Create }, modifier = Modifier.size(44.dp)) {
+                                        Icon(Icons.Default.Add, "创建资源", modifier = Modifier.size(20.dp))
                                     }
                                 Page.DNS ->
                                     IconButton(
                                         onClick = {
                                             if (management != null) managementZone?.let { management.zones.onIntent(ZoneIntent.Open(it.ref)) }
                                             else state.domain?.let { dialog = DialogState.Edit(it, null) }
-                                        }
+                                        }, modifier = Modifier.size(44.dp)
                                     ) {
-                                        Icon(Icons.Default.Add, if (management != null) "刷新 Zone 详情" else "新增 DNS 记录")
+                                        Icon(Icons.Default.Add, if (management != null) "刷新 Zone 详情" else "新增 DNS 记录", modifier = Modifier.size(20.dp))
                                     }
                                 Page.ACCOUNTS ->
-                                    IconButton(onClick = openConnection) {
-                                        Icon(Icons.Default.Add, "连接账号")
+                                    IconButton(onClick = openConnection, modifier = Modifier.size(44.dp)) {
+                                        Icon(Icons.Default.Add, "连接账号", modifier = Modifier.size(20.dp))
                                     }
+                                // The Registrar page owns its own search; a product refresh has no
+                                // meaning here, so only back navigation and the account chip remain.
+                                Page.BUY -> Unit
                                 else ->
-                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading && (state.page != Page.BILLING || ProductKey.BILLING in state.supportedProducts), modifier = Modifier.testTag("toolbar-refresh")) {
+                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading && (state.page != Page.BILLING || ProductKey.BILLING in state.supportedProducts), modifier = Modifier.size(44.dp).testTag("toolbar-refresh")) {
                                         if (state.loading) CircularProgressIndicator(
-                                            modifier = Modifier.size(21.dp).semantics { contentDescription = "正在刷新" },
+                                            modifier = Modifier.size(20.dp).semantics { contentDescription = "正在刷新" },
                                             strokeWidth = 2.dp,
                                         ) else Icon(
                                             Icons.Default.Refresh,
                                             "刷新",
-                                            modifier = Modifier.size(21.dp),
+                                            modifier = Modifier.size(20.dp),
                                         )
                                     }
+                            }
+                            if (updateState?.available != null)
+                                IconButton(
+                                    onClick = { controller.navigate(Page.ACCOUNTS) },
+                                    modifier = Modifier.size(44.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.SystemUpdate,
+                                        "发现应用更新",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                        }
+                        val currentObservedAtMs = when (state.page) {
+                            Page.DOMAINS -> if (management != null) zonePageState.observedAtMs else state.products[ProductKey.ZONES]?.observedAtMs
+                            Page.RESOURCES -> state.products[state.resourceKind.product()]?.observedAtMs
+                            Page.BILLING -> state.products[ProductKey.BILLING]?.observedAtMs
+                            Page.OVERVIEW -> state.products.values.mapNotNull { it.observedAtMs }.maxOrNull()
+                            else -> null
+                        }
+                        val isCurrentFromCache = when (state.page) {
+                            Page.DOMAINS -> if (management != null) zonePageState.fromCache else state.products[ProductKey.ZONES]?.fromCache == true
+                            Page.RESOURCES -> state.products[state.resourceKind.product()]?.fromCache == true
+                            Page.BILLING -> state.products[ProductKey.BILLING]?.fromCache == true
+                            else -> false
+                        }
+                        val isCurrentPageLoading = when (state.page) {
+                            Page.DOMAINS -> if (management != null) zonePageState.loading else state.products[ProductKey.ZONES]?.loading == true
+                            Page.RESOURCES -> state.products[state.resourceKind.product()]?.loading == true
+                            Page.BILLING -> state.products[ProductKey.BILLING]?.loading == true
+                            else -> state.loading
+                        }
+                        val isListPageWithStatus = !detail && state.selected != null &&
+                            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.BILLING, Page.OVERVIEW)
+                        if (isListPageWithStatus) {
+                            if (currentObservedAtMs != null || isCurrentPageLoading) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 28.dp)
+                                        .padding(horizontal = 20.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(6.dp)
+                                            .background(
+                                                if (isCurrentPageLoading) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                                                CircleShape,
+                                            )
+                                    )
+                                    Text(
+                                        text = if (currentObservedAtMs != null) {
+                                            readStatusText(isCurrentFromCache, isCurrentPageLoading, observationTime(currentObservedAtMs))
+                                        } else {
+                                            "正在读取…"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            } else {
+                                Spacer(Modifier.height(28.dp))
                             }
                         }
                         if (searchOpen && searchEnabled)
@@ -467,7 +548,6 @@ fun FlareGoApp(
                                         when (state.page) {
                                             Page.DOMAINS -> "搜索域名"
                                             Page.DNS -> "搜索记录名称或内容"
-                                            Page.BUY -> "输入想注册的域名"
                                             Page.JOBS -> "搜索操作"
                                             else -> "搜索资源名称"
                                         }
@@ -485,7 +565,6 @@ fun FlareGoApp(
                                 keyboardActions =
                                     KeyboardActions(
                                         onSearch = {
-                                            searched = true
                                             keyboard?.hide()
                                             focusManager.clearFocus()
                                         }
@@ -494,14 +573,8 @@ fun FlareGoApp(
                                     Row {
                                         if (query.isNotEmpty()) IconButton(onClick = {
                                             query = ""
-                                            searched = false
                                             focus.requestFocus()
                                         }) { Icon(Icons.Default.Close, "清空搜索") }
-                                        if (state.page == Page.BUY) IconButton(onClick = {
-                                            searched = true
-                                            keyboard?.hide()
-                                            focusManager.clearFocus()
-                                        }) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "提交搜索") }
                                     }
                                 },
                             )
@@ -562,14 +635,17 @@ fun FlareGoApp(
                                         managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
                                     else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
-                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
+                                // A Zone list is not a registrar catalogue; this is the only entry to the
+                                // separate read-only search page, and it never implies a purchase.
+                                val openRegistrar = { controller.navigate(Page.BUY) }
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent,onRegisterDomain=openRegistrar)
                                 else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
                                     settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
                                     security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
-                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
+                                    selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent,onRegisterDomain=openRegistrar)
                             } else Column {
                                 if (state.productLoading) ProductStatus(state.products[ProductKey.ZONES],controller::refresh,{controller.loadMore(ProductKey.ZONES)})
-                                DomainsScreen(state, searchQuery, controller::openDomain)
+                                DomainsScreen(state, searchQuery, controller::openDomain, onRegisterDomain = { controller.navigate(Page.BUY) })
                             }
                             Page.RESOURCES ->
                                 ResourcesScreen(state, searchQuery, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
@@ -600,14 +676,79 @@ fun FlareGoApp(
                                     }
                                 }
                             Page.RESOURCE -> ResourceScreen(state) { openConsole(Page.RESOURCE) }
-                            Page.BILLING -> if (ProductKey.BILLING !in state.supportedProducts) Column {
-                                Notice("当前授权方案未支持账单读取")
-                                TextButton(onClick = { openConsole(Page.BILLING) }) { Text("在 Cloudflare 官方控制台查看") }
-                            } else if (state.productLoading) Column {
-                                Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.SpaceEvenly) {
-                                    TextButton(onClick = { controller.selectBillingSource(BillingSource.ACCOUNT_HISTORY) }) { Text("账号账单") }
-                                    TextButton(onClick = { controller.selectBillingSource(BillingSource.USER_HISTORY_LEGACY) }) { Text("用户账单（旧接口）") }
+                            Page.BILLING -> if (ProductKey.BILLING !in state.supportedProducts ||
+                                state.products[ProductKey.BILLING]?.error?.code in
+                                setOf(CloudFailureCode.PERMISSION_REQUIRED, CloudFailureCode.CREDENTIAL_EXPIRED)
+                            ) {
+                                // Two distinct causes share one card: the product was never granted, or
+                                // this authorization (e.g. the base-scope fallback) did not include
+                                // billing.read. The provider error stays visible, never swallowed.
+                                val billingError = state.products[ProductKey.BILLING]?.error
+                                Column(
+                                    Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
+                                ) {
+                                    SectionCard(Modifier.fillMaxWidth().testTag("billing-permission-card")) {
+                                        Icon(
+                                            Icons.Default.CloudQueue,
+                                            null,
+                                            Modifier.size(32.dp),
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                        // An empty product set means this row is a legacy OAuth record:
+                                        // OAuth is retired, so nothing is requested for it at all.
+                                        val legacyAuth = state.supportedProducts.isEmpty()
+                                        Text(
+                                            if (legacyAuth) "该连接需要配置 API Token" else "账单读取尚未启用",
+                                            style = MaterialTheme.typography.titleMedium,
+                                        )
+                                        if (billingError != null) {
+                                            // A real provider refusal is reported as-is; only then does
+                                            // reconnecting make sense.
+                                            Muted("当前连接读取账单时被 Cloudflare 拒绝，准确的错误如下。")
+                                            billingError.publicMessage.takeIf { it.isNotBlank() }?.let { Muted(it) }
+                                        } else if (legacyAuth) {
+                                            Muted(
+                                                "旧版 OAuth 授权已停用，App 不会再刷新或请求它；请在该账号上重新连接并粘贴 API Token，" +
+                                                    "验证成功后会原子替换旧凭据，失败则保留现有记录。",
+                                            )
+                                        } else {
+                                            // A Token may read billing on demand; the token's own permission
+                                            // decides success, so no permission name is asserted here.
+                                            Muted(
+                                                "账单读取取决于该 API Token 的权限；若无权限请在官方页面为该 Token 勾选账单读取，" +
+                                                    "或直接使用控制台。App 不会猜测未确认的授权范围。",
+                                            )
+                                        }
+                                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (billingError != null) Button(
+                                                onClick = openConnection,
+                                                modifier = Modifier.fillMaxWidth().testTag("billing-reauthorize"),
+                                            ) {
+                                                Text("重新配置 Token")
+                                            }
+                                            OutlinedButton(
+                                                onClick = { openConsole(Page.BILLING) },
+                                                modifier = Modifier.fillMaxWidth().testTag("billing-open-console"),
+                                            ) {
+                                                Text("打开 Cloudflare 控制台")
+                                            }
+                                        }
+                                    }
                                 }
+                            } else if (state.productLoading) Column {
+                                CompactTabs(
+                                    labels = listOf(
+                                        BillingSource.ACCOUNT_HISTORY.name to "账号账单",
+                                        BillingSource.USER_HISTORY_LEGACY.name to "用户账单（旧接口）",
+                                    ),
+                                    selected = state.billingSource.name,
+                                    onSelect = { key ->
+                                        val source = BillingSource.valueOf(key)
+                                        controller.selectBillingSource(source)
+                                    },
+                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                                    tagPrefix = "billing-source-tab",
+                                )
                                 if (state.billingSource == BillingSource.USER_HISTORY_LEGACY) {
                                     BillingScreen(state) { openConsole(Page.BILLING) }
                                 } else {
@@ -624,16 +765,27 @@ fun FlareGoApp(
                                     openConnection,
                                     { dialog = DialogState.Disconnect(it) },
                                     { updater?.let { UpdatePanel(it) } },
+                                    needsToken = needsToken,
                                 )
                             Page.JOBS -> JobsScreen(state, searchQuery, reconcileTask)
-                            Page.BUY ->
-                                PurchaseScreen(
-                                    query,
-                                    searched,
-                                    state.selected?.demo == true,
-                                    { name, price -> dialog = DialogState.Purchase(name, price) },
-                                    { openConsole(Page.BUY) },
+                            Page.BUY -> if (registrar != null) {
+                                val registrarState by registrar.state.collectAsState()
+                                com.flarego.ui.registrar.DomainRegisterPage(
+                                    registrarState,
+                                    registrar::onIntent,
+                                    onOpenConsole = { openConsole(Page.BUY) },
+                                    demo = state.selected?.demo == true,
                                 )
+                            } else Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                                // No registrar wired: say so instead of showing a purchase flow
+                                // that has no search entry and cannot register anything.
+                                EmptyState(
+                                    title = "当前构建未接入域名搜索",
+                                    subtitle = "域名注册搜索需要包含 Registrar 只读能力的版本；可先到 Cloudflare 控制台搜索与注册。",
+                                    action = "打开 Cloudflare 控制台",
+                                    onAction = { openConsole(Page.BUY) },
+                                )
+                            }
                         }
                         }
                     }
@@ -641,7 +793,9 @@ fun FlareGoApp(
             }
         }
         when (val modal = dialog) {
-            DialogState.Connect -> ConnectionDialog(dismiss, oauthConnection)
+            DialogState.TokenConnect -> tokenConnection?.let { token ->
+                TokenConnectionDialog(dismiss, token)
+            }
             DialogState.Create ->
                 CreateResourceDialog(dismiss) {
                     dialog = null
@@ -676,11 +830,6 @@ fun FlareGoApp(
                 DisconnectDialog(modal.connection, dismiss) {
                     disconnect(modal.connection)
                     dialog = null
-                }
-            is DialogState.Purchase ->
-                PurchaseDialog(modal.name, modal.price, dismiss) {
-                    val op = controller.recordDemoPurchase(modal.name)
-                    dialog = DialogState.Result(op.status.label, op.detail)
                 }
             null -> Unit
         }

@@ -8,6 +8,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -579,9 +583,57 @@ class DnsManagementUiTest {
         compose.runOnIdle { zones.mutable.value = ZonePageState(account = account, selected = zone, error = "old-account-error") }
         compose.onNodeWithText("old-account-error").assertDoesNotExist()
     }
+    // Round-4 acceptance: the fixed 36dp type badge truncated CNAME to "C..." at fontScale 2.
+    // The badge must grow to keep the whole type readable and keep the row actions reachable.
+    private fun installPageLargeFont(port: TestDnsPagePort, widthDp: Int) {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                FlareGoTheme {
+                    Surface(Modifier.width(widthDp.dp).fillMaxHeight()) {
+                        val state by port.state.collectAsState()
+                        DnsPage(state, port::onIntent)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun assertTypeBadgeFullyReadable(type: String) {
+        val badge = compose.onNodeWithText(type, useUnmergedTree = true)
+        badge.assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        badge.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val layout = layouts.single()
+        // softWrap=false 下 didOverflowWidth/hasVisualOverflow 会按约束宽度永久为 true，
+        // 因此用“节点宽度 >= 实际行宽”判断是否被自身边界裁掉。
+        val lineWidth = layout.multiParagraph.getLineWidth(0)
+        assertTrue("类型徽标宽度应至少包含完整行文本", layout.size.width >= lineWidth)
+        assertTrue("类型徽标不应退化为 36dp 固定宽度", layout.size.width > 100f)
+    }
+
+    @Test fun dnsTypeBadgeKeepsFullTypeNameOnNarrowLargeFont() {
+        val port = pagePort(type = "CNAME")
+        port.mutable.value = port.state.value.copy(detail = null)
+        installPageLargeFont(port, 320)
+        assertTypeBadgeFullyReadable("CNAME")
+        compose.onNodeWithTag("dns-record-page-record").assertIsDisplayed()
+        compose.onNodeWithTag("dns-record-menu-page-record").assertIsDisplayed()
+    }
+
+    @Test fun dnsTypeBadgeKeepsFullTypeNameAtPhoneWidthLargeFont() {
+        val port = pagePort(type = "CNAME")
+        port.mutable.value = port.state.value.copy(detail = null)
+        installPageLargeFont(port, 411)
+        assertTypeBadgeFullyReadable("CNAME")
+        compose.onNodeWithTag("dns-record-page-record").assertIsDisplayed()
+        compose.onNodeWithTag("dns-record-menu-page-record").assertIsDisplayed()
+    }
+
 }
 
 /** Fake the documented port only; never pretend these intents reached a cloud API. */
+
 private class TestDnsPagePort(initial: DnsPageState) : DnsPagePort {
     val mutable = MutableStateFlow(initial)
     override val state: StateFlow<DnsPageState> = mutable

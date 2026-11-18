@@ -515,21 +515,6 @@ class AppController(
         }
     }
 
-    fun recordDemoPurchase(name: String): Operation {
-        val connection = requireConnection()
-        check(connection.demo)
-        val operation =
-            Operation(
-                Random.nextLong().toString(16),
-                connection.id,
-                "模拟注册 $name",
-                OperationStatus.SUCCESS,
-                "演示操作，无真实注册或扣款",
-            )
-        store.putOperation(operation)
-        mutable.update { it.copy(operations = store.operations()) }
-        return operation
-    }
 }
 
 fun safeMessage(error: Exception) =

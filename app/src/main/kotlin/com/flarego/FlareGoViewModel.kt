@@ -3,6 +3,12 @@ package com.flarego
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.flarego.core.application.connection.CredentialGateCoordinator
+import com.flarego.core.application.connection.CredentialGateStore
+import com.flarego.core.application.connection.CredentialSaveOutcome
+import com.flarego.core.application.connection.GateAttempt
+import com.flarego.core.application.connection.GateRelease
+import com.flarego.core.application.inventory.ProductAccess
 import com.flarego.core.application.inventory.ProductKey
 import com.flarego.core.application.AppController
 import com.flarego.core.application.operations.*
@@ -93,10 +99,70 @@ class FlareGoViewModel private constructor(
 
     /** Recoverable task metadata, consumed by the operation lifecycle work. */
     val operationStore = localDatabase.operationStore
-    private val oauthConfig = cloudflareOAuthConfig()
-    private val credentials = OAuthCredentialOwner.get(application, oauthConfig)
-    internal val oauthConnection = AndroidOAuthConnection(viewModelScope, oauthConfig, ::identity, ::saveOAuthConnection)
-    fun acceptOAuthCallback(value: String) = oauthConnection.acceptCallback(value)
+
+    /** Durable commit gate (SQLite, own table). Credentials never enter it. */
+    private val gateStore = AndroidCredentialGateStore(localDatabase.database)
+    private val gate: CredentialGateCoordinator = CredentialGateCoordinator(gateStore)
+    private val credentials = CredentialVaultOwner.run {
+        bindGate { id -> gate.isBlocked(id) }
+        get(application)
+    }
+
+    /** Cached credential kind per connection: capability decisions must not decrypt on every frame. */
+    private val credentialKinds = mutableMapOf<String, CredentialKind>()
+
+    /**
+     * Connections whose last commit result is unknown. They stay fail-closed until a new commit
+     * succeeds: removing the cache and re-reading TOKEN would silently re-enable a credential
+     * whose account row may not have been written.
+     */
+    private val uncertainCredentials = mutableSetOf<String>()
+
+    /** Connections whose durable gate is PENDING or BLOCKED, loaded once at startup. */
+    private val gatedConnections = mutableSetOf<String>()
+    private var gatesLoaded = false
+    private var gatesUnreadable = false
+
+    /**
+     * Reads the durable gate once, synchronously: a stale "connected" state would otherwise allow
+     * requests before the first gate refresh.
+     */
+    private fun ensureGatesLoaded() {
+        if (gatesLoaded) return
+        gatesLoaded = true
+        try {
+            store.connections().forEach { connection ->
+                if (gateStore.latestNow(connection.id) != null) gatedConnections += connection.id
+            }
+        } catch (_: Exception) {
+            // An unreadable gate must not look like "no gate".
+            gatesUnreadable = true
+        }
+    }
+
+    private fun credentialKind(connection: Connection): CredentialKind {
+        ensureGatesLoaded()
+        return effectiveCredentialKind(
+            credentialKinds.getOrPut(connection.id) { credentials.kind(connection.id) },
+            uncertain = connection.id in uncertainCredentials || connection.id in gatedConnections,
+        )
+    }
+
+    /**
+     * Default connection flow: an API Token is verified, its accounts are discovered and only a
+     * provider-confirmed account is saved through the existing credential transition path.
+     */
+    private val tokenController = com.flarego.core.application.connection.TokenConnectionController(
+        viewModelScope, ::identity, ::saveTokenConnection,
+    )
+    val tokenConnection: com.flarego.ui.TokenConnection = AndroidTokenConnection(tokenController)
+
+    /**
+     * A legacy OAuth record keeps its name and local row but cannot authenticate any more. The UI
+     * marks such a connection as needing an API Token instead of hiding or deleting it.
+     */
+    fun needsTokenConfiguration(connection: Connection): Boolean =
+        com.flarego.needsTokenConfiguration(credentialKind(connection), demo = connection.demo)
     val connectionDraft = ConnectionDraft()
     private val managementPlatformOwner = ManagementPlatformOwner.forApplication(application)
     private val managementBorrower = managementPlatformOwner.borrow()
@@ -111,7 +177,7 @@ class FlareGoViewModel private constructor(
         val resolveToken: suspend () -> String = {
             withContext(operationDispatcher) {
                 if (credentialRevision(connection.id) != expectedRevision) throw CloudException("连接凭据已变化，请刷新")
-                val token = credentials.accessToken(connection.id) ?: throw CloudException("请重新连接 Cloudflare")
+                val token = credentials.token(connection.id) ?: throw CloudException("请为该账号配置 API Token 后重新连接")
                 if (credentialRevision(connection.id) != expectedRevision) throw CloudException("连接凭据已变化，请刷新")
                 token
             }
@@ -142,6 +208,56 @@ class FlareGoViewModel private constructor(
                 AuthorizedDnsFilesDependencies(bundle.transfers,managementPlatformOwner.importLimiter,operationDispatcher)).services()
         },managementPlatform=ManagementPlatformPorts(managementPlatformOwner.files,operationDispatcher),readCache=localDatabase.readSnapshots)
     val management get()=operationRuntime.management
+
+    /**
+     * Read-only Registrar search wiring.
+     *
+     * The account is resolved back to an owned connection here, so a forged or stale scope can
+     * never reach the provider. Real connections use the same credential gateway as every other
+     * read; demo connections return clearly marked sample rows and never touch the network.
+     * Registration is not wired at all: there is no write path to expose.
+     */
+    private fun registrarConnection(account: AccountScope): Connection? {
+        if (!::controllerRef.isInitialized) return null
+        return controllerRef.state.value.connections.firstOrNull {
+            it.id == account.connectionId && it.accountId == account.accountId
+        }
+    }
+
+    private fun registrarEnabled(account: AccountScope): Boolean {
+        val connection = registrarConnection(account) ?: return false
+        // A Token connection may call the registered read-only discovery endpoint on demand; an
+        // OAuth connection can only ask when a confirmed Registrar scope is actually configured.
+        return ProductAccess.registrarReadable(credentialKind(connection), demo = connection.demo)
+    }
+
+    private suspend fun registrarSearch(account: AccountScope, keyword: String, limit: Int): List<RegistrarCandidate> {
+        val connection = registrarConnection(account)
+            ?: throw CloudFailure(CloudFailureCode.SCOPE_MISMATCH, "该资源不属于当前连接或账号，请切换账号后重试")
+        if (connection.demo) {
+            val base = keyword.ifBlank { "example" }
+            return listOf(".com" to "8.57", ".dev" to "10.11", ".app" to "11.00")
+                .take(limit.coerceIn(1, 3))
+                .map { (suffix, cost) ->
+                    RegistrarCandidate(
+                        name = if (base.endsWith(suffix)) base else base + suffix,
+                        registrable = true,
+                        tier = "standard",
+                        currency = "USD",
+                        registrationCost = "示例 $cost",
+                        renewalCost = "示例 $cost",
+                        reason = "示例数据 · 未调用云 API",
+                    )
+                }
+        }
+        return com.flarego.core.cloudflare.registrar.CloudflareRegistrarClient(connection, gateway(connection))
+            .search(account, keyword, limit)
+    }
+
+    /** Bound by the UI to the selected account; every result carries the cached-data notice. */
+    val registrar = com.flarego.core.application.registrar.RegistrarController(
+        viewModelScope, ::registrarSearch, ::registrarEnabled, System::currentTimeMillis,
+    )
     private fun actualR2Context(): com.flarego.ui.r2.R2BrowserContext? {
         if (!::controllerRef.isInitialized) return null
         val state = controllerRef.state.value
@@ -508,7 +624,17 @@ class FlareGoViewModel private constructor(
     val controller = AppController(viewModelScope,sessionFactory,store,initialConnections,
         dnsOperations = operationRuntime,
         readCache = localDatabase.readSnapshots,
-        availableProducts = { if (it.demo || d1Synthetic != null) ProductKey.entries.toSet() else CloudflareOAuthReadProfile.products },
+        availableProducts = { connection ->
+            ensureGatesLoaded()
+            // Kind decides the read directories; a token is never limited by an OAuth scope list
+            // and a 403 is reported for that product only. An unreadable gate set fails closed:
+            // no product request is attempted until the gate can be read.
+            if (gatesUnreadable) emptySet()
+            else ProductAccess.readable(
+                credentialKind(connection),
+                demo = connection.demo || d1Synthetic != null,
+            )
+        },
         productFactory = ProductSessionFactory { connection ->
             if (connection.demo) {
                 ProductServices(DemoDirectory(connection),object : ScopedBillingPort {
@@ -564,26 +690,132 @@ class FlareGoViewModel private constructor(
         )
             throw CloudException("请检查账号名称和 Token；Token 不能包含空格或换行")
         identity(cleanToken).verifyAccount(cleanAccount)
-        saveConnection(name.trim(), cleanAccount) { id -> credentials.putApiToken(id, cleanToken) }
+        when (val outcome = saveConnection(name.trim(), cleanAccount, CredentialKind.TOKEN, cleanToken)) {
+            CredentialSaveOutcome.SAVED -> Unit
+            CredentialSaveOutcome.NOT_SAVED ->
+                throw CloudException("连接信息未能保存，已恢复到连接前的状态；请检查设备存储后重试。")
+            CredentialSaveOutcome.STATE_UNCERTAIN ->
+                throw CloudException("保存结果不确定：可能已写入部分内容。请重新连接并重新确认 Token 后再试。")
+        }
     }
 
-    private suspend fun saveOAuthConnection(name: String, accountId: String, tokens: OAuthTokens) {
-        saveConnection(name, accountId) { id -> credentials.putOAuth(id, tokens) }
-    }
+    /** Persists a verified API Token through the same revision/transition path as every credential. */
+    private suspend fun saveTokenConnection(name: String, accountId: String, token: String): CredentialSaveOutcome =
+        saveConnection(name, accountId, CredentialKind.TOKEN, token)
 
-    private suspend fun saveConnection(name: String, accountId: String, persist: suspend (String) -> Unit) {
+    /**
+     * Saves one credential and its local row through a *compensating* commit, not a transaction:
+     * the encrypted vault and the account row are separate stores (see [commitCredentialThenRow]).
+     *
+     * A failure keeps the previous credential (Token or legacy OAuth marker) and the previous row,
+     * and the cached credential kind is restored to what the connection had before this attempt.
+     * The kind is recorded only after the commit succeeded, so no in-memory state can drift ahead
+     * of what is actually stored.
+     */
+    private suspend fun saveConnection(
+        name: String,
+        accountId: String,
+        kind: CredentialKind,
+        token: String,
+    ): CredentialSaveOutcome {
         val existing = store.connections().find { it.accountId == accountId }
         val connection = Connection(existing?.id ?: UUID.randomUUID().toString(), name, accountId)
+        // Arm the durable gate before anything touches the credential. Without a confirmed PENDING
+        // row no credential write is attempted, so a crash can never hide an in-flight commit.
+        val attempt = gate.arm(connection.id, accountId) ?: return CredentialSaveOutcome.NOT_SAVED
         val change=managementPlatformOwner.beginCredentialChange(connection)
         // Synchronous transition admission retires old issuer before the first vault write suspension.
         extendedAdapter.invalidateConnection(connection.id)
         controller.invalidateSession(connection.id)
         panelContextState.value=null
-        managementPlatformOwner.finishCredentialChange(change) {
-            withContext(operationDispatcher) { persist(connection.id);store.putConnection(connection) }
+        // Conservative default: until the helper reports otherwise, nothing is assumed stored.
+        var outcome = CommitOutcome(CommitState.UNCHANGED)
+        try {
+            managementPlatformOwner.finishCredentialChange(change) {
+                withContext(operationDispatcher) {
+                    commitCredentialThenRow(credentials, connection.id, token, { outcome = it }) {
+                        store.putConnection(connection)
+                    }
+                }
+            }
+        } catch (failure: Exception) {
+            val settled = settleFailedAttempt(attempt, connection, existing, outcome)
+            if (failure is CancellationException) throw failure
+            return settled
         }
+        // Both stores are written; only a store-confirmed release may publish SAVED.
+        if (gate.release(attempt) != GateRelease.RELEASED) {
+            // The row may already be gone in memory, so keep the gate blocked and report uncertainty.
+            gate.block(attempt)
+            gatedConnections += connection.id
+            return CredentialSaveOutcome.STATE_UNCERTAIN
+        }
+        gatedConnections -= connection.id
+        uncertainCredentials.remove(connection.id)
+        credentialKinds[connection.id] = kind
         controller.reloadConnections(store.connections())
         controller.selectConnection(connection)
+        return CredentialSaveOutcome.SAVED
+    }
+
+    /**
+     * Settles the gate after a failed commit.
+     *
+     * UNCHANGED/RESTORED means the stored state is coherent again, so the gate may be released —
+     * but only when the store confirms it; otherwise the connection stays blocked and the caller
+     * must report uncertainty instead of "not saved". UNCERTAIN keeps a BLOCKED row.
+     */
+    private suspend fun settleFailedAttempt(
+        attempt: GateAttempt,
+        connection: Connection,
+        existing: Connection?,
+        outcome: CommitOutcome,
+    ): CredentialSaveOutcome = when (outcome.state) {
+        CommitState.UNCHANGED, CommitState.RESTORED -> {
+            applyUnsuccessfulCommit(connection, existing, outcome)
+            if (gate.release(attempt) == GateRelease.RELEASED) {
+                gatedConnections -= connection.id
+                CredentialSaveOutcome.NOT_SAVED
+            } else {
+                gate.block(attempt)
+                gatedConnections += connection.id
+                CredentialSaveOutcome.STATE_UNCERTAIN
+            }
+        }
+        CommitState.UNCERTAIN, CommitState.COMMITTED -> {
+            gate.block(attempt)
+            gatedConnections += connection.id
+            applyUnsuccessfulCommit(connection, existing, outcome)
+            CredentialSaveOutcome.STATE_UNCERTAIN
+        }
+    }
+
+    /**
+     * Account state after an unsuccessful commit follows the *reported* outcome, never a guess:
+     * a restored/unchanged commit keeps the previous kind and session, while an uncertain one
+     * fails closed (no cached kind, no automatic re-selection, no requests).
+     */
+    private fun applyUnsuccessfulCommit(
+        connection: Connection,
+        existing: Connection?,
+        outcome: CommitOutcome,
+    ) {
+        when (outcome.state) {
+            CommitState.UNCHANGED, CommitState.RESTORED -> {
+                uncertainCredentials.remove(connection.id)
+                // Read the kind that is actually stored: a remembered value could belong to a
+                // different generation and would silently override a newer state.
+                credentialKinds[connection.id] = credentials.kind(connection.id)
+                controller.reloadConnections(store.connections())
+                if (existing != null) controller.selectConnection(existing)
+            }
+            CommitState.UNCERTAIN, CommitState.COMMITTED -> {
+                // Unknown stored state: keep the row, drop the cached kind, and refuse to use it.
+                credentialKinds.remove(connection.id)
+                uncertainCredentials += connection.id
+                controller.reloadConnections(store.connections())
+            }
+        }
     }
 
     override fun onCleared() {
@@ -597,7 +829,7 @@ class FlareGoViewModel private constructor(
         if(d1BrowserLazy.isInitialized())d1Browser.close()
         d1Contents.releaseAll()
         connectionDraft.clear()
-        oauthConnection.cancel()
+        tokenController.cancel()
         // Application file service remains shared. Claimed jobs release their own capability in finally.
         CoroutineScope(SupervisorJob()+Dispatchers.IO).launch {
             managementPlatformOwner.releaseBorrower(managementBorrower)
@@ -613,6 +845,10 @@ class FlareGoViewModel private constructor(
         // UNDISPATCHED enters retireCredential's synchronous admission before returning to the caller.
         viewModelScope.launch(start=CoroutineStart.UNDISPATCHED) {
             try {
+                credentialKinds.remove(connection.id)
+                gatedConnections.remove(connection.id)
+                uncertainCredentials.remove(connection.id)
+                gate.clear(connection.id)
                 managementPlatformOwner.retireCredential(connection) {
                     credentials.remove(connection.id)
                     operationRuntime.removeConnection(connection.id) {

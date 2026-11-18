@@ -52,12 +52,6 @@ jobs:
           curl --fail --silent --show-error --location --connect-timeout 15 --max-time 90 "$SCHEMA_URL" --output "$schema_file"
           printf '%s  %s\n' "$SCHEMA_SHA256" "$schema_file" | sha256sum --check --strict -
           echo "SCHEMA_FILE=$schema_file" >> "$GITHUB_ENV"
-      - name: Configure public Cloudflare OAuth
-        env:
-          FLAREGO_OAUTH_CLIENT_ID: 9bd1b2bf245bd1b78506a7c0b6fbc11a
-          FLAREGO_OAUTH_REDIRECT_URI: https://satori.tours/flarego/cloudflare/callback
-        run: |
-          printf '\nflarego.oauthClientId=%s\nflarego.oauthRedirectUri=%s\n' "$FLAREGO_OAUTH_CLIENT_ID" "$FLAREGO_OAUTH_REDIRECT_URI" >> gradle.properties
       - name: CI contract tests
         run: python3 -m unittest discover -s tools/ci/tests -v
       - name: Prepare signing

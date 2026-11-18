@@ -57,6 +57,20 @@ class ProductCacheTest {
         assertEquals("example.com", (reopened.states.value.getValue(ProductKey.ZONES).content as ProductContent.Zones).items.single().name)
         assertTrue(reopened.states.value.getValue(ProductKey.ZONES).fromCache)
     }
+    @Test fun liveReadRequestedDuringACacheProbeStillLoadsInsteadOfStayingUnloaded() = runTest {
+        val disk = Disk()
+        // A cold overview probes the cache without reading the network.
+        val first = loader(disk, 1000)
+        // The probe is launched but not yet executed, so it is genuinely in flight.
+        first.restoreOverview()
+        // The user opens the product page while that probe is still running. The live read
+        // must not be swallowed by it, or the page would stay "未加载" forever.
+        first.ensure(ProductKey.ZONES)
+        runCurrent()
+        assertEquals(1, reads)
+        assertEquals("example.com", (first.states.value.getValue(ProductKey.ZONES).content as ProductContent.Zones).items.single().name)
+    }
+
     @Test fun staleSnapshotIsVisibleWhileRefreshingAndSurvivesOfflineFailure() = runTest {
         val disk = Disk()
         loader(disk, 1000).ensure(ProductKey.ZONES); runCurrent()
