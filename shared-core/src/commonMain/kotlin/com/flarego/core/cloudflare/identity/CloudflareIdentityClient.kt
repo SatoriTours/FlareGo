@@ -37,7 +37,7 @@ class CloudflareIdentityClient(private val gateway: CloudflareGateway) : Identit
         }
         val root = readEnvelope(gateway, route.first, route.second)
         val result = root["result"] as? JsonObject ?: throw invalidResponse(false)
-        result.requiredText("id")
+        val id = result.requiredText("id")
         val active = when (result.requiredText("status")) {
             "active" -> true
             "disabled", "expired" -> false
@@ -47,7 +47,7 @@ class CloudflareIdentityClient(private val gateway: CloudflareGateway) : Identit
             true -> "Token 当前有效；这不表示拥有全部权限，连接前仍需验证指定账号"
             false -> "Token 未处于有效状态，请检查禁用状态或有效期"
             null -> "Token 状态无法确认，请验证指定账号或检查官方控制台"
-        })
+        }, id.takeIf { it.matches(Regex("[a-fA-F0-9]{32}")) })
     }
 
     private fun account(row: JsonObject) = AccountSummary(row.requiredText("id"), row.requiredText("name"))

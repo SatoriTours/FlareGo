@@ -1,24 +1,17 @@
 package com.flarego.ui
 
 import androidx.compose.ui.platform.ClipEntry
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.TokenUpgradePlan
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-// Short keys from Cloudflare's official user-token template reference, not API group IDs.
-// Registrar is intentionally absent: the reference has no documented short key for it.
-internal enum class TokenPurpose(val tag: String, val title: String, vararg val keys: String) {
-    DOMAINS("domains", "域名与 DNS", "zone", "dns"),
-    WORKERS("workers", "Workers 脚本", "workers_scripts"),
-    STORAGE("storage", "KV 与 R2 存储", "workers_kv_storage", "workers_r2"),
-    BILLING("billing", "账单历史", "billing");
+internal const val UserTokenManagementUrl = "https://dash.cloudflare.com/profile/api-tokens"
 
-    val bit: Int get() = 1 shl ordinal
-}
-
-internal fun tokenTemplateUrl(purposes: Collection<TokenPurpose>): String? {
-    if (purposes.isEmpty()) return null
-    val keys = (listOf("account_settings") + purposes.flatMap { it.keys.asList() }).distinct()
+internal fun tokenTemplateUrl(plan: TokenUpgradePlan? = null): String {
+    val features = plan?.features ?: ReadFeature.entries
+    val keys = features.map { it.key }.distinct()
     val permissions = buildJsonArray {
         keys.forEach { key ->
             add(buildJsonObject {
@@ -27,8 +20,10 @@ internal fun tokenTemplateUrl(purposes: Collection<TokenPurpose>): String? {
             })
         }
     }
-    return "https://dash.cloudflare.com/profile/api-tokens" +
-        "?permissionGroupKeys=${permissions.toString().encodeQueryValue()}&accountId=%2A&zoneId=all&name=FlareGo%20Read%20Only"
+    val account = (plan?.accountId ?: "*").encodeQueryValue()
+    val zone = (plan?.zoneId ?: "all").encodeQueryValue()
+    return UserTokenManagementUrl +
+        "?permissionGroupKeys=${permissions.toString().encodeQueryValue()}&accountId=$account&zoneId=$zone&name=FlareGo%20Read%20Only"
 }
 
 private fun String.encodeQueryValue(): String = buildString {

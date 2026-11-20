@@ -184,7 +184,7 @@ class ExtendedManagementAppAdapter internal constructor(
         ManagementPanelModule.DNSSEC -> put(l,dnssec.value.state.copy(loading=busy))
         ManagementPanelModule.ZONE_SETTINGS -> put(l,zoneSettings.value.state.copy(loading=busy))
     } }
-    private fun failure(l:Lease,e:Exception,export:Boolean=false) {
+    private fun failure(l:Lease,e:Exception,export:Boolean=false,readPermissionDenied:Boolean=false) {
         if(!current(l)) return
         val message=safeMessage(e)
         loading(l,false)
@@ -194,7 +194,7 @@ class ExtendedManagementAppAdapter internal constructor(
             ManagementPanelModule.SCAN -> put(l,scan.value.state.copy(errors=listOf(DnsTask7Error(l.context.scope,l.context.currentEpoch,DnsTask7Section.SCAN_REVIEW,message))))
             ManagementPanelModule.DNS_SETTINGS -> put(l,dnsSettings.value.state.copy(errors=listOf(DnsTask7Error(l.context.scope,l.context.currentEpoch,DnsTask7Section.SETTINGS,message))))
             ManagementPanelModule.DNSSEC -> put(l,dnssec.value.state.copy(errors=listOf(DnssecPanelError(l.context.scope,DnssecPanelSource.DNSSEC,message))))
-            ManagementPanelModule.ZONE_SETTINGS -> put(l,zoneSettings.value.state.copy(errors=listOf(ZoneSettingsPanelError(l.context.scope,zoneSettings.value.state.target,message))))
+            ManagementPanelModule.ZONE_SETTINGS -> put(l,zoneSettings.value.state.copy(errors=listOf(ZoneSettingsPanelError(l.context.scope,zoneSettings.value.state.target,message,readPermissionDenied))))
         }
     }
     /** Serialization only around presentation work; every actual operation still enters the single runtime lock. */
@@ -242,7 +242,12 @@ class ExtendedManagementAppAdapter internal constructor(
     }) {
         invalidateDraft();loading(l,true)
         work(l) {
-            val result=runtime.readExtended(l.context.scope,request) { current(l) }
+            val result=try { runtime.readExtended(l.context.scope,request) { current(l) } }
+            catch(e:CloudFailure) {
+                failure(l,e,readPermissionDenied=request is ExtendedManagementRead.ZoneSettings &&
+                    e.code==CloudFailureCode.PERMISSION_REQUIRED)
+                return@work
+            }
             if(!current(l))return@work
             when(result) {
                 is ExtendedManagementReadResult.Files -> put(l,files.value.state.copy(snapshot=result.snapshot,exportAllowed=true,errors=emptyList()))

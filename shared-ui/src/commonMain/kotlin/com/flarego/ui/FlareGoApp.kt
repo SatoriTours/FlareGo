@@ -33,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import com.flarego.core.application.AppController
 import com.flarego.core.application.inventory.*
 import com.flarego.core.application.dns.*
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.ReadTarget
 import com.flarego.core.application.zones.*
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
@@ -86,6 +88,7 @@ fun FlareGoApp(
     registrar: com.flarego.core.application.registrar.RegistrarController? = null,
     /** True for a legacy OAuth record: it keeps its row and must be reconfigured with a Token. */
     needsToken: (Connection) -> Boolean = { false },
+    upgradeToken: ((Connection, Set<ReadTarget>) -> Unit)? = null,
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
@@ -230,6 +233,14 @@ fun FlareGoApp(
             dialog = DialogState.TokenConnect
         }
     }
+
+    val selectedForUpgrade = state.selected?.takeUnless { it.demo || needsToken(it) }
+    val openUpgrade: ((Set<ReadTarget>) -> Unit)? = if (selectedForUpgrade != null && upgradeToken != null && tokenConnection != null) {
+        { targets ->
+            upgradeToken(selectedForUpgrade, targets)
+            openConnection()
+        }
+    } else null
 
     FlareGoTheme {
         if(discardEdit) AlertDialog(
@@ -603,6 +614,20 @@ fun FlareGoApp(
                             Notice(error, controller::refresh)
                         }
                     }
+                    val productOnPage = when (state.page) {
+                        Page.DOMAINS, Page.DNS -> ProductKey.ZONES
+                        Page.RESOURCES -> state.resourceKind.product()
+                        else -> null
+                    }
+                    if (activeModule == null && productOnPage != null && openUpgrade != null &&
+                        (state.products[productOnPage]?.error?.code == CloudFailureCode.PERMISSION_REQUIRED ||
+                            productOnPage == ProductKey.ZONES && zonePageState.readPermissionDenied)
+                    ) {
+                        val target = productReadTarget(productOnPage, state.workersMode)
+                        TextButton(onClick = { openUpgrade(setOf(target)) }, Modifier.testTag("product-permission-upgrade")) {
+                            Text("申请补充${target.feature.label}读取权限")
+                        }
+                    }
                     Box(Modifier.weight(1f)) {
                         val pageKey=listOf(state.selected?.id.orEmpty(),state.selected?.accountId.orEmpty(),state.page.name).joinToString { "${it.length}:$it" }
                         pageStates.SaveableStateProvider(pageKey) {
@@ -611,7 +636,8 @@ fun FlareGoApp(
                         } else if(activeModule!=null && actualPanelContext!=null && panelPorts!=null) {
                             ManagementPanelHost(actualPanelContext,activeModule,panelPorts,
                                 onBack={keyboard?.hide();clearPanel()},
-                                modifier=Modifier.consumeWindowInsets(padding),onBound={panelLease=it})
+                                modifier=Modifier.consumeWindowInsets(padding),onBound={panelLease=it},
+                                onReadUpgrade=openUpgrade?.let { upgrade -> { target -> upgrade(setOf(target)) } })
                         } else when (state.page) {
                             Page.OVERVIEW ->
                                 OverviewScreen(
@@ -620,7 +646,7 @@ fun FlareGoApp(
                                     { dialog = DialogState.Create },
                                     controller::refreshAllProducts,
                                     openResource = { kind -> controller.selectResourceKind(kind); controller.navigate(Page.RESOURCES) },
-                                    reauthorize = openConnection,
+                                    upgrade = openUpgrade,
                                 )
                             Page.DOMAINS -> if (management != null) {
                                 val openPanel:(ManagementPanelModule)->Unit = { module ->
@@ -631,9 +657,14 @@ fun FlareGoApp(
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
                                     LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
-                                    if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
-                                        managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
-                                    else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
+                                    if(dnsState.scope==zone.ref && zone.ref.account==account) Column {
+                                        if (dnsState.readPermissionDenied && openUpgrade != null) {
+                                            TextButton(onClick = { openUpgrade(setOf(ReadTarget(ReadFeature.DNS, zone.ref.zoneId))) },
+                                                Modifier.testTag("dns-permission-upgrade")) { Text("申请补充 DNS 读取权限") }
+                                        }
+                                        DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
+                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                    } else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
                                 // A Zone list is not a registrar catalogue; this is the only entry to the
                                 // separate read-only search page, and it never implies a purchase.
@@ -661,9 +692,14 @@ fun FlareGoApp(
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
                                     LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
-                                    if(dnsState.scope==zone.ref && zone.ref.account==account) DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
-                                        managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
-                                    else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
+                                    if(dnsState.scope==zone.ref && zone.ref.account==account) Column {
+                                        if (dnsState.readPermissionDenied && openUpgrade != null) {
+                                            TextButton(onClick = { openUpgrade(setOf(ReadTarget(ReadFeature.DNS, zone.ref.zoneId))) },
+                                                Modifier.testTag("dns-permission-upgrade")) { Text("申请补充 DNS 读取权限") }
+                                        }
+                                        DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
+                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                    } else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
                                 if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
                                 else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
@@ -709,7 +745,7 @@ fun FlareGoApp(
                                         } else if (legacyAuth) {
                                             Muted(
                                                 "旧版 OAuth 授权已停用，App 不会再刷新或请求它；请在该账号上重新连接并粘贴 API Token，" +
-                                                    "验证成功后会原子替换旧凭据，失败则保留现有记录。",
+                                                    "验证成功后会替换旧凭据；如保存结果不确定，会停用该连接直到重新确认。",
                                             )
                                         } else {
                                             // A Token may read billing on demand; the token's own permission
@@ -720,11 +756,14 @@ fun FlareGoApp(
                                             )
                                         }
                                         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (billingError != null) Button(
-                                                onClick = openConnection,
+                                            if (billingError?.code == CloudFailureCode.PERMISSION_REQUIRED && openUpgrade != null) Button(
+                                                onClick = { openUpgrade(setOf(ReadTarget(ReadFeature.BILLING))) },
                                                 modifier = Modifier.fillMaxWidth().testTag("billing-reauthorize"),
                                             ) {
-                                                Text("重新配置 Token")
+                                                Text("申请补充读取权限")
+                                            }
+                                            if (billingError?.code == CloudFailureCode.CREDENTIAL_EXPIRED) TextButton(onClick = openConnection) {
+                                                Text("Token 已失效，重新连接")
                                             }
                                             OutlinedButton(
                                                 onClick = { openConsole(Page.BILLING) },

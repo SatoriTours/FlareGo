@@ -62,6 +62,7 @@ data class DnsPageState(
     val demo: Boolean = false,
     val observedAtMs: Long? = null,
     val fromCache: Boolean = false,
+    val readPermissionDenied: Boolean = false,
 )
 
 sealed interface DnsIntent {
@@ -195,7 +196,7 @@ class DnsController(
         val generation=++readGeneration;pageLimit=page.limit
         if(state.value.scope!=scope) mutable.value=DnsPageState(scope=scope,revision=state.value.revision+1,editorRevision=state.value.editorRevision+1,demo=stamp.connection.demo)
         invalidate(false)
-        mutable.update { it.copy(scope=scope,filter=filter,loading=true,error=null) }
+        mutable.update { it.copy(scope=scope,filter=filter,loading=true,error=null,readPermissionDenied=false) }
         appScope.launch {
             try {
                 if(!append && filter==DnsFilter() && !stamp.connection.demo && state.value.observedAtMs==null) {
@@ -215,7 +216,8 @@ class DnsController(
                 mutable.update { it.copy(zoneName=owner.name,records=all,rows=all.map(::dnsRecordView),next=pageResult.next,total=pageResult.total,loading=false,pendingTask=task,observedAtMs=nowMs(),fromCache=false) }
                 if(!stamp.connection.demo && filter==DnsFilter()) cache?.saveDns(scope,owner.name,all.map(::dnsRecordView),pageResult.total,pageResult.next==null && pageResult.total==all.size.toLong(),nowMs()) { current(scope,stamp,generation) }
             } catch(cancelled:CancellationException) { throw cancelled }
-            catch(_:Exception) { if(current(scope,stamp,generation)) mutable.update { it.copy(loading=false,error="DNS 读取失败，请刷新后重试") } }
+            catch(failure:Exception) { if(current(scope,stamp,generation)) mutable.update { it.copy(loading=false,error="DNS 读取失败，请刷新后重试",
+                readPermissionDenied=(failure as? CloudFailure)?.code==CloudFailureCode.PERMISSION_REQUIRED) } }
         }
     }
     private fun open(id:String,mode:DnsWriteMode?) {

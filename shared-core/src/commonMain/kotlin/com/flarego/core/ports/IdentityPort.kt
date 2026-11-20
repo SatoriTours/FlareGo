@@ -5,7 +5,7 @@ import com.flarego.core.model.PageRequest
 
 enum class TokenKind { USER_OWNED, ACCOUNT_OWNED, UNKNOWN }
 data class AccountSummary(val id: String, val name: String)
-data class TokenVerification(val kind: TokenKind, val active: Boolean?, val notice: String?)
+data class TokenVerification(val kind: TokenKind, val active: Boolean?, val notice: String?, val id: String? = null)
 
 interface IdentityPort {
     suspend fun discover(request: PageRequest = PageRequest()): CloudPage<AccountSummary>

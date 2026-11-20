@@ -11,6 +11,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
 import com.flarego.core.model.*
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.ReadTarget
 import com.flarego.ui.FlareGoTheme
 import com.flarego.ui.zones.*
 import kotlinx.coroutines.flow.*
@@ -31,17 +33,43 @@ class ZoneSettingsUiTest {
     private fun previews(h: Harness) = h.intents.filterIsInstance<ZoneSettingsPanelIntent.Preview>()
     private fun confirms(h: Harness) = h.intents.filterIsInstance<ZoneSettingsPanelIntent.Confirm>()
 
-    private fun install(h: Harness = Harness(scope), fontScale: Float = 1f): Harness {
+    private fun install(h: Harness = Harness(scope), fontScale: Float = 1f, upgrade: ((ReadTarget) -> Unit)? = null): Harness {
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 FlareGoTheme { Surface(Modifier.fillMaxSize()) {
                     val state by h.state.collectAsState()
-                    ZoneSettingsPanel(h.expectedScope.value, state, h::onIntent)
+                    ZoneSettingsPanel(h.expectedScope.value, state, h::onIntent, onReadUpgrade = upgrade)
                 } }
             }
         }
         return h
+    }
+
+    @Test fun onlyScopedReadDenialsEnableZoneSettingsAndUniversalSslUpgrade() {
+        val requests = mutableListOf<ReadTarget>()
+        val h = install(upgrade = { requests += it })
+        val setting = ZoneSettingsTarget.Setting(ZoneSettingKey.SSL)
+        fun load(target: ZoneSettingsTarget, message: String, denied: Boolean, stateScope: ZoneScope = scope) {
+            compose.runOnIdle {
+                h.mutable.value = ZoneSettingsPanelState(scope = scope, target = target,
+                    errors = listOf(ZoneSettingsPanelError(stateScope, target, message, readPermissionDenied = denied)))
+            }
+        }
+        load(setting, "网络不可用", false)
+        compose.onNodeWithTag("zs-permission-upgrade").assertDoesNotExist()
+        load(setting, "其他域名读取被拒绝", true, scope.copy(zoneId = "different"))
+        compose.onNodeWithTag("zs-permission-upgrade").assertDoesNotExist()
+        load(setting, "读取被拒绝", true)
+        click("zs-permission-upgrade")
+        load(ZoneSettingsTarget.UniversalSsl, "读取被拒绝", true)
+        click("zs-permission-upgrade")
+        load(ZoneSettingsTarget.Cache, "拒绝写入", true)
+        compose.onNodeWithTag("zs-permission-upgrade").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(listOf(
+            ReadTarget(ReadFeature.ZONE_SETTINGS, scope.zoneId, ZoneSettingKey.SSL),
+            ReadTarget(ReadFeature.SSL, scope.zoneId),
+        ), requests) }
     }
 
     @Test fun only20ReviewedKeysAreSelectableAndAuditEntriesStayReadonly() {

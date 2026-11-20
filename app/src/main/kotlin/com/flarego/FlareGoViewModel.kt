@@ -3,11 +3,7 @@ package com.flarego
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.flarego.core.application.connection.CredentialGateCoordinator
-import com.flarego.core.application.connection.CredentialGateStore
-import com.flarego.core.application.connection.CredentialSaveOutcome
-import com.flarego.core.application.connection.GateAttempt
-import com.flarego.core.application.connection.GateRelease
+import com.flarego.core.application.connection.*
 import com.flarego.core.application.inventory.ProductAccess
 import com.flarego.core.application.inventory.ProductKey
 import com.flarego.core.application.AppController
@@ -33,6 +29,7 @@ import com.flarego.core.cloudflare.HttpTransport
 import com.flarego.core.ports.*
 import com.flarego.core.model.*
 import com.flarego.core.cloudflare.identity.CloudflareIdentityClient
+import com.flarego.core.cloudflare.identity.CloudflareReadAuthorization
 import com.flarego.core.cloudflare.protocol.CloudflareGateway
 import com.flarego.core.updates.*
 import com.flarego.platform.*
@@ -670,12 +667,51 @@ class FlareGoViewModel private constructor(
     }
     suspend fun reconcileTask(id: String) = operationRuntime.reconcile(id)
 
-    private fun identity(token: String): CloudflareIdentityClient {
+    private fun identity(token: String) = CloudflareIdentityClient(tokenGateway(token))
+
+    private fun tokenGateway(token: String): CloudflareGateway {
         val cleanToken = token.trim()
         if (cleanToken.isBlank() || cleanToken.any(Char::isWhitespace))
             throw CloudException("请检查 Token；Token 不能包含空格或换行")
-        return CloudflareIdentityClient(CloudflareGateway(transportForToken(cleanToken),
-            nowMs = System::currentTimeMillis, parseHttpDate = CloudflareHttpDates::parse))
+        return CloudflareGateway(transportForToken(cleanToken),
+            nowMs = System::currentTimeMillis, parseHttpDate = CloudflareHttpDates::parse)
+    }
+
+    fun upgradeToken(connection: Connection, requested: Set<ReadTarget>) {
+        val revision = credentialRevision(connection.id)
+        fun current() = !connection.demo && revision >= 0 && credentialRevision(connection.id) == revision &&
+            controller.state.value.selected == connection
+        fun requireCurrent() {
+            if (!current()) throw CloudFailure(CloudFailureCode.CONFLICT, "当前账号或凭据已变化，请返回后重新申请。")
+        }
+        tokenController.startUpgrade {
+            requireCurrent()
+            val old = credentials.token(connection.id)
+                ?: throw CloudFailure(CloudFailureCode.CONFLICT, "当前连接没有可核验的 Token。")
+            val existing = CloudflareReadAuthorization(connection, tokenGateway(old))
+            val retired = existing.existingTokenIdentity()
+            val evidence = existing.baseline(requested)
+            requireCurrent()
+            val features = evidence.keys.map { it.feature }.toSet() + ReadFeature.ACCOUNT
+            val zoneIds = evidence[ReadTarget(ReadFeature.ZONES)].orEmpty() + evidence.keys.mapNotNull { it.zoneId }
+            val zone = zoneIds.singleOrNull()
+            TokenUpgradeAttempt(TokenUpgradePlan(connection.accountId, connection.name, features, zone)) { candidate ->
+                requireCurrent()
+                val live = credentials.token(connection.id)
+                    ?: throw CloudFailure(CloudFailureCode.CONFLICT, "当前连接没有可核验的 Token。")
+                requireDifferentToken(live, candidate, retired, null)
+                val proposed = CloudflareReadAuthorization(connection, tokenGateway(candidate))
+                requireDifferentToken(live, candidate, retired, proposed.tokenIdentity(TokenKind.USER_OWNED).id)
+                proposed.confirm(evidence)
+                requireCurrent()
+                val commit: suspend () -> TokenUpgradeResult = {
+                    val outcome = saveConnection(connection.name, connection.accountId, CredentialKind.TOKEN, candidate,
+                        expected = connection, expectedRevision = revision, stillCurrent = ::current)
+                    TokenUpgradeResult(outcome, retired)
+                }
+                commit
+            }
+        }
     }
 
     suspend fun connect(name: String, accountId: String, token: String) {
@@ -717,13 +753,25 @@ class FlareGoViewModel private constructor(
         accountId: String,
         kind: CredentialKind,
         token: String,
+        expected: Connection? = null,
+        expectedRevision: Long? = null,
+        stillCurrent: () -> Boolean = { true },
     ): CredentialSaveOutcome {
         val existing = store.connections().find { it.accountId == accountId }
-        val connection = Connection(existing?.id ?: UUID.randomUUID().toString(), name, accountId)
+        if (expected != null && (existing != expected || !stillCurrent())) return CredentialSaveOutcome.NOT_SAVED
+        val connection = expected ?: Connection(existing?.id ?: UUID.randomUUID().toString(), name, accountId)
         // Arm the durable gate before anything touches the credential. Without a confirmed PENDING
         // row no credential write is attempted, so a crash can never hide an in-flight commit.
         val attempt = gate.arm(connection.id, accountId) ?: return CredentialSaveOutcome.NOT_SAVED
-        val change=managementPlatformOwner.beginCredentialChange(connection)
+        val change = try {
+            if (!stillCurrent()) throw CloudFailure(CloudFailureCode.CONFLICT, "当前账号或凭据已变化。")
+            managementPlatformOwner.beginCredentialChange(connection, expectedRevision)
+        } catch (_: CloudFailure) {
+            if (gate.release(attempt) == GateRelease.RELEASED) return CredentialSaveOutcome.NOT_SAVED
+            gate.block(attempt)
+            gatedConnections += connection.id
+            return CredentialSaveOutcome.STATE_UNCERTAIN
+        }
         // Synchronous transition admission retires old issuer before the first vault write suspension.
         extendedAdapter.invalidateConnection(connection.id)
         controller.invalidateSession(connection.id)
@@ -731,7 +779,9 @@ class FlareGoViewModel private constructor(
         // Conservative default: until the helper reports otherwise, nothing is assumed stored.
         var outcome = CommitOutcome(CommitState.UNCHANGED)
         try {
-            managementPlatformOwner.finishCredentialChange(change) {
+            managementPlatformOwner.finishCredentialChange(change, restoreOnFailure = {
+                existing != null && (outcome.state == CommitState.UNCHANGED || outcome.state == CommitState.RESTORED)
+            }) {
                 withContext(operationDispatcher) {
                     commitCredentialThenRow(credentials, connection.id, token, { outcome = it }) {
                         store.putConnection(connection)
@@ -772,13 +822,14 @@ class FlareGoViewModel private constructor(
         outcome: CommitOutcome,
     ): CredentialSaveOutcome = when (outcome.state) {
         CommitState.UNCHANGED, CommitState.RESTORED -> {
-            applyUnsuccessfulCommit(connection, existing, outcome)
             if (gate.release(attempt) == GateRelease.RELEASED) {
                 gatedConnections -= connection.id
+                applyUnsuccessfulCommit(connection, existing, outcome)
                 CredentialSaveOutcome.NOT_SAVED
             } else {
                 gate.block(attempt)
                 gatedConnections += connection.id
+                applyUnsuccessfulCommit(connection, existing, CommitOutcome(CommitState.UNCERTAIN))
                 CredentialSaveOutcome.STATE_UNCERTAIN
             }
         }

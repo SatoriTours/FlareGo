@@ -58,6 +58,9 @@ data class TokenConnectionStatus(
     val problem: TokenProblem = TokenProblem.NONE,
     val canRetry: Boolean = false,
     val connected: Boolean = false,
+    val upgrading: Boolean = false,
+    val upgradePlan: TokenUpgradePlan? = null,
+    val retiredToken: RetiredToken? = null,
 )
 
 /**
@@ -93,15 +96,86 @@ class TokenConnectionController(
     private var lastStep: Step = Step.VERIFY
     private var lastAccountId: String? = null
 
+    private var prepareUpgrade: (suspend () -> TokenUpgradeAttempt)? = null
+    private var upgrade: TokenUpgradeAttempt? = null
+
+    fun startUpgrade(prepare: suspend () -> TokenUpgradeAttempt) {
+        if (status.value.phase == TokenPhase.CONNECTING) return
+        cancel()
+        prepareUpgrade = prepare
+        prepareUpgrade()
+    }
+
+    private fun prepareUpgrade() {
+        val prepare = prepareUpgrade ?: return
+        val read = begin()
+        mutable.value = TokenConnectionStatus(
+            upgrading = true, busy = true, phase = TokenPhase.VERIFYING, notice = "正在核查当前 Token 的读取权限和范围…",
+        )
+        job = scope.launch {
+            try {
+                val attempt = prepare()
+                if (!current(read)) return@launch
+                upgrade = attempt
+                mutable.value = TokenConnectionStatus(upgrading = true, upgradePlan = attempt.plan)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { upgradeFailed(read, failure, preparing = true) }
+        }
+    }
+
+    private fun verifyUpgrade(held: String) {
+        val attempt = upgrade ?: return
+        val read = begin()
+        token = held
+        mutable.value = TokenConnectionStatus(upgrading = true, upgradePlan = attempt.plan,
+            phase = TokenPhase.VERIFYING, busy = true, tokenHeld = true, notice = "正在核验新 Token 的读取权限和范围…")
+        job = scope.launch {
+            try {
+                val commit = attempt.verify(held)
+                if (!current(read)) return@launch
+                mutable.update { it.copy(phase = TokenPhase.CONNECTING, notice = "正在保存新 Token…") }
+                val result = commit()
+                if (!current(read)) return@launch
+                finish(read, attempt.plan.accountId, attempt.plan.accountName, null, result.outcome, result.retired)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { upgradeFailed(read, failure) }
+        }
+    }
+
+    private fun upgradeFailed(read: Long, failure: Exception, preparing: Boolean = false) {
+        if (!current(read)) return
+        val problem = problemOf(failure)
+        val oldIdUnavailable = preparing && failure is OldTokenIdentityUnavailable
+        val message = if (oldIdUnavailable) failure.message.orEmpty() else when ((failure as? CloudFailure)?.code) {
+            CloudFailureCode.CONFLICT, CloudFailureCode.SCOPE_MISMATCH -> failure.publicMessage
+            CloudFailureCode.PERMISSION_REQUIRED -> "读取被拒绝；请检查 Token 的功能权限和账号、域名范围。"
+            CloudFailureCode.CREDENTIAL_EXPIRED -> "Token 无效、已过期或不是用户 Token。"
+            else -> if (problem == TokenProblem.NETWORK) "暂时无法核验权限，请检查网络后重试。" else "无法确认读取权限和资源范围。"
+        }
+        val retry = oldIdUnavailable || problem == TokenProblem.NETWORK
+        if (!retry) token = null
+        mutable.update { it.copy(phase = TokenPhase.IDLE, error = message, problem = problem,
+            busy = false, notice = null, tokenHeld = token != null, canRetry = retry && (preparing || token != null)) }
+    }
+
     /** Starts (or restarts) the flow with a token. The value never leaves this object. */
     fun submit(raw: String) {
+        if (status.value.phase == TokenPhase.CONNECTING || (status.value.upgrading && (status.value.busy || upgrade == null))) return
         val clean = raw.trim()
         if (clean.isEmpty() || clean.any(Char::isWhitespace) || clean.length !in MIN_TOKEN..MAX_TOKEN) {
+            begin()
+            token = null
+            next = null
             mutable.value = TokenConnectionStatus(
+                upgrading = status.value.upgrading, upgradePlan = upgrade?.plan,
                 phase = TokenPhase.IDLE,
                 problem = TokenProblem.INVALID_INPUT,
                 error = "Token 不能为空，且不能包含空格或换行；请粘贴完整 Token",
             )
+            return
+        }
+        if (status.value.upgrading) {
+            verifyUpgrade(clean)
             return
         }
         token = clean
@@ -118,8 +192,13 @@ class TokenConnectionController(
 
     /** Repeats the failed step; only meaningful while a token is still held. */
     fun retry() {
-        val held = token ?: return
         if (status.value.busy) return
+        if (status.value.upgrading) {
+            val held = token
+            if (held != null) verifyUpgrade(held) else if (upgrade == null) prepareUpgrade()
+            return
+        }
+        val held = token ?: return
         val read = begin()
         when (lastStep) {
             Step.VERIFY -> {
@@ -205,11 +284,9 @@ class TokenConnectionController(
 
     /** Cancels the flow and forgets the token; an already saved connection is never touched. */
     fun cancel() {
-        if (status.value.connected) {
-            // The credential is already persisted; dismissing must not look like a rollback.
-            mutable.update { it.copy(busy = false, notice = null) }
-            return
-        }
+        if (status.value.phase == TokenPhase.CONNECTING && status.value.upgrading) return
+        prepareUpgrade = null
+        upgrade = null
         generation++
         job?.cancel(); job = null
         token = null; next = null; lastAccountId = null; lastStep = Step.VERIFY
@@ -416,6 +493,12 @@ class TokenConnectionController(
             retryable(read, problemOf(failure), NOT_SAVED_MESSAGE)
             return
         }
+        finish(read, accountId, name, notice, outcome)
+    }
+
+    private fun finish(read: Long, accountId: String, name: String, notice: String?,
+        outcome: CredentialSaveOutcome, retired: RetiredToken? = null,
+    ) {
         if (!current(read)) return
         when (outcome) {
             CredentialSaveOutcome.NOT_SAVED -> {
@@ -423,12 +506,15 @@ class TokenConnectionController(
                 return
             }
             CredentialSaveOutcome.STATE_UNCERTAIN -> {
+                upgrade = null
+                prepareUpgrade = null
                 // Fail closed: forget the token and never auto-reconnect this credential.
                 token = null; next = null; lastAccountId = null; lastStep = Step.VERIFY
                 mutable.update {
                     it.copy(
                         phase = TokenPhase.IDLE, busy = false, accounts = emptyList(), hasMore = false,
                         needsAccountId = false, tokenHeld = false, connected = false, notice = null,
+                        upgradePlan = null,
                         problem = TokenProblem.ACCOUNT_UNAVAILABLE, canRetry = false,
                         error = "保存结果不确定：可能已写入部分内容。请重新连接并重新确认 Token 后再试；" +
                             "在重新确认前，该账号不会使用本次凭据。",
@@ -438,11 +524,15 @@ class TokenConnectionController(
             }
             CredentialSaveOutcome.SAVED -> Unit
         }
+        val upgrading = status.value.upgrading
+        upgrade = null
+        prepareUpgrade = null
         token = null
         next = null; lastAccountId = null; lastStep = Step.VERIFY
         mutable.value = TokenConnectionStatus(
             phase = TokenPhase.CONNECTED, connected = true, busy = false,
             accounts = listOf(AccountSummary(accountId, name)), notice = notice,
+            upgrading = upgrading, retiredToken = retired,
         )
     }
 

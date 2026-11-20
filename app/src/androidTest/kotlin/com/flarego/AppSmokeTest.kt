@@ -125,7 +125,6 @@ class AppSmokeTest {
         compose.onNodeWithTag("setup-connect").performClick()
         // API Token is the only add-account flow.
         compose.onNodeWithTag("token-screen").assertIsDisplayed()
-        compose.onNodeWithTag("token-purpose-billing").assertIsOn()
         enterExistingToken()
         assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
         compose.onNodeWithContentDescription("取消").performClick()
@@ -276,7 +275,7 @@ class AppSmokeTest {
     @Test
     fun authorizationContainsNoSecretFieldsAndAllowsScreenshots() {
         compose.onNodeWithContentDescription("连接账号").performClick()
-        // 用途页不显示凭据；已有 Token 页只有一个空的掩码输入框。
+        // 创建入口不显示凭据；已有 Token 页只有一个空的掩码输入框。
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         enterExistingToken()
         compose.onNodeWithTag("token-field").assertIsDisplayed()
@@ -292,14 +291,12 @@ class AppSmokeTest {
     fun authorizationDialogSurvivesActivityRecreationAndCancelClosesIt() {
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithContentDescription("连接账号").performClick()
-        compose.onNodeWithTag("token-purpose-domains").performClick()
         enterExistingToken()
         compose.onNodeWithTag("token-field").performTextInput("fake-token-never-save")
         compose.activityRule.scenario.recreate()
         compose.onNodeWithTag("token-title").assertIsDisplayed()
         assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
-        compose.onNodeWithTag("token-purpose-back").performScrollTo().performClick()
-        compose.onNodeWithTag("token-purpose-domains").assertIsOff()
+        compose.onNodeWithTag("token-create-back").performScrollTo().performClick()
         compose.onNodeWithContentDescription("取消").performClick()
         compose.activityRule.scenario.recreate()
         compose.onNodeWithTag("token-title").assertDoesNotExist()
@@ -347,7 +344,8 @@ class AppSmokeTest {
                     assertEquals("read", group.getString("type"))
                     group.getString("key")
                 }
-                assertEquals(listOf("account_settings", "zone", "dns", "billing"), keys)
+                assertEquals(listOf("account_settings", "zone", "dns", "zone_settings", "ssl_and_certificates",
+                    "workers_scripts", "workers_kv_storage", "workers_r2", "d1", "billing"), keys)
             }
             compose.onAllNodes(hasSetTextAction()).assertCountEquals(1)
             assertTrue(emptyMaskedTokenField())

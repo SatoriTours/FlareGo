@@ -191,6 +191,7 @@ class MainActivity : ComponentActivity() {
                 d1Browser = current.d1Browser,
                 registrar = current.registrar,
                 needsToken = current::needsTokenConfiguration,
+                upgradeToken = current::upgradeToken,
             )
         }
     }

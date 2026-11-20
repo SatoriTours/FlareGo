@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 import com.flarego.core.application.safeMessage
 import com.flarego.core.cloudflare.generated.ZoneSettingSchemas
 import com.flarego.core.model.*
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.ReadTarget
 import com.flarego.ui.SectionCard
 import kotlinx.serialization.json.*
 
@@ -28,7 +30,12 @@ data class ZoneSettingsPanelState(
     val editorRevision: Long = 0,
 )
 
-data class ZoneSettingsPanelError(val scope: ZoneScope, val target: ZoneSettingsTarget, val message: String)
+data class ZoneSettingsPanelError(
+    val scope: ZoneScope,
+    val target: ZoneSettingsTarget,
+    val message: String,
+    val readPermissionDenied: Boolean = false,
+)
 
 /** Frozen DOMAIN values only, never executable authority or provider raw payload. */
 data class ZoneSettingsPanelPreview(
@@ -59,6 +66,7 @@ fun ZoneSettingsPanel(
     state: ZoneSettingsPanelState,
     onIntent: (ZoneSettingsPanelIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onReadUpgrade: ((ReadTarget) -> Unit)? = null,
 ) {
     val target = state.target
     val supplied = state.snapshots[target]
@@ -145,6 +153,19 @@ fun ZoneSettingsPanel(
         }
         if (plan != null) Text("账号、站点、所选目标或草稿已变化；旧确认不可使用。", color = MaterialTheme.colorScheme.error)
         Text("Zone 设置、Universal SSL 与缓存", style = MaterialTheme.typography.titleLarge)
+        if (!state.loading && onReadUpgrade != null && state.errors.any {
+                it.scope == scope && it.target == target && it.readPermissionDenied
+            }) {
+            val missing = when (target) {
+                is ZoneSettingsTarget.Setting -> ReadTarget(ReadFeature.ZONE_SETTINGS, scope.zoneId, target.key)
+                ZoneSettingsTarget.UniversalSsl -> ReadTarget(ReadFeature.SSL, scope.zoneId)
+                ZoneSettingsTarget.Cache -> null
+            }
+            if (missing != null) TextButton(onClick = { onReadUpgrade(missing) },
+                modifier = Modifier.testTag("zs-permission-upgrade")) {
+                Text(if (target == ZoneSettingsTarget.UniversalSsl) "申请补充 Universal SSL 读取权限" else "申请补充站点设置读取权限")
+            }
+        }
         Text("连接：${scope.connectionId}\n账号：${scope.account.accountId}")
         snapshot?.let { Text("Zone：${it.owner.name}") }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

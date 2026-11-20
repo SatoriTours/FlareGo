@@ -110,8 +110,9 @@ class ManagementPlatformOwner private constructor(application:Application) {
     fun currentCredentialStamp(connection:Connection):ManagementCredentialStamp?=synchronized(lock) {
         credentials[connection.id]?.takeIf { it.active && it.connection.accountId==connection.accountId && it.connection.demo==connection.demo }?.stamp
     }
-    fun beginCredentialChange(connection:Connection):ManagementCredentialTransition=synchronized(lock) {
+    fun beginCredentialChange(connection:Connection, expectedRevision:Long?=null):ManagementCredentialTransition=synchronized(lock) {
         val old=credentials[connection.id]
+        if(expectedRevision!=null && (old?.active!=true || old.stamp.revision!=expectedRevision)) throw credentialFailure()
         if(old!=null && (old.connection.accountId!=connection.accountId || old.connection.demo!=connection.demo)) throw credentialFailure()
         if(old?.transition!=null) throw credentialFailure()
         old?.issuer?.invalidate(connection.id)
@@ -121,14 +122,24 @@ class ManagementPlatformOwner private constructor(application:Application) {
         val next=fresh(connection,(old?.stamp?.revision ?: 0)+1,(old?.stamp?.generation ?: 0)+1,false)
         val change=ManagementCredentialTransition(UUID.randomUUID().toString());next.transition=change;credentials[connection.id]=next;change
     }
-    suspend fun finishCredentialChange(change:ManagementCredentialTransition,persist:suspend()->Unit):ManagementCredentialStamp {
+    suspend fun finishCredentialChange(change:ManagementCredentialTransition,
+        restoreOnFailure:()->Boolean={ false },persist:suspend()->Unit):ManagementCredentialStamp {
         val entry=synchronized(lock) {
             val pending=credentials.values.singleOrNull { it.transition===change && !it.active && !it.ioStarted } ?: throw credentialFailure()
             pending.ioStarted=true;pending
         }
         try { withContext(Dispatchers.IO) { persist() } }
-        catch(cancel:CancellationException) { synchronized(lock) { if(entry.transition===change) entry.transition=null };throw cancel }
-        catch(error:Exception) { synchronized(lock) { if(entry.transition===change) entry.transition=null };throw credentialFailure() }
+        catch(error:Exception) {
+            synchronized(lock) {
+                if(credentials[entry.connection.id]===entry && entry.transition===change) {
+                    // Compensation is confirmed by the storage owner; never revive the superseded issuer.
+                    if(restoreOnFailure()) credentials[entry.connection.id]=fresh(entry.connection,entry.stamp.revision,entry.stamp.generation,true)
+                    else entry.transition=null
+                }
+            }
+            if(error is CancellationException) throw error
+            throw credentialFailure()
+        }
         return synchronized(lock) {
             if(credentials[entry.connection.id]!==entry || entry.transition!==change) throw credentialFailure()
             fresh(entry.connection,entry.stamp.revision,entry.stamp.generation,true).also { credentials[entry.connection.id]=it }.stamp

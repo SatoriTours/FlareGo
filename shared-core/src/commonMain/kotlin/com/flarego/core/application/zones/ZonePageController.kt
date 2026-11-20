@@ -42,6 +42,7 @@ data class ZonePageState(
     val demo: Boolean = false,
     val observedAtMs: Long? = null,
     val fromCache: Boolean = false,
+    val readPermissionDenied: Boolean = false,
 )
 
 sealed interface ZoneIntent {
@@ -170,7 +171,7 @@ class ZonePageController(
         val stamp=try { context(account) } catch(_:Exception) { clearError();return }
         val read=++generation;pageLimit=page.limit
         if(state.value.account!=account) mutable.value=ZonePageState(account=account,revision=state.value.revision+1,editorRevision=state.value.editorRevision+1,demo=stamp.connection.demo)
-        invalidate(false);mutable.update { it.copy(loading=true,error=null) }
+        invalidate(false);mutable.update { it.copy(loading=true,error=null,readPermissionDenied=false) }
         appScope.launch {
             try {
                 if(!append && !stamp.connection.demo && state.value.observedAtMs==null) {
@@ -189,7 +190,8 @@ class ZonePageController(
                 mutable.update { it.copy(zones=if(append) (it.zones+items).distinctBy { it.ref } else items,next=result.next,total=result.total,loading=false,pendingTask=task,observedAtMs=nowMs(),fromCache=false) }
                 if(!stamp.connection.demo) cache?.saveZones(account,state.value.zones,result.total,result.next==null && result.total==state.value.zones.size.toLong(),nowMs()) { current(account,stamp,read) }
             } catch(cancelled:CancellationException) { throw cancelled }
-            catch(_:Exception) { if(current(account,stamp,read)) mutable.update { it.copy(loading=false,error="Zone 读取失败，请刷新后重试") } }
+            catch(failure:Exception) { if(current(account,stamp,read)) mutable.update { it.copy(loading=false,error="Zone 读取失败，请刷新后重试",
+                readPermissionDenied=(failure as? CloudFailure)?.code==CloudFailureCode.PERMISSION_REQUIRED) } }
         }
     }
     private fun open(scope:ZoneScope,mode:ZoneEditorMode?) {

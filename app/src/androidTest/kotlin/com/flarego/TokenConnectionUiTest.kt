@@ -31,6 +31,10 @@ import com.flarego.core.application.connection.TokenPhase
 import com.flarego.core.application.AppController
 import com.flarego.core.ports.SessionFactory
 import com.flarego.core.application.connection.TokenProblem
+import com.flarego.core.application.connection.RetiredToken
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.TokenUpgradePlan
+import com.flarego.core.ports.TokenKind
 import com.flarego.core.demo.DemoSession
 import com.flarego.core.model.*
 import com.flarego.core.ports.MemoryStore
@@ -93,17 +97,12 @@ class TokenConnectionUiTest {
         compose.onNodeWithTag("token-field").fetchSemanticsNode()
             .config[SemanticsProperties.EditableText].text
 
-    @Test fun browserTemplateUsesOnlySelectedReadPermissionsAndReturnsToPaste() {
+    @Test fun browserTemplatePrefillsAllReadPermissionsAndReturnsToPaste() {
         val fake = FakeToken()
         val opened = mutableListOf<String>()
         installJourney(fake, open = { opened += it })
         compose.onNodeWithTag("token-field").assertDoesNotExist()
-        compose.onNodeWithTag("token-purpose-domains").assertIsOn().performClick()
-        compose.onNodeWithTag("token-purpose-billing").assertIsOn().performClick()
-        compose.onNodeWithTag("token-create").assertIsNotEnabled()
-        compose.onNodeWithTag("token-purpose-billing").performClick()
-        compose.onNodeWithTag("token-purpose-workers").assertIsOff().performClick()
-        compose.onNodeWithTag("token-purpose-storage").assertIsOff().performClick()
+        compose.onNodeWithTag("token-create").assertIsEnabled()
         compose.onNodeWithTag("token-create").performScrollTo().performClick()
         compose.runOnIdle {
             val uri = Uri.parse(opened.single())
@@ -120,26 +119,22 @@ class TokenConnectionUiTest {
                 assertEquals("read", permission.getString("type"))
                 permission.getString("key")
             }
-            assertEquals(setOf("account_settings", "workers_scripts", "workers_kv_storage", "workers_r2", "billing"), keys.toSet())
+            assertEquals(setOf("account_settings", "zone", "dns", "zone_settings", "ssl_and_certificates",
+                "workers_scripts", "workers_kv_storage", "workers_r2", "d1", "billing"), keys.toSet())
             assertEquals(keys.size, keys.distinct().size)
             assertTrue(fake.submitted.isEmpty())
         }
         compose.onNodeWithTag("token-field").assertIsDisplayed()
         compose.onNodeWithTag("token-submit").assertIsNotEnabled()
-        compose.onNodeWithTag("token-purpose-back").performScrollTo().performClick()
-        compose.onNodeWithTag("token-purpose-domains").assertIsOff()
-        compose.onNodeWithTag("token-purpose-workers").assertIsOn()
-        compose.onNodeWithTag("token-purpose-storage").assertIsOn()
-        compose.onNodeWithTag("token-purpose-billing").assertIsOn()
+        compose.onNodeWithTag("token-create-back").performScrollTo().performClick()
     }
 
-    @Test fun failedBrowserLaunchKeepsSelectionAndCanRetry() {
+    @Test fun failedBrowserLaunchKeepsCreationScreenAndCanRetry() {
         var calls = 0
         installJourney(FakeToken(), open = { if (++calls == 1) throw IllegalArgumentException("fake no browser") })
         compose.onNodeWithTag("token-create").performScrollTo().performClick()
         compose.onNodeWithTag("token-browser-error").assertExists()
         compose.onNodeWithTag("token-field").assertDoesNotExist()
-        compose.onNodeWithTag("token-purpose-domains").assertIsOn()
         compose.onNodeWithTag("token-create").performScrollTo().performClick()
         compose.onNodeWithTag("token-browser-error").assertDoesNotExist()
         compose.onNodeWithTag("token-field").assertIsDisplayed()
@@ -348,7 +343,6 @@ class TokenConnectionUiTest {
         compose.onNodeWithTag("nav-accounts").performClick()
         compose.onNodeWithText("连接 Cloudflare 账号").performClick()
         compose.onNodeWithTag("token-screen").assertIsDisplayed()
-        compose.onNodeWithTag("token-purpose-billing").assertIsOn()
         compose.onNodeWithTag("token-field").assertDoesNotExist()
         compose.onNodeWithTag("token-existing").performScrollTo().performClick()
         compose.onNodeWithTag("token-field").assertIsDisplayed()
@@ -373,6 +367,26 @@ class TokenConnectionUiTest {
         }
         compose.onNodeWithText("团队工作区").assertIsDisplayed()
         shoot("03-accounts")
+    }
+
+    @Test fun screenshotScopedUpgradeAndOptionalOldTokenManagement() {
+        val account = "1".repeat(32)
+        val oldId = "a".repeat(32)
+        val fake = FakeToken(TokenConnectionStatus(upgrading = true, upgradePlan =
+            TokenUpgradePlan(account, "示例团队", setOf(ReadFeature.ACCOUNT, ReadFeature.ZONES,
+                ReadFeature.DNS, ReadFeature.ZONE_SETTINGS, ReadFeature.SSL), "2".repeat(32))))
+        dialog(fake, existing = false)
+        compose.onNodeWithTag("token-create").assertExists()
+        compose.onNodeWithText("已预填当前账号及单个域名", substring = true).performScrollTo().assertIsDisplayed()
+        shoot("04-scoped-upgrade")
+        compose.runOnIdle {
+            fake.mutable.value = TokenConnectionStatus(phase = TokenPhase.CONNECTED, connected = true, upgrading = true,
+                accounts = listOf(AccountSummary(account, "示例团队")), retiredToken = RetiredToken(oldId, TokenKind.USER_OWNED))
+        }
+        compose.onNodeWithTag("old-token-id").assertTextContains(oldId, substring = true)
+        compose.onNodeWithTag("old-token-manage").assertExists()
+        compose.onNodeWithTag("old-token-skip").performScrollTo().assertIsDisplayed()
+        shoot("05-old-token")
     }
 
     private fun shoot(name: String) {

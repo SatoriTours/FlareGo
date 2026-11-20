@@ -3,15 +3,12 @@ package com.flarego.ui
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.CheckBox
-import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
@@ -25,7 +22,6 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
@@ -38,10 +34,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.flarego.core.application.connection.TokenConnectionStatus
 import com.flarego.core.application.connection.TokenPhase
 import com.flarego.core.application.connection.TokenProblem
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.ports.TokenKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-private enum class JourneyStep { PURPOSES, EXISTING_TOKEN, BROWSER_HANDOFF }
+private enum class JourneyStep { CREATE, EXISTING_TOKEN, BROWSER_HANDOFF }
 
 /** Cloudflare account IDs are 32 hex characters; anything else is a typo, not an account. */
 private val AccountIdPattern = Regex("^[0-9a-fA-F]{32}$")
@@ -61,20 +59,21 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
     val status by connection.state.collectAsState()
     val canCancel = status.phase != TokenPhase.CONNECTING
     val dismiss = { connection.cancel(); onDismiss() }
-    LaunchedEffect(status.connected) { if (status.connected) onDismiss() }
+    LaunchedEffect(status.connected) { if (status.connected && !status.upgrading) onDismiss() }
 
     // No token, account ID, or clipboard data in saved state.
-    var selected by rememberSaveable { mutableIntStateOf(TokenPurpose.DOMAINS.bit or TokenPurpose.BILLING.bit) }
-    var step by rememberSaveable { mutableStateOf(JourneyStep.PURPOSES) }
+    var step by rememberSaveable { mutableStateOf(JourneyStep.CREATE) }
     var browserFailed by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val clipboard = LocalClipboard.current
-    val choosing = status.accounts.isNotEmpty() || status.needsAccountId
-    val purposeScreen = step == JourneyStep.PURPOSES && status.phase == TokenPhase.IDLE &&
-        !status.tokenHeld && status.error == null
+    val choosing = !status.connected && (status.accounts.isNotEmpty() || status.needsAccountId)
+    val createScreen = step == JourneyStep.CREATE && (!status.upgrading || status.upgradePlan != null) &&
+        status.phase == TokenPhase.IDLE && (status.upgrading || (!status.tokenHeld && status.error == null))
     val title = when {
+        status.connected && status.upgrading -> "Token 已替换"
+        status.upgrading -> "补充读取权限"
         choosing -> "选择账号"
-        purposeScreen -> "添加账号"
+        createScreen -> "添加账号"
         else -> "连接账号"
     }
 
@@ -102,16 +101,43 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = viewport)
                                 .padding(horizontal = 20.dp).padding(top = 24.dp, bottom = 16.dp),
                         ) {
-                            if (purposeScreen) {
-                                JourneyHeading("你想查看什么？", "按用途预选权限，不申请修改权限。")
-                                Spacer(Modifier.height(14.dp))
-                                TokenPurpose.entries.forEach { purpose ->
-                                    PurposeRow(purpose, selected and purpose.bit != 0) { selected = selected xor purpose.bit }
+                            if (status.connected && status.upgrading) {
+                                JourneyHeading("新 Token 已启用", "FlareGo 已替换本机凭据，没有撤销旧 Token。")
+                                Spacer(Modifier.height(16.dp))
+                                val old = status.retiredToken
+                                if (old != null) {
+                                    SupportingText("旧 Token ID：${old.id}", Modifier.testTag("old-token-id"))
+                                    SupportingText("只有确认没有其他设备、本机其他连接或服务使用它时，才应撤销。请在官网核对旧 ID，勿撤销新 Token。")
+                                    val accountId = status.accounts.singleOrNull()?.id
+                                    val url = when (old.kind) {
+                                        TokenKind.USER_OWNED -> UserTokenManagementUrl
+                                        TokenKind.ACCOUNT_OWNED -> accountId?.let { "https://dash.cloudflare.com/$it/api-tokens" }
+                                        TokenKind.UNKNOWN -> null
+                                    }
+                                    if (url != null) CenterAction("打开 Cloudflare Token 管理 ↗", "old-token-manage") {
+                                        browserFailed = try { uriHandler.openUri(url); false } catch (_: Exception) { true }
+                                    }
+                                    if (browserFailed) SupportingText("无法打开浏览器；可稍后手动前往 Cloudflare 检查。")
+                                } else {
+                                    SupportingText("无法确认旧 Token 的 ID。若需撤销，请先确认其身份及其他设备或服务是否仍在使用。")
                                 }
-                                Spacer(Modifier.height(24.dp))
-                                SupportingText("会加入 Account Settings 只读权限，用来发现可连接的账号。")
-                                Spacer(Modifier.height(6.dp))
-                                SupportingText("模板默认覆盖全部账号和域名；请在 Cloudflare 官网收窄到所需范围。")
+                                TokenPrimary("完成（不撤销）", "old-token-skip", onClick = dismiss)
+                            } else if (createScreen) {
+                                val plan = status.upgradePlan
+                                JourneyHeading(if (plan == null) "创建只读 API Token" else "为 ${plan.accountName} 创建新 Token",
+                                    "在 Cloudflare 官网一次预填所需读取权限，不申请管理权限。")
+                                Spacer(Modifier.height(14.dp))
+                                val features = plan?.features ?: ReadFeature.entries
+                                SupportingText(features.distinctBy { it.key }.joinToString("、") { it.label })
+                                Spacer(Modifier.height(16.dp))
+                                if (plan == null) SupportingText("预填默认覆盖全部账号和域名；请在官网收窄到需要的范围。")
+                                else {
+                                    SupportingText(if (plan.zoneId != null) "已预填当前账号及单个域名；请在官网核对资源范围。"
+                                        else "已预填当前账号；请在官网将域名范围收窄至原有域名及本次所需域名。")
+                                    SupportingText("新 Token 必须能读取原有及新增功能。模板不迁移写入或其他自定义权限；若仍依赖这些权限，请先在官网核对，或取消并保留现有 Token。")
+                                }
+                                SupportingText("Registrar 不在预填范围内。")
+                                if (status.upgrading) TokenStatusFeedback(status, connection)
                                 if (browserFailed) {
                                     Spacer(Modifier.height(8.dp))
                                     Text("无法打开系统浏览器。请安装或启用浏览器后重试，或直接连接已有 Token。",
@@ -119,19 +145,16 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                                         style = MaterialTheme.typography.bodyMedium)
                                 }
                                 Spacer(Modifier.weight(1f).heightIn(min = 24.dp))
-                                TokenPrimary("前往 Cloudflare 创建 ↗", "token-create", selected != 0) {
-                                    val url = tokenTemplateUrl(TokenPurpose.entries.filter { selected and it.bit != 0 })
-                                    if (url != null) {
-                                        browserFailed = try {
-                                            uriHandler.openUri(url)
-                                            step = JourneyStep.BROWSER_HANDOFF
-                                            false
-                                        } catch (_: Exception) {
-                                            true
-                                        }
+                                TokenPrimary("前往 Cloudflare 创建 ↗", "token-create") {
+                                    browserFailed = try {
+                                        uriHandler.openUri(tokenTemplateUrl(plan))
+                                        step = JourneyStep.BROWSER_HANDOFF
+                                        false
+                                    } catch (_: Exception) {
+                                        true
                                     }
                                 }
-                                CenterAction("已有 Token，直接连接", "token-existing") {
+                                CenterAction(if (plan == null) "已有 Token，直接连接" else "已有新 Token，直接验证", "token-existing") {
                                     browserFailed = false
                                     step = JourneyStep.EXISTING_TOKEN
                                 }
@@ -140,7 +163,10 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                                     LinearProgressIndicator(Modifier.fillMaxWidth().testTag("token-progress"))
                                     Spacer(Modifier.height(12.dp))
                                 }
-                                if (choosing) {
+                                if (status.upgrading && status.upgradePlan == null) {
+                                    JourneyHeading("核查前不会替换 Token", "此步骤只读取当前账号的权限和资源范围。")
+                                    TokenStatusFeedback(status, connection)
+                                } else if (choosing) {
                                     JourneyHeading("选择要连接的账号", if (status.accounts.isNotEmpty())
                                         "这个 Token 可以访问以下账号。" else "无法自动发现可用账号。")
                                     Spacer(Modifier.height(16.dp))
@@ -162,9 +188,8 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                                     }
                                 } else {
                                     PasteToken(step == JourneyStep.BROWSER_HANDOFF, status, connection, clipboard) {
-                                        // Abandon pending verification/retry data before returning to purposes.
-                                        connection.cancel()
-                                        step = JourneyStep.PURPOSES
+                                        if (!status.upgrading) connection.cancel()
+                                        step = JourneyStep.CREATE
                                     }
                                 }
                             }
@@ -186,22 +211,6 @@ private fun JourneyHeading(title: String, subtitle: String) {
 @Composable
 private fun SupportingText(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-@Composable
-private fun PurposeRow(purpose: TokenPurpose, checked: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 50.dp).testTag("token-purpose-${purpose.tag}")
-            .toggleable(checked, role = Role.Checkbox, onValueChange = { onToggle() }).padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(if (checked) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
-            contentDescription = null, modifier = Modifier.size(20.dp))
-        Text(purpose.title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Text("只读", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    HorizontalDivider()
 }
 
 @Composable
@@ -324,8 +333,8 @@ private fun ColumnScope.PasteToken(
 
     TokenStatusFeedback(status, connection)
     Spacer(Modifier.weight(1f).heightIn(min = 20.dp))
-    TokenPrimary("验证并连接", "token-submit", token.isNotBlank() && !status.busy && !pendingPaste, submit)
-    CenterAction("还没创建？返回选择用途", "token-purpose-back", !status.busy, onBack)
+    TokenPrimary(if (status.upgrading) "验证并替换" else "验证并连接", "token-submit", token.isNotBlank() && !status.busy && !pendingPaste, submit)
+    CenterAction("还没创建？返回创建 Token", "token-create-back", !status.busy, onBack)
 }
 
 @Composable
@@ -338,10 +347,10 @@ private fun TokenStatusFeedback(status: TokenConnectionStatus, connection: Token
         Spacer(Modifier.height(8.dp))
         Column(Modifier.testTag("token-error"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Notice(error)
-            problemHint(status.problem)?.let { SupportingText(it) }
+            if (!status.upgrading) problemHint(status.problem)?.let { SupportingText(it) }
         }
     }
-    if (status.canRetry && status.tokenHeld) {
+    if (status.canRetry && (status.tokenHeld || status.upgrading)) {
         TextButton(onClick = connection::retry, enabled = !status.busy,
             modifier = Modifier.testTag("token-retry")) { Text("重试") }
     }

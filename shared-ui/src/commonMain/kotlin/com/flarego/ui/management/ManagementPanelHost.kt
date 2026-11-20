@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.flarego.core.application.connection.ReadTarget
 import com.flarego.ui.dns.*
 import com.flarego.ui.zones.ZoneSettingsPanel
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +25,7 @@ fun ManagementPanelHost(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onBound: (ManagementPanelLease) -> Unit = {},
+    onReadUpgrade: ((ReadTarget) -> Unit)? = null,
 ) {
     when(module) {
         ManagementPanelModule.FILES -> ports.files?.let { p ->
@@ -53,7 +55,8 @@ fun ManagementPanelHost(
         ManagementPanelModule.ZONE_SETTINGS -> ports.zoneSettings?.let { p ->
             BoundPanel(actualContext,module,p,p.state,p::bind,p::clear,ports.onRouteExit,onBack,onBound,modifier,
                 { it.scope==actualContext.scope }) { s,l,admit ->
-                ZoneSettingsPanel(actualContext.scope,s,{ if(admit())p.onIntent(l,it) })
+                ZoneSettingsPanel(actualContext.scope,s,{ if(admit())p.onIntent(l,it) },
+                    onReadUpgrade=onReadUpgrade?.let { upgrade -> { target -> if(admit())upgrade(target) } })
             }
         } ?: Unavailable(module,onBack,modifier)
     }

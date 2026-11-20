@@ -254,7 +254,7 @@ class TokenConnectionTest {
         assertEquals(TokenPhase.CONNECTED, c.status.value.phase)
         c.cancel(); runCurrent()
         assertEquals(1, saver.saved.size)
-        assertEquals(TokenPhase.CONNECTED, c.status.value.phase)
+        assertEquals(TokenPhase.IDLE, c.status.value.phase)
         assertFalse(c.status.value.tokenHeld)
     }
 

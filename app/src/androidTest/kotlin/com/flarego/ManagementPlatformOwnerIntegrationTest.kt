@@ -70,6 +70,16 @@ class ManagementPlatformOwnerIntegrationTest {
         owner.retireCredential(c) {};assertNull(owner.currentCredentialStamp(c))
         expectCloud { owner.acquireCredential(c,{"synthetic-token"},{transport()},{transfer()}) }
     }
+    @Test fun confirmedCompensationRestoresTheAccountButNotItsOldIssuer()=runBlocking<Unit> {
+        val owner=ManagementPlatformOwner.forApplication(app);val c=connection();owner.registerExistingCredential(c)
+        val old=owner.acquireCredential(c,{"synthetic-old"},{transport()},{transfer()})
+        val change=owner.beginCredentialChange(c)
+        expectCloud { owner.finishCredentialChange(change, restoreOnFailure = { true }) { error("rolled back") } }
+        val restored=owner.acquireCredential(c,{"synthetic-old"},{transport()},{transfer()})
+        assertTrue(restored.stamp.revision > old.stamp.revision)
+        owner.requireCurrent(restored)
+        expectCloud { owner.requireCurrent(old) }
+    }
     @Test fun demoRefusesProductionAcquisitionBeforeCredentialAndFactories()=runBlocking<Unit> {
         val owner=ManagementPlatformOwner.forApplication(app);var calls=0;val demo=connection().copy(demo=true)
         val local=owner.registerExistingCredential(demo)

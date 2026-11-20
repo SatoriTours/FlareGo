@@ -21,6 +21,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.model.*
 import com.flarego.core.application.inventory.*
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.ReadTarget
+import com.flarego.core.ports.WorkersDirectoryMode
 import kotlinx.coroutines.launch
 
 private val ListPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
@@ -32,7 +35,7 @@ fun OverviewScreen(
     create: () -> Unit,
     refreshAll: () -> Unit = {},
     openResource: (ResourceKind) -> Unit = { navigate(Page.RESOURCES) },
-    reauthorize: () -> Unit = {},
+    upgrade: ((Set<ReadTarget>) -> Unit)? = null,
 ) {
     val readable = state.products.filterKeys { it in state.supportedProducts }
     val loading = readable.values.any { it.loading }
@@ -100,16 +103,21 @@ fun OverviewScreen(
             failures.forEach { (product, loaded) ->
                 item(key = "error:$product") { Notice("${product.overviewLabel()}：${loaded.error!!.publicMessage}") }
             }
-            if (failures.values.any { it.error?.code in setOf(CloudFailureCode.PERMISSION_REQUIRED, CloudFailureCode.CREDENTIAL_EXPIRED) }) item {
-                Column {
-                    Muted("连接成功不代表已获得产品权限：请为该连接补上对应读取权限（API Token 在官方页面勾选后重新配置）。", Modifier.padding(vertical = 8.dp))
-                    TextButton(onClick = reauthorize, modifier = Modifier.fillMaxWidth()) { Text("重新配置连接") }
+            val refused = failures.filterValues { it.error?.code == CloudFailureCode.PERMISSION_REQUIRED }.keys
+            if (refused.isNotEmpty() && upgrade != null) item {
+                TextButton(onClick = { upgrade(refused.map { productReadTarget(it, state.workersMode) }.toSet()) },
+                    modifier = Modifier.fillMaxWidth().testTag("overview-permission-upgrade")) {
+                    Text("申请补充读取权限")
                 }
             }
         }
         items(state.inventory.notices) { Notice(it) }
     }
 }
+
+internal fun productReadTarget(product: ProductKey, workersMode: WorkersDirectoryMode) =
+    ReadTarget(if (product == ProductKey.WORKERS && workersMode == WorkersDirectoryMode.LEGACY) ReadFeature.WORKERS_LEGACY
+        else ReadFeature.entries.first { it.product == product })
 
 private fun ProductKey.overviewLabel(): String = when (this) {
     ProductKey.ZONES -> "域名"

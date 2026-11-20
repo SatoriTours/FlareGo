@@ -114,8 +114,8 @@ class TokenConnectionImeUiTest {
         val titleTop = compose.onNodeWithTag("token-title").getUnclippedBoundsInRoot().top.value
         assertTrue("顶栏不能压到状态栏（top=" + titleTop + "dp）", titleTop >= statusBarBottom() / density() - 1f)
         // Creation now lives on the preceding page; its entry from the paste step stays reachable.
-        scrollIntoView("token-purpose-back")
-        assertAboveIme("token-purpose-back", ime)
+        scrollIntoView("token-create-back")
+        assertAboveIme("token-create-back", ime)
         scrollIntoView("token-paste")
         assertAboveIme("token-paste", ime)
         scrollIntoView("token-submit")
