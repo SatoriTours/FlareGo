@@ -13,6 +13,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.test.platform.app.InstrumentationRegistry
 import com.flarego.core.application.AppController
+import com.flarego.core.application.connection.ReadFeature
+import com.flarego.core.application.connection.ReadTarget
+import com.flarego.core.application.connection.TokenConnectionStatus
+import com.flarego.core.application.connection.TokenPhase
 import com.flarego.core.application.inventory.*
 import com.flarego.core.demo.DemoSession
 import com.flarego.core.model.*
@@ -32,6 +36,12 @@ class RefreshFeedbackUiTest {
     private var forbidden = false
     private var unavailable = false
     private val calls = mutableListOf<ProductKey>()
+    private val token = FakeTokenConnection()
+    private val upgrades = mutableListOf<Pair<Connection, Set<ReadTarget>>>()
+    private val deniedTargets = setOf(
+        ReadTarget(ReadFeature.WORKERS), ReadTarget(ReadFeature.R2), ReadTarget(ReadFeature.KV),
+        ReadTarget(ReadFeature.D1), ReadTarget(ReadFeature.BILLING),
+    )
     private fun install(dark: Boolean = false, large: Boolean = false, readProfile: Boolean = false) {
         compose.setContent {
             val scope = rememberCoroutineScope()
@@ -71,7 +81,10 @@ class RefreshFeedbackUiTest {
                 LocalDensity provides Density(density.density, if (large) 2f else 1f)) {
                 FlareGoTheme(darkTheme = dark) {
                     Surface(Modifier.fillMaxSize()) {
-                        FlareGoApp(controller, {}, {}, tokenConnection = FakeTokenConnection())
+                        FlareGoApp(controller, {}, {}, tokenConnection = token, upgradeToken = { selected, targets ->
+                            upgrades += selected to targets
+                            token.mutable.value = TokenConnectionStatus(upgrading = true, phase = TokenPhase.VERIFYING, busy = true)
+                        })
                     }
                 }
             }
@@ -84,6 +97,11 @@ class RefreshFeedbackUiTest {
         File(directory, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
     }
+    private fun assertRefreshSummary(message: String) {
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(message))
+        compose.onNodeWithText(message).assertIsDisplayed()
+    }
+
     private fun refreshAll() {
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("overview-refresh-all"))
         compose.onNodeWithTag("overview-refresh-all").performClick()
@@ -115,7 +133,7 @@ class RefreshFeedbackUiTest {
         install()
         compose.runOnIdle { assertTrue(calls.isEmpty()) }
         compose.onNodeWithContentDescription("刷新").performClick()
-        compose.onNodeWithText("读取完成：6 项成功").performScrollTo().assertIsDisplayed()
+        assertRefreshSummary("读取完成：6 项成功")
         compose.runOnIdle { assertEquals(6, calls.size) }
         capture("success")
     }
@@ -130,7 +148,8 @@ class RefreshFeedbackUiTest {
         compose.onNodeWithText("正在刷新产品…").assertIsDisplayed()
         capture("loading")
         compose.runOnIdle { assertEquals(6, calls.size); gate!!.complete(Unit) }
-        compose.onNodeWithText("读取完成：6 项成功").performScrollTo().assertIsDisplayed()
+        assertRefreshSummary("读取完成：6 项成功")
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("overview-refresh-all"))
         compose.onNodeWithTag("overview-refresh-all").assertIsEnabled()
         refreshAll()
         compose.runOnIdle { assertEquals(12, calls.size) }
@@ -140,14 +159,12 @@ class RefreshFeedbackUiTest {
         forbidden = true
         install()
         refreshAll()
-        compose.onNodeWithText("读取完成：1 项成功，5 项失败").performScrollTo().assertIsDisplayed()
+        assertRefreshSummary("读取完成：1 项成功，5 项失败")
         // The failure list is a lazy list; scroll to the last entry instead of assuming it is
         // already composed. The exact text is still asserted.
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("账单：当前授权缺少账单读取权限"))
         compose.onNodeWithText("账单：当前授权缺少账单读取权限").assertIsDisplayed()
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新配置连接"))
-        compose.onNodeWithText("重新配置连接").performClick()
-        compose.onNodeWithTag("token-screen").assertIsDisplayed()
+        assertPermissionUpgrade()
     }
 
     @Test fun failedRefreshKeepsPreviousCountButMarksItStaleAndCanRecover() {
@@ -155,23 +172,45 @@ class RefreshFeedbackUiTest {
         refreshAll()
         compose.runOnIdle { unavailable = true }
         refreshAll()
-        compose.onNodeWithText("读取完成：5 项成功，1 项失败").performScrollTo().assertIsDisplayed()
+        assertRefreshSummary("读取完成：5 项成功，1 项失败")
         compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasAnyDescendant(hasText("1+ · 更新失败")))
-        compose.onNodeWithText("域名：暂时无法加载，请稍后重试").performScrollTo().assertIsDisplayed()
+        val networkError = "域名：暂时无法加载，请稍后重试"
+        val overview = compose.onNode(hasScrollToNodeAction())
+        overview.performScrollToNode(hasText(networkError))
+        compose.onNodeWithText(networkError).assertIsDisplayed()
+        // The upgrade action, when present, follows the last failure in the lazy list.
+        overview.performTouchInput { swipeUp() }
+        compose.onNodeWithTag("overview-permission-upgrade").assertDoesNotExist()
+        compose.onNodeWithTag("token-screen").assertDoesNotExist()
+        compose.runOnIdle { assertTrue(upgrades.isEmpty()) }
         capture("stale-error")
         compose.runOnIdle { unavailable = false }
         refreshAll()
-        compose.onNodeWithText("读取完成：6 项成功").performScrollTo().assertIsDisplayed()
+        assertRefreshSummary("读取完成：6 项成功")
         compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasAnyDescendant(hasText("1")))
     }
 
     @Test fun failureFeedbackIsReachableInDarkThemeWithLargeText() {
         forbidden = true
+        // The same refresh has a network error for Zones; only explicit denials may be requested.
+        unavailable = true
         install(dark = true, large = true)
         refreshAll()
-        compose.onNodeWithText("读取完成：1 项成功，5 项失败").performScrollTo().assertIsDisplayed()
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("重新配置连接"))
-        compose.onNodeWithText("重新配置连接").assertIsDisplayed()
-        capture("dark-large-errors")
+        assertRefreshSummary("读取完成：0 项成功，6 项失败")
+        assertPermissionUpgrade(captureName = "dark-large-errors")
+    }
+
+    private fun assertPermissionUpgrade(captureName: String? = null) {
+        val tag = "overview-permission-upgrade"
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag(tag))
+        val entry = compose.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled()
+        captureName?.let(::capture)
+        compose.onNodeWithTag("token-screen").assertDoesNotExist()
+        compose.runOnIdle { assertTrue(upgrades.isEmpty()) }
+        entry.performClick()
+        compose.onNodeWithTag("token-screen").assertIsDisplayed()
+        compose.onNodeWithTag("token-title").assertTextEquals("补充读取权限")
+        compose.onNodeWithTag("token-create").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(listOf(connection to deniedTargets), upgrades) }
     }
 }
