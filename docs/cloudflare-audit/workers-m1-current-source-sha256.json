@@ -1,0 +1,38 @@
+{
+  "app/src/main/kotlin/com/flarego/FlareGoViewModel.kt": {
+    "previous": "06d43f5d0d2d72e5e90d418106acd49424093fce9667f0ab9985feeef6866f73",
+    "current": "cb829fd58a84e79159c0f4619cac142cd6045a73edea107ae0f13452153e1776"
+  },
+  "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/ActionPolicies.kt": {
+    "previous": "2d2c7c4d72ab19fece7a4898885ea8efb9f70f7fd4d3e86135b6383442410137",
+    "current": "a827a3c5ca1f47bf34b3e696df61a74f42127e4a5ea4d351af8760ed40129352"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/D1CoverageTest.kt": {
+    "previous": "ed957f992417f161cf3ffbbca723646ba1b6d9386cd96d3e2c86a9f5873127c9",
+    "current": "fe300fa33de3ec9af1f8e5e274e0b4e63809e6386dd42202bbb60ca84b4804a8"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/KvCoverageTest.kt": {
+    "previous": "0d882ec3e7c38e2af7e0add1076ccb0c039bba3d5a908cf1f83b4bb8a65b03ad",
+    "current": "6d6112d8c9e7643163da6d492dd3e3583df1c88015cd095130f92df3b2de9575"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/P2CoverageTest.kt": {
+    "previous": "d8fbfc6a5305d20ea35e537a16cb501f1094028807a67ec9adfe1f0eff53d024",
+    "current": "96a3901c9da10520da9f57cc96e53825d85e177b011f31f827a253d6ffa80434"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2CoverageTest.kt": {
+    "previous": "aaeccc3dd86b1dfcc20c2473f6c0521f9c778b96e6d622d3c8d872f2e79d9c64",
+    "current": "a749ec6c1f5d5b785991dc754e488dd2169fc87cb3e163cf018277938de792f9"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2DomainConfigurationTest.kt": {
+    "previous": "2ff4cbf448c3818194385a1f835134e48545b13656f2295f29bc4d43cc96603f",
+    "current": "c2476ecc7e3ccfd38d47504f07dab1998174276bef8fb9c54ab415f72146b366"
+  },
+  "shared-core/src/commonTest/kotlin/com/flarego/core/R2SippyTest.kt": {
+    "previous": "6c8f6cfc550eb03394e8d0c64169f78970db58a683940884a8e84496392c04cd",
+    "current": "275a3ae125101d2d99ee794160331744390e9c638e89cfeeddba7c9cce42593a"
+  },
+  "shared-ui/src/commonMain/kotlin/com/flarego/ui/FlareGoApp.kt": {
+    "previous": "bfd4304688a932c4c0341202f4b6318c596a91ec73a7a30582df36ebfbf98ff3",
+    "current": "f5d672de88202204f162f59cab156927176e28ed8c64d96f8ecb5c801cf0d772"
+  }
+}

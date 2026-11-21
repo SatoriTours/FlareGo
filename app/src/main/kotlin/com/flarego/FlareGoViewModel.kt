@@ -656,6 +656,9 @@ class FlareGoViewModel private constructor(
                     CloudflareDirectoryClient(connection,gateway,WorkersDirectoryMode.LEGACY))
             }
         }, credentialRevisionQuery = ::credentialRevision, nowMs = System::currentTimeMillis,
+        workerReleasesFactory = { connection, worker ->
+            com.flarego.core.cloudflare.workers.CloudflareWorkerReleases(connection, worker, gateway(connection))
+        },
     ).also { controllerRef = it; it.bindManagement(operationRuntime.management) }
 
     init {

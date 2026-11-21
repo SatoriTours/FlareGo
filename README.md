@@ -83,15 +83,19 @@
 | DNS | 21 类型领域表单、列表／详情／过滤／分页；差量 PATCH、独立 PUT、批量预览确认与只读核对；未知 raw 保留只读 |
 | DNS 文件与扫描 | 系统文档授权的 BIND 导入／原字节导出、扫描触发／候选审核／usage／DNS Settings；导入未知或部分结果不重放 |
 | DNSSEC 与 Zone 设置 | 状态／ZSK 读取、独立风险确认、固定设置目标／Universal SSL／基础清缓存；按实际权限、editable 和已证资格拒绝不支持的写入 |
-| 边缘计算 | 按页读取现代 Workers 目录；显式旧目录入口和资源详情元数据 |
-| 存储与数据库 | 查询 R2 桶、D1 数据库、KV 命名空间目录与详情元数据 |
+| Workers | 「资源 → Workers → 选中 Worker」查看当前部署的版本和流量分配、部署历史与快照、版本列表与详情；支持现代目录和显式旧目录 |
+| R2 | 桶和对象浏览、上传／下载／删除，以及已有的桶配置、任务、通知和指标入口；可执行操作受权限与生产准入限制 |
+| KV | 命名空间和键值管理、分页、文本／二进制及批量操作；写入按实际授权和风险确认放行 |
+| D1 | 数据库管理、只读浏览和受控 SQL；导入、导出、Time Travel 恢复、恢复已删库有实现与合成验证，但缺生产资格证据，默认关闭 |
 | 账单 | 账号历史账单按 Token 权限按需读取；无权限时页面给出准确缺权限提示与控制台入口。旧 OAuth 连接说明需配置 Token。演示连接仍展示账号/用户两种来源示例，分开且不自动回退。发票 PDF／Alpha 用量不在范围 |
 | 操作记录 | 安全任务持久化、启动恢复及只读核对；不重放不确定写入 |
 | 应用更新 | 正式／测试通道、自动／手动检查、下载校验、系统安装确认 |
 
 P1 主线的账号发现、现代／显式旧 Workers、两种账单来源与历史验证见 [P1 Task 9](docs/cloudflare-audit/p1-task9-verification-2026-10-15.md)。P2 每个 App runtime 内共享 plans／coordinator／写锁／metadata latch，产品写入先预览、再由真实当前输入独立确认；未知结果只读核对，进程重建不恢复 payload／风险确认。旧 DNS Unit receipt 的历史保守语义保留。
 
-真实域名注册、资源创建、Worker 部署以及 R2 对象读写目前通过官方控制台完成。域名注册搜索已实现只读 discovery（`GET /accounts/{id}/registrar/domain-search`，入口：域名页底部「搜索并注册域名」），结果只是缓存建议、需在官方控制台确认可用性与价格；该只读搜索由 API Token 的 Registrar 权限决定：Token 具备相应读取权限时按需调用，403 时页面显示准确缺权限提示；旧 OAuth 连接无法使用（已停用）。演示连接返回三条示例候选。注册（`POST /registrar/registrations`）未实现，App 内不会提交注册也不会扣款，真实云未验证。当前 Android 不预置演示账号。其他云厂商尚未接入。
+Workers 详情沿用现有 `Workers Scripts Read` 权限，不追加权限、不读取源码或 Secret。现代目录先通过[脚本搜索](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/search/)核对 Worker ID 与脚本名，不能唯一确认就不发部署或版本请求。线上分配以[部署列表](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/)首条为准，不等同于[最新创建版本](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/list/)，也不是实测请求量。此次只读，不支持发布、回滚、预览部署或流量指标。
+
+已有 R2、KV、D1 入口和合成测试不代表真实云端生产资格；缺证或未授权的操作仍不可执行。R2 S3 分片、未放行的迁移能力不计入当前生产范围。详见[开发进度及验证边界](docs/development-progress.md)。真实域名注册和 Worker 发布仍通过官方控制台完成。域名注册搜索已实现只读 discovery（`GET /accounts/{id}/registrar/domain-search`，入口：域名页底部「搜索并注册域名」），结果只是缓存建议、需在官方控制台确认可用性与价格；该只读搜索由 API Token 的 Registrar 权限决定：Token 具备相应读取权限时按需调用，403 时页面显示准确缺权限提示；旧 OAuth 连接无法使用（已停用）。演示连接返回三条示例候选。注册（`POST /registrar/registrations`）未实现，App 内不会提交注册也不会扣款，真实云未验证。当前 Android 不预置演示账号。其他云厂商尚未接入。
 
 真实连接不会用示例数据补齐缺失结果；没有可用预估费用时显示未知。用户级账单可能包含其他账号，不能作为当前账号的月度费用汇总。当前 API 行为通过隔离测试验证，尚未使用真实云账号完成端到端验收。
 
@@ -223,7 +227,7 @@ python3 -m http.server 4173 --bind 127.0.0.1
 
 ## 后续方向
 
-- Cloudflare 深度管理：真实域名注册、Workers 部署、R2 对象、D1／KV 数据操作。
+- Cloudflare 深度管理：真实域名注册、受控 Workers 发布与回滚，以及 R2／KV／D1 缺证操作的生产验证。
 - 补充证书、缓存、安全规则、用量、订阅和费用能力。
 - 接入 AWS、Google Cloud、Microsoft Azure、阿里云与腾讯云适配器。
 - 根据需求扩展桌面／iOS 客户端，以及可选的后台同步与团队协作。

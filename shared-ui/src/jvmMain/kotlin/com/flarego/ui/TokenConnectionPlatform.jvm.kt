@@ -1,5 +1,6 @@
 package com.flarego.ui
 
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.window.DialogProperties
@@ -16,3 +17,6 @@ internal actual fun tokenDialogProperties(canCancel: Boolean) = DialogProperties
     dismissOnBackPress = canCancel,
     dismissOnClickOutside = false,
 )
+
+@Composable
+internal actual fun TokenSystemBarAppearance(light: Boolean) = Unit

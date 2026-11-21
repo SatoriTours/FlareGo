@@ -175,7 +175,7 @@ class R2CoverageTest {
         val historic=json(matrixPath)
         val current=json("docs/cloudflare-audit/d1-runtime-support-2026-10-25.json")
         return JsonObject(historic + mapOf(
-            "source_sha256" to current.getValue("r2_current_source_sha256"),
+            "source_sha256" to m1CurrentSourceClaims(root, current.getValue("r2_current_source_sha256").jsonObject, 6),
             "runtime_registry_observed" to current.getValue("runtime_registry_observed")))
     }
 
@@ -313,12 +313,12 @@ class R2CoverageTest {
         val typed = rows.filterValues { it.text("technical_support") == "TYPED_HANDLER" }.keys
         // Exact union: the frozen P1/P2/auxiliary baseline plus the reviewed A/B1/B2/B3/C additions.
         val expected = baseline + typed + kvRegistrations().map { it.policy.key } + d1Registrations().map { it.policy.key } +
-            registrarRegistrations().map { it.policy.key }
+            registrarRegistrations().map { it.policy.key } + workerReleaseReadActions
         assertEquals(69, baseline.size, "the frozen P1/P2/auxiliary baseline stays 69")
-        assertEquals(132, expected.size, "the current reviewed registry is exactly 132 operations")
+        assertEquals(137, expected.size, "the current reviewed registry is exactly 137 operations")
         assertEquals(expected, registry.keys, "a missing route or an unreviewed extra action (including a read) is refused")
         assertEquals(expected.size, registry.size)
-        assertEquals(63, registry.values.count { it.policy.semantics == ActionSemantics.READ }, "exact current READ count")
+        assertEquals(68, registry.values.count { it.policy.semantics == ActionSemantics.READ }, "exact current READ count")
         assertEquals(69, registry.values.count { it.policy.semantics == ActionSemantics.WRITE }, "exact current WRITE count")
         assertEquals(JsonPrimitive(132), matrix.getValue("runtime_registry_observed").jsonObject["count"])
         assertEquals(JsonPrimitive(63), matrix.getValue("runtime_registry_observed").jsonObject["read"])
@@ -1422,7 +1422,7 @@ class R2CoverageTest {
     }
 
     @Test
-    fun handwrittenRoutesKeepThePinnedSchemaAndTheExact132EntryRegistry() {
+    fun handwrittenRoutesKeepThePinnedSchemaAndTheExactLiveRegistry() {
         validateSchema(matrix())
         validateRegistry(matrix(), ActionPolicies.registry.registrations)
     }

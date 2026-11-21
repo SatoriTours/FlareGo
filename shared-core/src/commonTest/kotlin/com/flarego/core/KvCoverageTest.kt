@@ -82,7 +82,8 @@ class KvCoverageTest {
         val historical=read("docs/cloudflare-audit/kv-runtime-support-2026-10-25.json")
         assertEquals("33b3b4419d60c4b16c95f92436c8f078b311dd04aabb2b7d43def7cdefb3a3ff",sha(historical.encodeToByteArray()))
         val current=Json.parseToJsonElement(read("docs/cloudflare-audit/d1-runtime-support-2026-10-25.json")).jsonObject
-        return JsonObject(Json.parseToJsonElement(historical).jsonObject+("source_sha256" to current.getValue("kv_current_source_sha256")))
+        val sources=m1CurrentSourceClaims(root,current.getValue("kv_current_source_sha256").jsonObject,6)
+        return JsonObject(Json.parseToJsonElement(historical).jsonObject+("source_sha256" to sources))
     }
     private fun validateSources(claims:JsonObject){
         assertEquals(sourcePaths,claims.keys)
@@ -124,8 +125,8 @@ class KvCoverageTest {
         val m=matrix();validateOperations(m.getValue("operations").jsonObject)
         assertEquals(JsonPrimitive(14),m["candidate_count"]);assertEquals(JsonPrimitive(13),m["current_count"])
         assertEquals(JsonPrimitive(prefix+"delete-multiple-key-value-pairs"),m.getValue("deprecated_migration").jsonObject[deprecated])
-        assertNull(ActionPolicies.policy(deprecated));assertEquals(132,ActionPolicies.registry.registrations.size)
-        assertEquals(63,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
+        assertNull(ActionPolicies.policy(deprecated));assertEquals(137,ActionPolicies.registry.registrations.size)
+        assertEquals(68,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
         assertEquals(69,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.WRITE})
     }
     @Test fun currentSourcesAndActualNativeEntryMatchAndFrozenHistoryIsUnchanged(){

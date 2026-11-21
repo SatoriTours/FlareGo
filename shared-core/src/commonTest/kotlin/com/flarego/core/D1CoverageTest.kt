@@ -87,7 +87,11 @@ class D1CoverageTest {
     private val root:Path get()=generateSequence(Path.of("").toAbsolutePath()){it.parent}.first{Files.isRegularFile(it.resolve("docs/cloudflare-audit/d1-current-schema-2026-10-25.json"))}
     private fun read(path:String)=Files.readString(root.resolve(path))
     private fun sha(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it)}
-    private fun matrix()=Json.parseToJsonElement(read(matrixPath)).jsonObject
+    private fun previousMatrix()=Json.parseToJsonElement(read(matrixPath)).jsonObject
+    private fun matrix():JsonObject {
+        val previous=previousMatrix()
+        return JsonObject(previous+("source_sha256" to m1CurrentSourceClaims(root,previous.getValue("source_sha256").jsonObject,7)))
+    }
     private fun validateSources(claims:JsonObject){
         assertEquals(sourcePaths,claims.keys)
         for((path,digest)in claims)assertEquals(digest.jsonPrimitive.content,sha(Files.readAllBytes(root.resolve(path))),"Source drift: $path")
@@ -122,8 +126,8 @@ class D1CoverageTest {
             assertEquals(row.semantics,registration.policy.semantics.name);assertEquals(ActionScope.ACCOUNT,registration.scope)
             if(row.semantics=="WRITE")assertFalse(registration.policy.retry.enabled)
         }
-        assertEquals(132,ActionPolicies.registry.registrations.size)
-        assertEquals(63,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
+        assertEquals(137,ActionPolicies.registry.registrations.size)
+        assertEquals(68,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.READ})
         assertEquals(69,ActionPolicies.registry.registrations.values.count{it.policy.semantics==ActionSemantics.WRITE})
         val m=matrix();assertEquals(JsonPrimitive(13),m["current_count"]);assertEquals(JsonPrimitive(12),m["new_count"])
         validateOperations(m.getValue("operations").jsonObject)
@@ -141,6 +145,14 @@ class D1CoverageTest {
         assertFailsWith<AssertionError>{validateSources(JsonObject(claims-victim))}
         assertFailsWith<AssertionError>{validateSources(JsonObject(claims+(victim to JsonPrimitive("0".repeat(64)))))}
         assertFailsWith<AssertionError>{validateSources(JsonObject(claims+("README.md" to JsonPrimitive("0".repeat(64)))))}
+        val workerWiring="app/src/main/kotlin/com/flarego/FlareGoViewModel.kt"
+        val previous=previousMatrix().getValue("source_sha256").jsonObject
+        assertFailsWith<AssertionError>{
+            validateSources(JsonObject(claims+(workerWiring to previous.getValue(workerWiring))))
+        }
+        assertFailsWith<AssertionError>{
+            m1CurrentSourceClaims(root,JsonObject(previous+(workerWiring to JsonPrimitive("0".repeat(64)))),7)
+        }
         val ops=m.getValue("operations").jsonObject;val id="d1-get-database"
         assertFailsWith<AssertionError>{validateOperations(JsonObject(ops-id))}
         assertFailsWith<AssertionError>{validateOperations(JsonObject(ops+("d1-unreviewed" to ops.getValue(id))))}

@@ -96,12 +96,12 @@ class P2CoverageTest {
 
     private fun checkRegistry(actual:JsonObject,rows:List<Map<String,String>>,manifest:JsonObject) {
         denominator(rows)
-        val reviewed=expectedIds(rows)+reviewedLaterBatchIds()
+        val reviewed=expectedIds(rows)+reviewedLaterBatchIds()+workerReleaseReadActions
         assertEquals(reviewed,actual.keys,"Missing route or unreviewed extra action (including writes)")
         assertEquals(reviewed.size,actual.size)
-        // Current132 = historical69 + A10 + B20 + C8 + KV12 + D1 addition12 + Registrar1.
-        assertEquals(132,reviewed.size,"The current reviewed registry is exactly 132 operations")
-        assertEquals(63,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
+        // Historical 132 plus the five read-only Worker release actions.
+        assertEquals(137,reviewed.size,"The current reviewed registry is exactly 137 operations")
+        assertEquals(68,actual.values.count { it.jsonObject.text("semantics")=="READ" },"Exact current READ count")
         assertEquals(69,actual.values.count { it.jsonObject.text("semantics")=="WRITE" },"Exact current WRITE count")
         val p1=json("docs/cloudflare-audit/p1-runtime-support-2026-10-16.json").getValue("operations").jsonObject
         val candidateIds=rows.map { it.getValue("operation_id") }.toSet()

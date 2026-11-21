@@ -401,9 +401,26 @@ class TokenConnectionUiTest {
         } finally { bitmap.recycle(); pipes.forEach { runCatching { it.close() } } }
     }
 
+    @Test fun permissionDetailsCanBeOpenedAndClosedWithoutLeavingAddAccount() {
+        dialog(FakeToken(), large = true, existing = false)
+        val toggle = compose.onNodeWithText("权限明细")
+        val permissions = compose.onNodeWithText("账号、域名、DNS、站点设置、通用 SSL、Workers、KV、R2、D1、账单历史")
+        val exclusion = compose.onNodeWithText("Registrar 不在预填范围内。")
+
+        permissions.assertDoesNotExist()
+        exclusion.assertDoesNotExist()
+        toggle.performScrollTo().performClick()
+        permissions.performScrollTo().assertIsDisplayed()
+        exclusion.performScrollTo().assertIsDisplayed()
+        toggle.performScrollTo().performClick()
+        permissions.assertDoesNotExist()
+        exclusion.assertDoesNotExist()
+        compose.onNodeWithTag("token-field").assertDoesNotExist()
+    }
+
     @Test fun primaryActionStaysReachableByScrolling() {
         val fake = FakeToken()
-        dialog(fake, existing = false)
+        dialog(fake, large = true, existing = false)
         compose.onNodeWithTag("token-create").performScrollTo().assertIsDisplayed()
         openExisting()
         compose.onNodeWithTag("token-submit").performScrollTo().assertIsDisplayed()

@@ -17,6 +17,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -69,6 +70,10 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
     val choosing = !status.connected && (status.accounts.isNotEmpty() || status.needsAccountId)
     val createScreen = step == JourneyStep.CREATE && (!status.upgrading || status.upgradePlan != null) &&
         status.phase == TokenPhase.IDLE && (status.upgrading || (!status.tokenHeld && status.error == null))
+    val addAccountScreen = createScreen && !status.upgrading
+    val colors = MaterialTheme.colorScheme
+    val lightSurface = colors.surface.luminance() > 0.5f
+    val warmIntro = addAccountScreen && lightSurface
     val title = when {
         status.connected && status.upgrading -> "Token 已替换"
         status.upgrading -> "补充读取权限"
@@ -81,10 +86,16 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
         onDismissRequest = { if (canCancel) dismiss() },
         properties = tokenDialogProperties(canCancel),
     ) {
-        Surface(Modifier.fillMaxSize().testTag("token-screen")) {
+        TokenSystemBarAppearance(lightSurface)
+        Surface(
+            Modifier.fillMaxSize().testTag("token-screen"),
+            color = if (warmIntro) Color(0xFFFFFCF8) else colors.surface,
+            contentColor = if (warmIntro) Color(0xFF252D29) else colors.onSurface,
+        ) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 Box(
-                    Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 8.dp),
+                    Modifier.fillMaxWidth().padding(top = if (addAccountScreen) 16.dp else 0.dp)
+                        .heightIn(min = 52.dp).padding(horizontal = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(title, Modifier.padding(horizontal = 48.dp, vertical = 8.dp).testTag("token-title"),
@@ -93,13 +104,14 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBackIos, "取消", Modifier.size(20.dp))
                     }
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 20.dp))
+                if (!addAccountScreen) HorizontalDivider(Modifier.padding(horizontal = 20.dp))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                     val viewport = maxHeight
                     key(title) {
                         Column(
                             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = viewport)
-                                .padding(horizontal = 20.dp).padding(top = 24.dp, bottom = 16.dp),
+                                .padding(horizontal = if (addAccountScreen) 24.dp else 20.dp)
+                                .padding(top = if (addAccountScreen) 20.dp else 24.dp, bottom = 16.dp),
                         ) {
                             if (status.connected && status.upgrading) {
                                 JourneyHeading("新 Token 已启用", "FlareGo 已替换本机凭据，没有撤销旧 Token。")
@@ -124,28 +136,7 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                                 TokenPrimary("完成（不撤销）", "old-token-skip", onClick = dismiss)
                             } else if (createScreen) {
                                 val plan = status.upgradePlan
-                                JourneyHeading(if (plan == null) "创建只读 API Token" else "为 ${plan.accountName} 创建新 Token",
-                                    "在 Cloudflare 官网一次预填所需读取权限，不申请管理权限。")
-                                Spacer(Modifier.height(14.dp))
-                                val features = plan?.features ?: ReadFeature.entries
-                                SupportingText(features.distinctBy { it.key }.joinToString("、") { it.label })
-                                Spacer(Modifier.height(16.dp))
-                                if (plan == null) SupportingText("预填默认覆盖全部账号和域名；请在官网收窄到需要的范围。")
-                                else {
-                                    SupportingText(if (plan.zoneId != null) "已预填当前账号及单个域名；请在官网核对资源范围。"
-                                        else "已预填当前账号；请在官网将域名范围收窄至原有域名及本次所需域名。")
-                                    SupportingText("新 Token 必须能读取原有及新增功能。模板不迁移写入或其他自定义权限；若仍依赖这些权限，请先在官网核对，或取消并保留现有 Token。")
-                                }
-                                SupportingText("Registrar 不在预填范围内。")
-                                if (status.upgrading) TokenStatusFeedback(status, connection)
-                                if (browserFailed) {
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("无法打开系统浏览器。请安装或启用浏览器后重试，或直接连接已有 Token。",
-                                        Modifier.testTag("token-browser-error"), color = MaterialTheme.colorScheme.error,
-                                        style = MaterialTheme.typography.bodyMedium)
-                                }
-                                Spacer(Modifier.weight(1f).heightIn(min = 24.dp))
-                                TokenPrimary("前往 Cloudflare 创建 ↗", "token-create") {
+                                val create = {
                                     browserFailed = try {
                                         uriHandler.openUri(tokenTemplateUrl(plan))
                                         step = JourneyStep.BROWSER_HANDOFF
@@ -154,9 +145,27 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
                                         true
                                     }
                                 }
-                                CenterAction(if (plan == null) "已有 Token，直接连接" else "已有新 Token，直接验证", "token-existing") {
+                                val existing = {
                                     browserFailed = false
                                     step = JourneyStep.EXISTING_TOKEN
+                                }
+                                if (plan == null) {
+                                    AddAccountIntro(warmIntro, browserFailed, create, existing)
+                                } else {
+                                    JourneyHeading("为 ${plan.accountName} 创建新 Token",
+                                        "在 Cloudflare 官网一次预填所需读取权限，不申请管理权限。")
+                                    Spacer(Modifier.height(14.dp))
+                                    SupportingText(plan.features.distinctBy { it.key }.joinToString("、") { it.label })
+                                    Spacer(Modifier.height(16.dp))
+                                    SupportingText(if (plan.zoneId != null) "已预填当前账号及单个域名；请在官网核对资源范围。"
+                                        else "已预填当前账号；请在官网将域名范围收窄至原有域名及本次所需域名。")
+                                    SupportingText("新 Token 必须能读取原有及新增功能。模板不迁移写入或其他自定义权限；若仍依赖这些权限，请先在官网核对，或取消并保留现有 Token。")
+                                    SupportingText("Registrar 不在预填范围内。")
+                                    TokenStatusFeedback(status, connection)
+                                    if (browserFailed) TokenBrowserError()
+                                    Spacer(Modifier.weight(1f).heightIn(min = 24.dp))
+                                    TokenPrimary("前往 Cloudflare 创建 ↗", "token-create", onClick = create)
+                                    CenterAction("已有新 Token，直接验证", "token-existing", onClick = existing)
                                 }
                             } else {
                                 if (status.busy) {
@@ -199,6 +208,14 @@ fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
             }
         }
     }
+}
+
+@Composable
+internal fun TokenBrowserError() {
+    Spacer(Modifier.height(8.dp))
+    Text("无法打开系统浏览器。请安装或启用浏览器后重试，或直接连接已有 Token。",
+        Modifier.testTag("token-browser-error"), color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable
@@ -403,6 +420,9 @@ private fun AccountRow(name: String, id: String, enabled: Boolean, onClick: () -
 }
 
 internal expect fun tokenDialogProperties(canCancel: Boolean): DialogProperties
+
+@Composable
+internal expect fun TokenSystemBarAppearance(light: Boolean)
 
 /** Kept for callers that need the same classification text outside the dialog. */
 internal fun tokenProblemHint(problem: TokenProblem) = problemHint(problem)

@@ -2,6 +2,8 @@ package com.flarego.core.application
 
 import com.flarego.core.application.inventory.*
 import com.flarego.core.application.operations.DnsOperations
+import com.flarego.core.application.workers.WorkerReleaseBrowser
+import com.flarego.core.application.workers.WorkerReleases
 import com.flarego.core.model.*
 import com.flarego.core.ports.*
 import kotlin.random.Random
@@ -21,7 +23,9 @@ class AppController(
     private val nowMs: () -> Long = { 0L },
     private val availableProducts: (Connection) -> Set<ProductKey> = { ProductKey.entries.toSet() },
     private val readCache: com.flarego.core.application.cache.ReadSnapshotStore? = null,
+    workerReleasesFactory: (suspend (Connection, CloudResource) -> WorkerReleases)? = null,
 ) {
+    val workerReleases = workerReleasesFactory?.let { WorkerReleaseBrowser(scope, it, nowMs) }
     private val mutable =
         MutableStateFlow(
             AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = productFactory != null,
@@ -129,6 +133,7 @@ class AppController(
     }
 
     fun navigate(page: Page) {
+        workerReleases?.clear()
         bumpUiEpoch()
         dnsRevision++
         mutable.update {
@@ -148,7 +153,8 @@ class AppController(
         }
     }
 
-    fun back() =
+    fun back() {
+        if (state.value.page == Page.RESOURCE && workerReleases?.back() == true) return
         navigate(
             when (state.value.page) {
                 Page.DNS,
@@ -157,10 +163,12 @@ class AppController(
                 else -> Page.OVERVIEW
             }
         )
+    }
 
     fun selectConnection(connection: Connection) {
         bumpUiEpoch()
         if (connection !in state.value.connections) return
+        workerReleases?.clear()
         revision++
         dnsRevision++
         val root =
@@ -183,8 +191,10 @@ class AppController(
         revision++
         dnsRevision++
         if (state.value.selected?.id == id) {
+            workerReleases?.clear()
             resetProducts()
-            mutable.update { it.copy(domain = null, resource = null, dns = emptyList(), dnsLoading = false, error = null) }
+            mutable.update { it.copy(page = if (it.page == Page.RESOURCE) Page.RESOURCES else it.page,
+                domain = null, resource = null, dns = emptyList(), dnsLoading = false, error = null) }
         }
         loader?.invalidate(id)
         sessions.remove(id)
@@ -205,6 +215,7 @@ class AppController(
             }
         } else {
             // Invalidate every outstanding read before dropping the old account's data.
+            workerReleases?.clear()
             revision++
             dnsRevision++
             mutable.update {
@@ -216,16 +227,18 @@ class AppController(
     }
 
     fun openResource(resource: CloudResource) {
-        if (state.value.selected == null) return
-        if (loader != null && (resource.resourceRef?.scope != account(state.value.selected) || resource !in state.value.inventory.resources)) return
+        val connection = state.value.selected ?: return
+        if (loader != null && (resource.resourceRef?.scope != account(connection) || resource !in state.value.inventory.resources)) return
         bumpUiEpoch()
         mutable.update { it.copy(page = Page.RESOURCE, resource = resource, error = null) }
+        workerReleases?.open(connection, resource)
     }
 
     fun openDomain(domain: Domain) {
         bumpUiEpoch()
         if (domain.connectionId != state.value.selected?.id) return
         if (loader != null && domain !in state.value.inventory.domains) return
+        workerReleases?.clear()
         mutable.update {
             it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null)
         }
@@ -241,6 +254,10 @@ class AppController(
     }
 
     fun refresh() {
+        if (state.value.page == Page.RESOURCE && workerReleases?.state?.value != null) {
+            workerReleases.load()
+            return
+        }
         if (state.value.page == Page.BILLING && ProductKey.BILLING !in state.value.supportedProducts) return
         if (loader != null && state.value.page == Page.BILLING && state.value.billingSource == BillingSource.USER_HISTORY_LEGACY) {
             val connection = state.value.selected ?: return

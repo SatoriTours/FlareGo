@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
 import com.flarego.ui.management.*
@@ -41,6 +42,8 @@ import com.flarego.core.ports.*
 import com.flarego.core.updates.UpdateController
 import com.flarego.ui.dns.DnsPage
 import com.flarego.ui.zones.ZonePage
+import com.flarego.ui.workers.WorkerReleaseScreen
+import com.flarego.ui.workers.toolbarTitle
 import kotlinx.coroutines.launch
 
 private sealed interface DialogState {
@@ -92,6 +95,12 @@ fun FlareGoApp(
 ) {
     val state by controller.state.collectAsState()
     val account = state.selected?.let { AccountScope(it.id, it.accountId) }
+    val workerBrowser = controller.workerReleases
+    val workerRelease = workerBrowser?.state?.collectAsState()?.value?.takeIf {
+        state.page == Page.RESOURCE && it.worker == state.resource && it.worker.resourceRef?.scope == account
+    }
+    val compactWorkerName = workerRelease != null &&
+        (workerRelease.worker.name.length > 24 || LocalDensity.current.fontScale >= 1.5f)
     val managementDns = management?.dns?.state?.collectAsState()?.value
     var discardEdit by remember { mutableStateOf(false) }
     val managementZones = management?.zones?.state?.collectAsState()?.value
@@ -364,7 +373,7 @@ fun FlareGoApp(
                             if (detail)
                                 IconButton(
                                     onClick = ::navigateBack,
-                                    modifier = Modifier.size(44.dp),
+                                    modifier = Modifier.size(if (workerRelease != null) 48.dp else 44.dp),
                                 ) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", modifier = Modifier.size(20.dp))
                                 }
@@ -372,7 +381,7 @@ fun FlareGoApp(
                                 when (state.page) {
                                     Page.DNS -> state.domain?.name ?: state.page.title
                                     Page.DOMAINS -> managementZone?.name ?: state.page.title
-                                    Page.RESOURCE -> state.resource?.name ?: state.page.title
+                                    Page.RESOURCE -> workerRelease?.toolbarTitle(compactWorkerName) ?: state.resource?.name ?: state.page.title
                                     Page.RESOURCES -> "资源"
                                     Page.BILLING -> "账单"
                                     Page.ACCOUNTS -> "账号"
@@ -381,13 +390,13 @@ fun FlareGoApp(
                                 modifier = Modifier.weight(1f).padding(start = if (detail) 0.dp else 20.dp)
                                     .then(if (managementZone != null) Modifier.testTag("zone-detail-name") else Modifier),
                                 style = if (detail) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                maxLines = if (workerRelease == null) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
                             )
                             Surface(
                                 shape = CircleShape,
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier
-                                    .heightIn(min = 32.dp)
+                                    .heightIn(min = if (workerRelease != null) 48.dp else 32.dp)
                                     .semantics { contentDescription = "切换云账号" }
                                     .clickable { keyboard?.hide(); scope.launch { drawer.open() } },
                             ) {
@@ -467,6 +476,12 @@ fun FlareGoApp(
                                     IconButton(onClick = openConnection, modifier = Modifier.size(44.dp)) {
                                         Icon(Icons.Default.Add, "连接账号", modifier = Modifier.size(20.dp))
                                     }
+                                Page.RESOURCE -> if (workerRelease == null) {
+                                    IconButton(onClick = { controller.refresh() }, enabled = !state.loading,
+                                        modifier = Modifier.size(44.dp).testTag("toolbar-refresh")) {
+                                        Icon(Icons.Default.Refresh, "刷新", modifier = Modifier.size(20.dp))
+                                    }
+                                }
                                 // The Registrar page owns its own search; a product refresh has no
                                 // meaning here, so only back navigation and the account chip remain.
                                 Page.BUY -> Unit
@@ -711,7 +726,12 @@ fun FlareGoApp(
                                         dialog = DialogState.Edit(domain, it)
                                     }
                                 }
-                            Page.RESOURCE -> ResourceScreen(state) { openConsole(Page.RESOURCE) }
+                            Page.RESOURCE -> if (workerRelease != null && workerBrowser != null) {
+                                val workerPages = rememberSaveableStateHolder()
+                                workerPages.SaveableStateProvider("${workerRelease.worker.id}:${workerRelease.route}") {
+                                    WorkerReleaseScreen(workerRelease, workerBrowser, state.selected?.name.orEmpty(), compactWorkerName)
+                                }
+                            } else ResourceScreen(state) { openConsole(Page.RESOURCE) }
                             Page.BILLING -> if (ProductKey.BILLING !in state.supportedProducts ||
                                 state.products[ProductKey.BILLING]?.error?.code in
                                 setOf(CloudFailureCode.PERMISSION_REQUIRED, CloudFailureCode.CREDENTIAL_EXPIRED)
