@@ -13,11 +13,11 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 internal val workerReleaseReadActions = setOf(
-    "workers-script-search",
-    "workers-deployments-list",
-    "workers-deployment-get",
-    "workers-versions-list",
-    "workers-version-get",
+    "worker-script-search-workers",
+    "worker-deployments-list-deployments",
+    "worker-deployments-get-deployment",
+    "worker-versions-list-versions",
+    "worker-versions-get-version-detail",
 )
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)

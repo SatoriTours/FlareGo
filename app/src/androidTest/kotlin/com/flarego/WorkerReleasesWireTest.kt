@@ -2,6 +2,7 @@ package com.flarego
 
 import com.flarego.core.application.workers.*
 import com.flarego.core.cloudflare.*
+import com.flarego.core.cloudflare.protocol.ActionSemantics
 import com.flarego.core.cloudflare.protocol.CloudflareGateway
 import com.flarego.core.cloudflare.workers.CloudflareWorkerReleases
 import com.flarego.core.model.*
@@ -33,6 +34,29 @@ class WorkerReleasesWireTest {
             assertEquals("GET", r.method)
             read(r.path)
         }, sleeper = {}))
+
+    @Test fun officialOperationIdsRegisterOnlyTheirPinnedGetRoutes() = runBlocking {
+        // Independent literals from docs/cloudflare-audit/endpoints.csv, not from the client or the registry.
+        val routes = mapOf(
+            "worker-script-search-workers" to "$base/scripts-search",
+            "worker-deployments-list-deployments" to "$script/deployments",
+            "worker-deployments-get-deployment" to "$script/deployments/$active",
+            "worker-versions-list-versions" to "$script/versions",
+            "worker-versions-get-version-detail" to "$script/versions/$v1",
+        )
+        val sent = mutableListOf<HttpRequest>()
+        val gateway = CloudflareGateway(HttpTransport { request -> sent += request; ok("{}") })
+        for ((action, path) in routes) {
+            assertEquals(action, ActionSemantics.READ, gateway.policyOf(action)?.semantics)
+            gateway.send(action, HttpRequest("GET", path))
+            for (rejected in listOf(HttpRequest("POST", path), HttpRequest("GET", "$path/not-this-route"))) {
+                val failure = runCatching { gateway.send(action, rejected) }.exceptionOrNull() as? CloudFailure
+                assertEquals(CloudFailureCode.INVALID_INPUT, failure?.code)
+            }
+        }
+        assertEquals(routes.values.toList(), sent.map { it.path })
+        assertTrue(sent.all { it.method == "GET" })
+    }
 
     @Test fun uniqueModernMappingAndExplicitLegacyUseOnlyProvenScriptNames() = runBlocking {
         val paths = mutableListOf<String>()

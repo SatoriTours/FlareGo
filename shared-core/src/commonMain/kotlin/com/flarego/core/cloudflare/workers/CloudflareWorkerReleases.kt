@@ -25,7 +25,7 @@ class CloudflareWorkerReleases(
         val base = "/accounts/${encodePath(account.accountId)}/workers"
         val name = if (worker.legacy) ref.externalId else {
             val search = PaginationStrategy.Number(1, 2)
-            val root = get("workers-script-search",
+            val root = get("worker-script-search-workers",
                 "$base/scripts-search?id=${encodePath(ref.externalId)}&${Pagination.query(search)}")
             val match = rows(root["result"]).singleOrNull()
             val meta = Pagination.decode(root, search)
@@ -37,21 +37,21 @@ class CloudflareWorkerReleases(
     }
 
     override suspend fun deployments(page: Int) =
-        list("workers-deployments-list", "deployments", "deployments", page, WorkerDeployment::id, ::decodeDeployment)
+        list("worker-deployments-list-deployments", "deployments", "deployments", page, WorkerDeployment::id, ::decodeDeployment)
 
     override suspend fun versions(page: Int) =
-        list("workers-versions-list", "versions", "items", page, WorkerVersion::id, ::decodeVersion)
+        list("worker-versions-list-versions", "versions", "items", page, WorkerVersion::id, ::decodeVersion)
 
     override suspend fun deployment(id: String): WorkerDeployment {
         requireUuid(id)
-        val root = get("workers-deployment-get", "${scriptPath()}/deployments/$id")
+        val root = get("worker-deployments-get-deployment", "${scriptPath()}/deployments/$id")
         return decodeDeployment(root.result()).also { if (it.id != id) throw invalidResponse(false) }
     }
 
     override suspend fun version(id: String): WorkerVersion {
         requireUuid(id)
         // This endpoint returns metadata/runtime config; no code, secret or binding endpoints are called.
-        val root = get("workers-version-get", "${scriptPath()}/versions/$id")
+        val root = get("worker-versions-get-version-detail", "${scriptPath()}/versions/$id")
         return decodeVersion(root.result()).also { if (it.id != id) throw invalidResponse(false) }
     }
 

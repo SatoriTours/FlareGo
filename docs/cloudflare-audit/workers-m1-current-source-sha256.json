@@ -5,7 +5,7 @@
   },
   "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/ActionPolicies.kt": {
     "previous": "2d2c7c4d72ab19fece7a4898885ea8efb9f70f7fd4d3e86135b6383442410137",
-    "current": "a827a3c5ca1f47bf34b3e696df61a74f42127e4a5ea4d351af8760ed40129352"
+    "current": "c4033a8700590551d2065af3767b0156b37c7b91e236803844f5c292ee4cc2b2"
   },
   "shared-core/src/commonTest/kotlin/com/flarego/core/D1CoverageTest.kt": {
     "previous": "ed957f992417f161cf3ffbbca723646ba1b6d9386cd96d3e2c86a9f5873127c9",
