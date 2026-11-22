@@ -255,7 +255,7 @@
     "app/src/androidTest/kotlin/com/flarego/R2CManagementUiTest.kt": "7743c7c21be10673e77593639d8c3df272a0642e4d8c584549dd03a9844dec1a",
     "app/src/androidTest/kotlin/com/flarego/R2ConfigurationManagementUiTest.kt": "a75137cba5d5f5a5443a6a49dd5fa67014a9e793b90bb67cefae3830d6af3b82",
     "app/src/androidTest/kotlin/com/flarego/R2ConfigurationUiTest.kt": "13bf5ee61b697bf3fcefd5af178a90d762ef6790df5bac0e9372b39398d983f2",
-    "app/src/androidTest/kotlin/com/flarego/R2DomainConfigurationManagementUiTest.kt": "246281156fa426362ed0be36e0acff6d5ec836d8d8abd9e9a7acdb13f5f3ce6f",
+    "app/src/androidTest/kotlin/com/flarego/R2DomainConfigurationManagementUiTest.kt": "55a38a06d913577df75b16bcef2f31519c5687de84b4570b5397ff264a8820af",
     "app/src/androidTest/kotlin/com/flarego/R2DomainConfigurationUiTest.kt": "e80ff57269ec1293762ca843fc3703f33fe9cdf9867c3fc95922868159f7e221",
     "app/src/androidTest/kotlin/com/flarego/R2ManagementUiTest.kt": "4f194aba7bf2d50223541903652c055bc6d03e34401634550c47a057fe07d85f",
     "app/src/androidTest/kotlin/com/flarego/R2SippyFormUiTest.kt": "4407e7280210422512bb45cfc9ede79f4289524509964058ac57f15280f6129e",

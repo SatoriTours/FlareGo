@@ -233,19 +233,46 @@ class R2DomainConfigurationManagementUiTest {
 
     @Test
     fun loweringTheMinimumTlsNeedsItsOwnAcknowledgementThenWritesOnce() {
+        val domain = "cdn.example.com"
+        domains[domain] = false
+        domainTls[domain] = "1.2"
         install()
-        domains["cdn.example.com"] = false
-        domainTls["cdn.example.com"] = "1.2"
         openPanel("rc-panel-custom-domains")
-        compose.onNodeWithTag("rc-domain-select-cdn.example.com").performScrollTo().performClick()
-        compose.waitForIdle()
-        // Choose a lower minimum TLS version explicitly.
-        compose.onNodeWithTag("rc-domain-edit-tls-1.1").performScrollTo().performClick()
-        compose.waitForIdle()
+        val configuration = model!!.r2Browser.configuration
+        fun assertLoaded(expectedSelection: String?) = compose.runOnIdle {
+            val state = configuration.state.value
+            assertFalse("custom domain read still loading", state.loading)
+            assertNull("custom domain read failed", state.error)
+            assertEquals(R2ConfigurationPanel.CUSTOM_DOMAINS, state.panel)
+            assertEquals(bucket, state.target.bucket)
+            assertEquals(expectedSelection, state.selectedDomain)
+            assertEquals(listOf(domain), state.customDomains.map { it.domain })
+            assertEquals("1.2", state.customDomains.single().minTls)
+            assertTrue("fixture must expose editable domain settings", state.editable && state.domainWritesAvailable)
+        }
+        assertLoaded(expectedSelection = null)
+        val select = compose.onNodeWithTag("rc-domain-select-$domain").performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().assertTextContains("选择")
+        select.performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals("the visible selection tap must reach the domain editor", domain, configuration.state.value.selectedDomain)
+        }
+        // Selection synchronously starts a new list + exact detail read. The list may temporarily
+        // be empty and the editor absent; Compose idle alone does not await that provider read.
+        compose.waitUntil(15000) { !configuration.state.value.loading }
+        assertLoaded(expectedSelection = domain)
+        compose.onNodeWithText("编辑 $domain").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("rc-domain-edit-tls-1.2").assertIsSelected()
+        compose.onNodeWithTag("rc-domain-edit-tls-1.1").performScrollTo().assertIsDisplayed()
+            .assertIsEnabled().performTouchInput { click() }
+        compose.runOnIdle { assertEquals("1.1", configuration.state.value.customDomainEdit.minTls) }
         typeInto("rc-typed-target-name", bucket)
         typeInto("rc-typed-domain-name", "cdn.example.com")
         // Without the separate downgrade acknowledgement no preview is allowed at all.
-        compose.runOnIdle { assertFalse(model!!.r2Browser.configuration.state.value.canPreview) }
+        compose.runOnIdle {
+            assertFalse(configuration.state.value.canPreview)
+            assertTrue(requests.all { it.method == "GET" })
+        }
         compose.onNodeWithTag("rc-domain-tls-downgrade-risk").performScrollTo().assertIsOff()
         captureScreenshot("custom-tls-downgrade-risk")
         compose.onNodeWithTag("rc-domain-tls-downgrade-risk").performScrollTo().performClick()
@@ -253,6 +280,7 @@ class R2DomainConfigurationManagementUiTest {
         compose.onNodeWithTag("rc-preview-button").performScrollTo().performClick()
         compose.waitUntil(15000) { model!!.r2Browser.configuration.state.value.preview != null }
         captureScreenshot("custom-tls-downgrade-preview")
+        assertTrue("preview must not send", requests.all { it.method == "GET" })
         compose.onNodeWithTag("rc-preview-confirm").performScrollTo().performClick()
         compose.waitUntil(20000) { !model!!.r2Browser.configuration.state.value.writing }
 
@@ -263,7 +291,11 @@ class R2DomainConfigurationManagementUiTest {
             assertEquals(1, requests.count { it.method == "PUT" && it.path.endsWith("/domains/custom/cdn.example.com") })
             assertMutationThenRead("PUT", "/domains/custom/cdn.example.com")
             assertEquals("1.1", domainTls["cdn.example.com"])
-            assertTrue("the zone ownership read stayed bound to this account", requests.any { it.path == "/zones/$zoneId" } || true)
+            val exactTarget = "/accounts/$account/r2/buckets/$bucket/domains/custom/$domain"
+            val readsBeforeWrite = requests.takeWhile { it.method == "GET" }
+            assertTrue("selection must read the exact account/bucket/domain before writing",
+                readsBeforeWrite.any { it.path == exactTarget })
+            assertEquals(listOf("PUT" to exactTarget), requests.filter { it.method != "GET" }.map { it.method to it.path })
         }
     }
 

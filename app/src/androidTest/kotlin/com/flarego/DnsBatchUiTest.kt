@@ -6,6 +6,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
@@ -34,6 +36,13 @@ class DnsBatchUiTest {
     private val scope = ZoneScope(AccountScope("batch-ui-connection", "batch-ui-account"), "batch-ui-zone")
     private fun click(tag: String) = compose.onNodeWithTag(tag).performScrollTo().performClick()
     private fun edit(tag: String, text: String) = compose.onNodeWithTag(tag).performScrollTo().performTextReplacement(text)
+    // These leaf tests check the batch editor contract, not Android touch routing. Invoke the
+    // visible button's accessibility action so the IME cannot move its touch target mid-click.
+    private fun saveRecordEditor() {
+        compose.onNodeWithTag("dns-preview").performScrollTo().assertIsDisplayed().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick)
+    }
+
     private fun previews(h: BatchHarness) = h.intents.filterIsInstance<DnsBatchIntent.Preview>()
     private fun confirms(h: BatchHarness) = h.intents.filterIsInstance<DnsBatchIntent.Confirm>()
     private fun parsed(h: BatchHarness) = h.state.value.draft!!
@@ -50,7 +59,7 @@ class DnsBatchUiTest {
         return h
     }
     private fun createTxt(name: String = "new", value: String = "text") {
-        click("db-add-POST"); click("dns-type-TXT"); edit("dns-name", name); edit("dns-content", value); click("dns-preview")
+        click("db-add-POST"); click("dns-type-TXT"); edit("dns-name", name); edit("dns-content", value); saveRecordEditor()
     }
     private fun selectRecord(kind: DnsBatchKind, id: String) { click("db-add-${kind.name}"); click("db-select-$id") }
 
@@ -62,7 +71,7 @@ class DnsBatchUiTest {
         click("dns-type-SRV"); edit("dns-name", "_sip._tcp")
         edit("dns-data-priority", "10"); edit("dns-data-weight", "0"); edit("dns-data-port", "443"); edit("dns-data-target", "sip.example.com")
         compose.onNodeWithText("加入批量草稿").performScrollTo().assertIsDisplayed()
-        click("dns-preview")
+        saveRecordEditor()
         compose.runOnIdle {
             val input = parsed(h).posts.single()
             assertEquals("SRV", input.type); assertEquals("_sip._tcp.example.com", input.name)
@@ -73,8 +82,8 @@ class DnsBatchUiTest {
 
     @Test fun deletePatchPutPostCountsAndOrderFollowGroupsAndUserOrder() {
         val h = install(); createTxt("second"); createTxt("first")
-        selectRecord(DnsBatchKind.PUT,"put"); edit("dns-content","replacement"); click("dns-preview")
-        selectRecord(DnsBatchKind.PATCH,"patch"); edit("dns-comment","changed"); click("dns-preview")
+        selectRecord(DnsBatchKind.PUT,"put"); edit("dns-content","replacement"); saveRecordEditor()
+        selectRecord(DnsBatchKind.PATCH,"patch"); edit("dns-comment","changed"); saveRecordEditor()
         selectRecord(DnsBatchKind.DELETE,"delete"); click("db-delete-add")
         compose.onNodeWithTag("db-counts").performScrollTo().assertTextContains("DELETE 1",substring=true).assertTextContains("PATCH 1",substring=true)
             .assertTextContains("PUT 1",substring=true).assertTextContains("POST 2",substring=true)
@@ -89,7 +98,7 @@ class DnsBatchUiTest {
     }
 
     @Test fun patchOnlySendsExplicitNestedDeltaNotProviderProjection() {
-        val h = install(); selectRecord(DnsBatchKind.PATCH,"srv"); edit("dns-data-port","8443"); click("dns-preview")
+        val h = install(); selectRecord(DnsBatchKind.PATCH,"srv"); edit("dns-data-port","8443"); saveRecordEditor()
         compose.runOnIdle {
             assertEquals(Json.parseToJsonElement("""{"data":{"port":8443}}"""),parsed(h).patches.single().fields)
             assertEquals("srv",parsed(h).patches.single().id); assertTrue(confirms(h).isEmpty())
@@ -98,22 +107,22 @@ class DnsBatchUiTest {
 
     @Test fun patchRetainsExplicitFalseZeroEmptyAndOmitsUntouchedValues() {
         val h = install(); selectRecord(DnsBatchKind.PATCH,"srv")
-        edit("dns-data-weight","0"); edit("dns-comment",""); click("dns-preview")
+        edit("dns-data-weight","0"); edit("dns-comment",""); saveRecordEditor()
         compose.runOnIdle { assertEquals(Json.parseToJsonElement("""{"data":{"weight":0},"comment":""}"""),parsed(h).patches.single().fields) }
-        selectRecord(DnsBatchKind.PATCH,"proxy"); click("dns-proxied"); click("dns-preview")
+        selectRecord(DnsBatchKind.PATCH,"proxy"); click("dns-proxied"); saveRecordEditor()
         compose.runOnIdle { assertEquals(Json.parseToJsonElement("""{"proxied":false}"""),parsed(h).patches.last().fields); assertTrue(previews(h).isEmpty()) }
     }
 
     @Test fun patchNameIsExplicitAndTypeChangeRequiresPut() {
-        val h = install(); selectRecord(DnsBatchKind.PATCH,"patch"); edit("dns-name","renamed"); click("dns-preview")
+        val h = install(); selectRecord(DnsBatchKind.PATCH,"patch"); edit("dns-name","renamed"); saveRecordEditor()
         compose.runOnIdle { assertEquals(Json.parseToJsonElement("""{"name":"renamed.example.com"}"""),parsed(h).patches.single().fields) }
-        click("db-remove-PATCH-0"); selectRecord(DnsBatchKind.PATCH,"patch"); click("dns-type-A"); edit("dns-content","198.51.100.1"); click("dns-preview")
+        click("db-remove-PATCH-0"); selectRecord(DnsBatchKind.PATCH,"patch"); click("dns-type-A"); edit("dns-content","198.51.100.1"); saveRecordEditor()
         compose.onNodeWithTag("db-editor-error").performScrollTo().assertTextContains("PUT",substring=true)
         compose.runOnIdle { assertTrue(parsed(h).patches.isEmpty()); assertTrue(previews(h).isEmpty()) }
     }
 
     @Test fun putIsIndependentFullReplacementWithDefaultsWarningAndExplicitConfirm() {
-        val h = install(); selectRecord(DnsBatchKind.PUT,"put"); edit("dns-content","replacement"); click("dns-preview"); click("db-preview")
+        val h = install(); selectRecord(DnsBatchKind.PUT,"put"); edit("dns-content","replacement"); saveRecordEditor(); click("db-preview")
         compose.onNodeWithTag("db-semantics").performScrollTo().assertTextContains("默认",substring=true).assertTextContains("PUT",substring=true)
         compose.onNodeWithTag("db-target-PUT-0").performScrollTo().assertTextContains("replacement",substring=true).assertTextContains("before",substring=true)
         compose.runOnIdle { assertEquals(3600,previews(h).single().input.puts.single().input.fields["ttl"]!!.jsonPrimitive.int); assertTrue(confirms(h).isEmpty()) }
@@ -122,18 +131,64 @@ class DnsBatchUiTest {
     }
 
     @Test fun editingAndRemovingDraftItemsInvalidateWithoutCloudPreviewOrConfirm() {
-        val h = install(); createTxt("first","original"); click("db-edit-POST-0"); edit("dns-content","updated"); click("dns-preview")
+        val h = install(); createTxt("first","original"); click("db-edit-POST-0"); edit("dns-content","updated"); saveRecordEditor()
         compose.runOnIdle { assertEquals("updated",parsed(h).posts.single().fields["content"]!!.jsonPrimitive.content); assertTrue(previews(h).isEmpty()) }
         click("db-remove-POST-0")
         compose.runOnIdle { assertTrue(parsed(h).posts.isEmpty()); assertTrue(h.intents.any { it==DnsBatchIntent.DraftInvalidated }); assertTrue(confirms(h).isEmpty()) }
     }
 
+    private fun assertField(tag: String, value: String) {
+        val node = compose.onNodeWithTag(tag).performScrollTo().assertIsDisplayed().assertIsEnabled()
+        assertEquals(tag, value, node.fetchSemanticsNode().config[SemanticsProperties.EditableText].text)
+    }
+
+    private fun assertSavedPatch(h: BatchHarness, expected: DnsBatchPatch) {
+        compose.runOnIdle {
+            val save = DnsBatchIntent.DraftChanged(DnsBatchInput(patches = listOf(expected)))
+            assertEquals("saved draft", save.input, h.state.value.draft)
+            assertEquals("editor must save exactly once", listOf(save), h.intents.filterIsInstance<DnsBatchIntent.DraftChanged>())
+            assertTrue(previews(h).isEmpty())
+            assertTrue(confirms(h).isEmpty())
+        }
+        compose.onNodeWithTag("dns-preview").assertDoesNotExist()
+        compose.onNodeWithTag("db-item-PATCH-0").performScrollTo().assertTextContains(expected.id, substring = true)
+    }
+
     @Test fun clearingEditedNumericPatchDoesNotResendItsEarlierDraftValue() {
-        val h=install();selectRecord(DnsBatchKind.PATCH,"srv");edit("dns-data-port","8443");click("dns-preview")
-        click("db-edit-PATCH-0");edit("dns-data-port","");click("dns-preview")
-        compose.onNodeWithTag("db-editor-error").assertExists()
-        compose.onNodeWithTag("dns-data-port").performScrollTo().assertTextContains("")
-        compose.runOnIdle { assertEquals(1,h.intents.filterIsInstance<DnsBatchIntent.DraftChanged>().size);assertTrue(previews(h).isEmpty());assertTrue(confirms(h).isEmpty()) }
+        val h = install()
+        val port = "dns-data-port"
+        selectRecord(DnsBatchKind.PATCH, "srv")
+        assertField(port, "443")
+        edit(port, "8443")
+        assertField(port, "8443")
+        val expected = DnsBatchPatch("srv", Json.parseToJsonElement("""{"data":{"port":8443}}""").jsonObject)
+        saveRecordEditor()
+        assertSavedPatch(h, expected)
+
+        click("db-edit-PATCH-0")
+        assertField(port, "8443")
+        val beforeClear = compose.runOnIdle { h.intents.size }
+        edit(port, "")
+        assertField(port, "")
+        compose.runOnIdle {
+            assertEquals(listOf(DnsBatchIntent.DraftInvalidated), h.intents.drop(beforeClear))
+        }
+        // The numeric field has a real Done action; it must end editing without saving.
+        compose.onNodeWithTag(port).assertIsFocused().performImeAction()
+        compose.onNodeWithTag(port).assertIsNotFocused()
+        assertField(port, "")
+        saveRecordEditor()
+        compose.onNodeWithTag("db-editor-error").performScrollTo().assertIsDisplayed()
+            .assertTextContains("没有明确变更，请编辑字段后再加入")
+        compose.onNodeWithTag("dns-form-error").assertDoesNotExist()
+        compose.onNodeWithTag("db-preview").assertDoesNotExist()
+        assertField(port, "")
+        compose.runOnIdle {
+            assertEquals(listOf(expected), parsed(h).patches)
+            assertEquals(1, h.intents.filterIsInstance<DnsBatchIntent.DraftChanged>().size)
+            assertTrue(previews(h).isEmpty())
+            assertTrue(confirms(h).isEmpty())
+        }
     }
 
     @Test fun missingOutcomeItemsKeepTheirExactPendingTargetsReadonly() {
@@ -157,14 +212,20 @@ class DnsBatchUiTest {
         val h = install(); selectRecord(DnsBatchKind.DELETE,"delete"); click("db-delete-add")
         selectRecord(DnsBatchKind.DELETE,"delete"); click("db-delete-add")
         compose.onNodeWithTag("db-editor-error").performScrollTo().assertTextContains("重复",substring=true)
-        click("db-editor-cancel"); selectRecord(DnsBatchKind.PATCH,"delete"); edit("dns-comment","change"); click("dns-preview")
-        compose.onNodeWithTag("db-editor-error").performScrollTo().assertTextContains("重复",substring=true)
+        click("db-editor-cancel"); selectRecord(DnsBatchKind.PATCH,"delete")
+        assertField("dns-comment", "before")
+        edit("dns-comment","change")
+        assertField("dns-comment", "change")
+        saveRecordEditor()
+        compose.onNodeWithTag("db-editor-error").performScrollTo().assertIsDisplayed()
+            .assertTextContains("重复",substring=true)
+        compose.onNodeWithTag("db-preview").assertDoesNotExist()
         compose.runOnIdle { assertEquals(listOf("delete"),parsed(h).deletes); assertTrue(parsed(h).patches.isEmpty()); assertTrue(confirms(h).isEmpty()) }
     }
 
     @Test fun semanticDuplicatePostsAreRejectedIncludingIpv6AndDefaults() {
-        val h = install(); click("db-add-POST"); click("dns-type-AAAA"); edit("dns-name","ipv6"); edit("dns-content","2001:db8::1"); click("dns-preview")
-        click("db-add-POST"); click("dns-type-AAAA"); edit("dns-name","IPV6.EXAMPLE.COM."); edit("dns-content","2001:0db8:0:0:0:0:0:1"); edit("dns-ttl","1"); click("dns-preview")
+        val h = install(); click("db-add-POST"); click("dns-type-AAAA"); edit("dns-name","ipv6"); edit("dns-content","2001:db8::1"); saveRecordEditor()
+        click("db-add-POST"); click("dns-type-AAAA"); edit("dns-name","IPV6.EXAMPLE.COM."); edit("dns-content","2001:0db8:0:0:0:0:0:1"); edit("dns-ttl","1"); saveRecordEditor()
         compose.onNodeWithTag("db-editor-error").performScrollTo().assertTextContains("重复",substring=true)
         compose.runOnIdle { assertEquals(1,parsed(h).posts.size); assertTrue(previews(h).isEmpty()) }
     }
@@ -172,14 +233,14 @@ class DnsBatchUiTest {
     @Test fun invalidUnparsedTextInvalidatesButCannotEnterDraftOrDefaultToZero() {
         val h = install(); selectRecord(DnsBatchKind.PATCH,"srv"); edit("dns-data-port","oops")
         compose.runOnIdle { assertEquals(DnsBatchIntent.DraftInvalidated,h.intents.last()) }
-        click("dns-preview")
+        saveRecordEditor()
         compose.onNodeWithTag("dns-data-port").performScrollTo().assertTextContains("oops")
         compose.onNodeWithTag("dns-form-error").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(h.intents.none { it is DnsBatchIntent.DraftChanged || it is DnsBatchIntent.Preview }); assertTrue(confirms(h).isEmpty()) }
     }
 
     @Test fun unknownNestedAndUnsafePutDoNotRelaxExistingSafety() {
-        val h = install(); selectRecord(DnsBatchKind.PATCH,"unsafe"); edit("dns-data-port","8443"); click("dns-preview")
+        val h = install(); selectRecord(DnsBatchKind.PATCH,"unsafe"); edit("dns-data-port","8443"); saveRecordEditor()
         compose.onNodeWithTag("db-editor-error").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(h.intents.none { it is DnsBatchIntent.DraftChanged }) }
         click("db-editor-cancel"); click("db-add-PUT")
@@ -220,7 +281,7 @@ class DnsBatchUiTest {
     @Test fun backRetainsListAndTextCancelNeverConfirmsAndEditInvalidatesPlan() {
         val h=install(); createTxt("long","  \"value\"\nline  "); click("db-preview"); click("db-back")
         click("db-edit-POST-0"); compose.onNodeWithTag("dns-content").performScrollTo().assertTextContains("  \"value\"\nline  ")
-        edit("dns-content","changed"); click("dns-preview"); click("db-preview")
+        edit("dns-content","changed"); saveRecordEditor(); click("db-preview")
         compose.runOnIdle { assertEquals("changed",previews(h).last().input.posts.single().fields["content"]!!.jsonPrimitive.content); assertTrue(confirms(h).isEmpty()) }
         click("db-cancel"); compose.runOnIdle { assertTrue(confirms(h).isEmpty()) }
     }
@@ -241,11 +302,23 @@ class DnsBatchUiTest {
         compose.runOnIdle { assertTrue(confirms(h).isEmpty()) }
     }
 
-    private fun tamperedPatch(change:(DnsBatchPreviewItem)->DnsBatchPreviewItem) {
-        val h=install();selectRecord(DnsBatchKind.PATCH,"patch");edit("dns-comment","changed");click("dns-preview");click("db-preview")
+    private fun tamperedPatch(change: (DnsBatchPreviewItem) -> DnsBatchPreviewItem) {
+        val h = install()
+        selectRecord(DnsBatchKind.PATCH, "patch")
+        compose.onNodeWithTag("dns-type-TXT").assertIsSelected()
+        assertField("dns-comment", "before")
+        edit("dns-comment", "changed")
+        assertField("dns-comment", "changed")
+        val expected = DnsBatchPatch("patch", buildJsonObject { put("comment", "changed") })
+        saveRecordEditor()
+        assertSavedPatch(h, expected)
+        // Require a genuinely valid preview before changing the provider's evidence.
+        click("db-preview")
+        compose.onNodeWithTag("db-confirm").performScrollTo().assertIsDisplayed().assertIsEnabled()
         compose.runOnIdle {
-            val p=h.state.value.preparedChange!!
-            h.mutable.value=h.state.value.copy(preparedChange=p.copy(targets=p.targets.map(change)))
+            assertEquals(listOf(DnsBatchIntent.Preview(DnsBatchInput(patches = listOf(expected)))), previews(h))
+            val plan = requireNotNull(h.state.value.preparedChange)
+            h.mutable.value = h.state.value.copy(preparedChange = plan.copy(targets = plan.targets.map(change)))
         }
         compose.onNodeWithTag("db-confirm").assertDoesNotExist()
         compose.runOnIdle { assertTrue(confirms(h).isEmpty()) }
@@ -277,7 +350,7 @@ class DnsBatchUiTest {
     @Test fun completeLegitimateNestedPatchProjectionRetainsBeforeFieldsAndCanConfirm() {
         val h=BatchHarness(scope)
         h.nextPatchProjection=DnsRecordInput("SRV","_sip._tcp.example.com",Json.parseToJsonElement("""{"data":{"priority":10,"weight":5,"port":8443,"target":"sip.example.com"},"ttl":3600,"comment":"before"}""").jsonObject)
-        install(h);selectRecord(DnsBatchKind.PATCH,"srv");edit("dns-data-port","8443");click("dns-preview");click("db-preview")
+        install(h);selectRecord(DnsBatchKind.PATCH,"srv");edit("dns-data-port","8443");saveRecordEditor();click("db-preview")
         compose.onNodeWithTag("db-confirm").performScrollTo().assertIsEnabled()
         val p=h.state.value.preparedChange!!;click("db-confirm")
         compose.runOnIdle {
