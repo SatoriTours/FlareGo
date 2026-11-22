@@ -225,6 +225,40 @@ class R2DomainConfigurationManagementUiTest {
         compose.waitUntil(15000) { !model!!.r2Browser.configuration.state.value.loading }
     }
 
+    private fun customDomainPath(domain: String) =
+        "/accounts/$account/r2/buckets/$bucket/domains/custom/$domain"
+
+    /** For normal selection, not for tests of an in-flight read or stale response. */
+    private fun selectLoadedCustomDomain(domain: String, expectedMinTls: String = "1.2") {
+        val configuration = model!!.r2Browser.configuration
+        fun assertLoaded(expectedSelection: String?) = compose.runOnIdle {
+            val state = configuration.state.value
+            assertFalse("custom domain read still loading", state.loading)
+            assertNull("custom domain read failed", state.error)
+            assertEquals(R2ConfigurationPanel.CUSTOM_DOMAINS, state.panel)
+            assertEquals(bucket, state.target.bucket)
+            assertEquals(expectedSelection, state.selectedDomain)
+            assertEquals(expectedMinTls, state.customDomains.single { it.domain == domain }.minTls)
+            assertTrue("fixture must expose editable domain settings", state.editable && state.domainWritesAvailable)
+        }
+
+        assertLoaded(expectedSelection = null)
+        val select = compose.onNodeWithTag("rc-domain-select-$domain").performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().assertTextContains("选择")
+        val readStart = requests.size
+        select.performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals("selection tap must reach the model", domain, configuration.state.value.selectedDomain)
+        }
+        // Selecting clears the list while re-reading it and the exact domain; Compose idle is not I/O idle.
+        compose.waitUntil(15000) { !configuration.state.value.loading }
+        assertLoaded(expectedSelection = domain)
+        val reads = synchronized(requests) { requests.drop(readStart).map { it.method to it.path } }
+        val detail = customDomainPath(domain)
+        assertEquals(listOf("GET" to detail.substringBeforeLast('/'), "GET" to detail), reads)
+        compose.onNodeWithText("编辑 $domain").performScrollTo().assertIsDisplayed()
+    }
+
     private fun typeInto(tag: String, value: String) {
         compose.onNodeWithTag(tag).performScrollTo().performTextReplacement(value)
         Espresso.closeSoftKeyboard()
@@ -239,29 +273,7 @@ class R2DomainConfigurationManagementUiTest {
         install()
         openPanel("rc-panel-custom-domains")
         val configuration = model!!.r2Browser.configuration
-        fun assertLoaded(expectedSelection: String?) = compose.runOnIdle {
-            val state = configuration.state.value
-            assertFalse("custom domain read still loading", state.loading)
-            assertNull("custom domain read failed", state.error)
-            assertEquals(R2ConfigurationPanel.CUSTOM_DOMAINS, state.panel)
-            assertEquals(bucket, state.target.bucket)
-            assertEquals(expectedSelection, state.selectedDomain)
-            assertEquals(listOf(domain), state.customDomains.map { it.domain })
-            assertEquals("1.2", state.customDomains.single().minTls)
-            assertTrue("fixture must expose editable domain settings", state.editable && state.domainWritesAvailable)
-        }
-        assertLoaded(expectedSelection = null)
-        val select = compose.onNodeWithTag("rc-domain-select-$domain").performScrollTo()
-            .assertIsDisplayed().assertIsEnabled().assertTextContains("选择")
-        select.performTouchInput { click() }
-        compose.runOnIdle {
-            assertEquals("the visible selection tap must reach the domain editor", domain, configuration.state.value.selectedDomain)
-        }
-        // Selection synchronously starts a new list + exact detail read. The list may temporarily
-        // be empty and the editor absent; Compose idle alone does not await that provider read.
-        compose.waitUntil(15000) { !configuration.state.value.loading }
-        assertLoaded(expectedSelection = domain)
-        compose.onNodeWithText("编辑 $domain").performScrollTo().assertIsDisplayed()
+        selectLoadedCustomDomain(domain)
         compose.onNodeWithTag("rc-domain-edit-tls-1.2").assertIsSelected()
         compose.onNodeWithTag("rc-domain-edit-tls-1.1").performScrollTo().assertIsDisplayed()
             .assertIsEnabled().performTouchInput { click() }
@@ -455,8 +467,7 @@ class R2DomainConfigurationManagementUiTest {
         domains["cdn.example.com"] = true
         domainTls["cdn.example.com"] = "1.2"
         openPanel("rc-panel-custom-domains")
-        compose.onNodeWithTag("rc-domain-select-cdn.example.com").performScrollTo().performClick()
-        compose.waitForIdle()
+        selectLoadedCustomDomain("cdn.example.com")
         captureScreenshot("custom-list-and-states")
         compose.onNodeWithTag("rc-domain-ownership").performScrollTo().assertTextContains("pending", substring = true)
         compose.onNodeWithTag("rc-domain-ssl").performScrollTo().assertTextContains("initializing", substring = true)
@@ -513,8 +524,7 @@ class R2DomainConfigurationManagementUiTest {
         domainTls["old.example.com"] = "1.2"
         openPanel("rc-panel-custom-domains")
         // Select the existing domain, then explicitly go back to the create mode.
-        compose.onNodeWithTag("rc-domain-select-old.example.com").performScrollTo().performClick()
-        compose.waitForIdle()
+        selectLoadedCustomDomain("old.example.com")
         compose.onNodeWithTag("rc-domain-new").performScrollTo().performClick()
         compose.waitForIdle()
         typeInto("rc-domain-create-domain", "new.example.com")
@@ -548,23 +558,29 @@ class R2DomainConfigurationManagementUiTest {
 
     @Test
     fun anEditedCustomDomainIsWrittenAndReadBackOnce() {
+        val domain = "cdn.example.com"
+        domains[domain] = false
+        domainTls[domain] = "1.2"
         install()
-        domains["cdn.example.com"] = false
-        domainTls["cdn.example.com"] = "1.2"
         openPanel("rc-panel-custom-domains")
-        compose.onNodeWithTag("rc-domain-select-cdn.example.com").performScrollTo().performClick()
-        compose.waitForIdle()
-        // Enable public access explicitly and acknowledge it, then raise the minimum TLS version.
-        compose.onNodeWithTag("rc-domain-edit-enabled").performScrollTo().performClick()
-        compose.waitForIdle()
-        compose.onNodeWithTag("rc-domain-edit-public-risk").performScrollTo().performClick()
-        captureScreenshot("custom-edit-public-risk")
-        compose.onNodeWithTag("rc-domain-edit-tls-1.3").performScrollTo().performClick()
+        selectLoadedCustomDomain(domain)
+        val configuration = model!!.r2Browser.configuration
+        val access = compose.onNodeWithTag("rc-domain-edit-enabled").performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().assertIsOff()
+        access.performTouchInput { click() }
+        compose.runOnIdle { assertEquals(true, configuration.state.value.customDomainEdit.enabled) }
+        access.assertIsOn()
+        compose.onNodeWithTag("rc-domain-edit-tls-1.3").performScrollTo().assertIsEnabled().performClick()
         typeInto("rc-typed-target-name", bucket)
-        typeInto("rc-typed-domain-name", "cdn.example.com")
-        compose.waitUntil(10000) { model!!.r2Browser.configuration.state.value.canPreview }
-        compose.onNodeWithTag("rc-preview-button").performScrollTo().performClick()
-        compose.waitUntil(15000) { model!!.r2Browser.configuration.state.value.preview != null }
+        typeInto("rc-typed-domain-name", domain)
+        val preview = compose.onNodeWithTag("rc-preview-button")
+        preview.performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("rc-domain-edit-public-risk").performScrollTo().assertIsOff().performClick().assertIsOn()
+        captureScreenshot("custom-edit-public-risk")
+        compose.waitUntil(10000) { configuration.state.value.canPreview }
+        preview.performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(15000) { configuration.state.value.preview != null }
+        assertTrue("preview must not send", requests.all { it.method == "GET" })
         compose.onNodeWithTag("rc-preview-confirm").performScrollTo().performClick()
         compose.waitUntil(20000) { !model!!.r2Browser.configuration.state.value.writing }
 
@@ -572,33 +588,42 @@ class R2DomainConfigurationManagementUiTest {
         assertEquals(TaskState.SUCCEEDED, task.state)
         assertEquals("r2-edit-custom-domain-settings", task.actionKey)
         compose.runOnIdle {
-            assertEquals(1, requests.count { it.method == "PUT" && it.path.endsWith("/domains/custom/cdn.example.com") })
-            assertMutationThenRead("PUT", "/domains/custom/cdn.example.com")
-            assertTrue("read-back shows the enabled state", domains["cdn.example.com"]!!)
-            assertEquals("1.3", domainTls["cdn.example.com"])
+            val exact = customDomainPath(domain)
+            assertEquals(listOf("PUT" to exact), requests.filter { it.method != "GET" }.map { it.method to it.path })
+            assertMutationThenRead("PUT", exact)
+            assertTrue("read-back shows the enabled state", domains.getValue(domain))
+            assertEquals("1.3", domainTls[domain])
         }
     }
 
     @Test
     fun aDeletedCustomDomainIsRemovedAndConfirmedByTheFullList() {
+        val domain = "gone.example.com"
+        domains[domain] = false
+        domainTls[domain] = "1.2"
         install()
-        domains["gone.example.com"] = false
-        domainTls["gone.example.com"] = "1.2"
         openPanel("rc-panel-custom-domains")
-        compose.onNodeWithTag("rc-domain-select-gone.example.com").performScrollTo().performClick()
-        compose.waitForIdle()
-        compose.onNodeWithTag("rc-domain-request-delete").performScrollTo().performClick()
-        compose.waitForIdle()
+        selectLoadedCustomDomain(domain)
+        val configuration = model!!.r2Browser.configuration
+        compose.onNodeWithTag("rc-domain-request-delete").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertTrue(configuration.state.value.domainDeleteRequested)
+            assertEquals(domain, configuration.state.value.selectedDomain)
+        }
+        compose.onNodeWithTag("rc-domain-delete-card").performScrollTo().assertIsDisplayed()
         captureScreenshot("custom-delete-frozen")
-        compose.onNodeWithTag("rc-domain-delete-risk").performScrollTo().performClick()
         typeInto("rc-typed-target-name", bucket)
-        typeInto("rc-typed-domain-name", "gone.example.com")
-        compose.waitUntil(10000) { model!!.r2Browser.configuration.state.value.canPreview }
-        compose.onNodeWithTag("rc-domain-delete-submit").performScrollTo().performClick()
-        compose.waitUntil(15000) { model!!.r2Browser.configuration.state.value.preview != null }
-        // The real frozen preview card (target, impact, warning) before the independent confirmation.
+        typeInto("rc-typed-domain-name", domain)
+        val preview = compose.onNodeWithTag("rc-domain-delete-submit")
+        preview.performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("rc-domain-delete-risk").performScrollTo().assertIsOff().performClick().assertIsOn()
+        compose.waitUntil(10000) { configuration.state.value.canPreview }
+        preview.performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(15000) { configuration.state.value.preview != null }
         compose.onNodeWithTag("rc-preview-impact").performScrollTo().assertIsDisplayed()
+            .assertTextContains(domain, substring = true)
         captureScreenshot("custom-delete-preview")
+        assertTrue("preview must not send", requests.all { it.method == "GET" })
         compose.onNodeWithTag("rc-preview-confirm").performScrollTo().performClick()
         compose.waitUntil(20000) { !model!!.r2Browser.configuration.state.value.writing }
 
@@ -606,9 +631,9 @@ class R2DomainConfigurationManagementUiTest {
         assertEquals(TaskState.SUCCEEDED, task.state)
         assertEquals("r2-delete-custom-domain", task.actionKey)
         compose.runOnIdle {
-            assertFalse(domains.containsKey("gone.example.com"))
-            assertEquals(1, requests.count { it.method == "DELETE" })
-            assertEquals(0, requests.count { it.method == "PUT" && it.path.contains("/domains/custom/") })
+            assertFalse(domains.containsKey(domain))
+            assertEquals(listOf("DELETE" to customDomainPath(domain)),
+                requests.filter { it.method != "GET" }.map { it.method to it.path })
             val delete = requests.indexOfFirst { it.method == "DELETE" }
             val listReadBack = requests.indexOfLast { it.method == "GET" && it.path.endsWith("/domains/custom") }
             assertTrue("expected one DELETE", delete >= 0)
