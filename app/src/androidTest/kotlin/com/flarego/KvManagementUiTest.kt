@@ -144,7 +144,11 @@ class KvManagementUiTest {
         assertTrue(requests.none { it.method in setOf("PUT", "POST", "PATCH", "DELETE") })
     }
     private fun openNamespace(){click("kv-ns-$ns");waitFor{browser.state.value.keys.isNotEmpty()}}
-    private fun prepare(){click("kv-prepare");waitFor{browser.state.value.confirmation!=null}}
+    private fun prepare(){
+        hideKeyboard()
+        click("kv-prepare")
+        waitFor{browser.state.value.confirmation!=null}
+    }
     private fun hideKeyboard(){
         compose.runOnUiThread {
             val focused=android.view.inspector.WindowInspector.getGlobalWindowViews().firstOrNull{it.hasWindowFocus()}

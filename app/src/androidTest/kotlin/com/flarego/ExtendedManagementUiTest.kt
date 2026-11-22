@@ -285,11 +285,18 @@ class ExtendedManagementUiTest {
             click("ds-status-disabled");click("ds-preview");click("ds-risk-DISABLE")
             compose.onNodeWithTag("ds-confirm").performScrollTo().assertIsEnabled()
             val old=h.active!!;val epoch=model.controller.operationEpoch
-            assertEquals(Page.DOMAINS,model.controller.state.value.page);assertNull(model.controller.state.value.domain)
+            fun assertDnsRoute() {
+                val state = model.controller.state.value
+                assertEquals(Page.DNS, state.page)
+                assertEquals(h.scope.zoneId, state.domain?.id)
+                assertEquals(h.scope.connectionId, state.domain?.connectionId)
+            }
+            assertDnsRoute()
             assertEquals(h.scope,h.zones.state.value.selected?.ref)
             compose.activityRule.scenario.recreate();compose.waitForIdle()
             compose.runOnUiThread { assertSame(model,ViewModelProvider(compose.activity)[PresentationTestModel::class.java]) }
             assertEquals(epoch,model.controller.operationEpoch)
+            assertDnsRoute()
             assertTrue("Actual App configuration recreation must not notify user route exit",h.exits.isEmpty())
             assertEquals("Actual selected owned Zone must survive same-context App recreate",h.scope,h.zones.state.value.selected?.ref)
             visible("ds-status");assertNotSame(old,h.active);assertEquals(old.context,h.active!!.context)

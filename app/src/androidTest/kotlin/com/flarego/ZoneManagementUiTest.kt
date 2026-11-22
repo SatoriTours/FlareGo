@@ -8,6 +8,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
+import androidx.test.espresso.Espresso
 import com.flarego.core.model.*
 import com.flarego.core.application.zones.*
 import com.flarego.ui.FlareGoTheme
@@ -73,9 +74,32 @@ class ZoneManagementUiTest {
 
     @Test fun deletePreviewBackRetainsTypedDraftAndCancelNeverConfirms() {
         install(ZoneFormMode.DELETE)
-        edit("zone-delete-name", zone.name); click("zone-form-preview"); click("zone-confirm-back")
-        compose.onNodeWithTag("zone-delete-name").performScrollTo().assertTextContains(zone.name)
-        click("zone-form-preview"); click("zone-confirm-cancel")
+        val expected = ZoneAction.Delete(zone.ref, zone.name, zone.name)
+        val field = compose.onNodeWithTag("zone-delete-name")
+        val preview = compose.onNodeWithTag("zone-form-preview")
+        preview.performScrollTo().assertIsNotEnabled()
+        edit("zone-delete-name", zone.name)
+        // End the real IME interaction before measuring and tapping the preview button.
+        Espresso.closeSoftKeyboard()
+        fun previewDelete(expectedCount: Int) {
+            compose.runOnIdle {
+                assertEquals(zone.name, latest.typedName)
+                assertEquals(List(expectedCount - 1) { expected }, prepared)
+            }
+            preview.performScrollTo().assertIsDisplayed().assertIsEnabled().performTouchInput { click() }
+            compose.runOnIdle {
+                assertEquals(List(expectedCount) { expected }, prepared)
+                assertEquals(0, submitted)
+            }
+            compose.onNodeWithTag("zone-confirm-target").performScrollTo()
+                .assertTextContains(zone.name, substring = true)
+        }
+        previewDelete(expectedCount = 1)
+        click("zone-confirm-back")
+        compose.onNodeWithTag("zone-confirm-back").assertDoesNotExist()
+        field.performScrollTo().assertTextContains(zone.name)
+        previewDelete(expectedCount = 2)
+        click("zone-confirm-cancel")
         compose.runOnIdle { assertEquals(0, submitted); assertEquals(1, cancelled) }
     }
 

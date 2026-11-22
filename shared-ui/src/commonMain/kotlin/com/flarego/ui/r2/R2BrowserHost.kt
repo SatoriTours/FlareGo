@@ -102,6 +102,11 @@ fun R2BrowserHost(
                 )
             }
             if (!configState.open) {
+                if (objects != null && state.preview == null) {
+                    Text(if (browser.writesAvailable) R2Browser.WRITE_READY_NOTICE else R2Browser.WRITE_NOTICE,
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("r2-read-only-notice"),
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 state.notice?.takeIf { it != R2Browser.WRITE_NOTICE && it != R2Browser.WRITE_READY_NOTICE }?.let {
                     Text(it, Modifier.padding(horizontal = 12.dp).testTag("r2-write-result"), style = MaterialTheme.typography.bodySmall)
                 }

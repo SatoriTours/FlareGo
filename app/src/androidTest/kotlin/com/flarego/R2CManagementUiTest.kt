@@ -178,8 +178,7 @@ class R2CManagementUiTest {
     private val owner = androidx.lifecycle.ViewModelStore()
 
     private fun openC(tag: String) {
-        // The C entry row sits above the bucket list, outside any scroll container.
-        compose.onNodeWithTag(tag).performClick()
+        compose.onNodeWithTag(tag).performScrollTo().assertIsDisplayed().performClick()
         compose.waitUntil(10000) { model!!.r2Browser.c.state.value.open }
     }
 
@@ -449,8 +448,8 @@ class R2CManagementUiTest {
     @Test fun multipleBucketsRequireAnExplicitChoiceAndRegionChangesUseTheNewScope() {
         bucketNames = listOf("other-bucket", "my-bucket"); install()
         compose.onNodeWithTag("r2-c-notifications").assertIsNotEnabled()
-        compose.onNodeWithTag("r2-c-bucket-choice").performClick()
-        compose.onNodeWithTag("r2-c-bucket-my-bucket").performClick()
+        compose.onNodeWithTag("r2-c-bucket-choice").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("r2-c-bucket-my-bucket").assertIsDisplayed().performClick()
         openC("r2-c-notifications")
         compose.waitUntil(10000) { model!!.r2Browser.c.state.value.queues.isNotEmpty() }
         compose.onNodeWithTag("rc-region-eu").performScrollTo().performClick()

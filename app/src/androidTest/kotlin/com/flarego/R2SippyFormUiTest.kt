@@ -279,12 +279,17 @@ class R2SippyFormUiTest {
     private fun existingTaskIds(): Set<String> =
         compose.runOnIdle { checkNotNull(model).r2Browser.writeTasks.value.map { it.id }.toSet() }
 
+    private fun waitForNewSettledSippyTask(beforeTaskIds: Set<String>) {
+        compose.waitUntil(15000) {
+            val browser = checkNotNull(model).r2Browser
+            !browser.configuration.state.value.writing &&
+                browser.writeTasks.value.any { it.id !in beforeTaskIds }
+        }
+    }
+
     /** Asserts one PUT and that the independent same-resource GET happened *after* it. */
     private fun assertOneWriteThenReadback(provider: String, beforeTaskIds: Set<String>) {
-        compose.waitUntil(15000) {
-            val m = checkNotNull(model)
-            !m.r2Browser.configuration.state.value.writing && m.r2Browser.writeTasks.value.isNotEmpty()
-        }
+        waitForNewSettledSippyTask(beforeTaskIds)
         compose.runOnIdle {
             val snapshot = requests.toList()
             val putIndex = snapshot.indexOfFirst { it.method == "PUT" && it.path.endsWith("/sippy") }
@@ -378,10 +383,7 @@ class R2SippyFormUiTest {
         compose.runOnIdle { assertEquals("DELETE: a preview must not send", 0, mutations().size) }
         val beforeDeleteTaskIds = existingTaskIds()
         compose.onNodeWithTag("rc-preview-confirm").performScrollTo().performClick()
-        compose.waitUntil(15000) {
-            val m = checkNotNull(model)
-            !m.r2Browser.configuration.state.value.writing && m.r2Browser.writeTasks.value.isNotEmpty()
-        }
+        waitForNewSettledSippyTask(beforeDeleteTaskIds)
         compose.runOnIdle {
             val snapshot = requests.toList()
             val deleteIndex = snapshot.indexOfFirst { it.method == "DELETE" }
