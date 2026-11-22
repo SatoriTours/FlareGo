@@ -1,7 +1,7 @@
 {
   "app/src/main/kotlin/com/flarego/FlareGoViewModel.kt": {
     "previous": "06d43f5d0d2d72e5e90d418106acd49424093fce9667f0ab9985feeef6866f73",
-    "current": "cb829fd58a84e79159c0f4619cac142cd6045a73edea107ae0f13452153e1776"
+    "current": "1400dc256d6d354343942d0ebc0d73b7f697e55b753161d526734b8c92f1ea80"
   },
   "shared-core/src/commonMain/kotlin/com/flarego/core/cloudflare/protocol/ActionPolicies.kt": {
     "previous": "2d2c7c4d72ab19fece7a4898885ea8efb9f70f7fd4d3e86135b6383442410137",
@@ -33,6 +33,6 @@
   },
   "shared-ui/src/commonMain/kotlin/com/flarego/ui/FlareGoApp.kt": {
     "previous": "bfd4304688a932c4c0341202f4b6318c596a91ec73a7a30582df36ebfbf98ff3",
-    "current": "f5d672de88202204f162f59cab156927176e28ed8c64d96f8ecb5c801cf0d772"
+    "current": "f062aa2affb222678a8c760ed0600ef2e1c3ba6c2107c8dc9f90a114c8b650eb"
   }
 }
