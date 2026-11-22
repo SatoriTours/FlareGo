@@ -76,7 +76,7 @@ class BillingPermissionCardUiTest {
     @Test fun permissionFailureOffersReauthorizationAndKeepsTheProviderError() {
         install()
         compose.onNodeWithTag("billing-permission-card").assertIsDisplayed()
-        compose.onNodeWithText("账单读取尚未启用").assertIsDisplayed()
+        compose.onNodeWithText("无法读取账单历史").assertIsDisplayed()
         // The provider message is never swallowed; it stays readable inside the card.
         compose.onNodeWithText(error, substring = true).assertIsDisplayed()
 

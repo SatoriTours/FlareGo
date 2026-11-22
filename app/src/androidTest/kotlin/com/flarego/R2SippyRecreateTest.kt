@@ -150,7 +150,8 @@ class R2SippyRecreateTest {
         compose.runOnIdle { m.attachSecureWindow(AndroidSecureWindow(compose.activity.window)) }
         compose.setContent { FlareGoApp(m.controller, m::disconnect, {}, r2Browser = m.r2Browser) }
         compose.onNodeWithTag("nav-resources").performClick()
-        compose.onNodeWithText("R2", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-R2").performClick()
         compose.waitUntil(10000) { m.r2Browser.state.value.buckets.rows.isNotEmpty() }
         compose.onNodeWithTag("rb-config-my-bucket").performScrollTo().performClick()
         compose.waitUntil(10000) { m.r2Browser.configuration.state.value.open }

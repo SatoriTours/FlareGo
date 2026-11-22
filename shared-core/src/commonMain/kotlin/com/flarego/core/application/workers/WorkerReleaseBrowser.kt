@@ -37,19 +37,15 @@ data class ReleaseRead<T>(
     val appendFailed: Boolean = false,
 )
 
-sealed interface WorkerRoute {
-    data object Overview : WorkerRoute
-    data object History : WorkerRoute
-    data object Versions : WorkerRoute
-    data class Deployment(val id: String) : WorkerRoute
-    data class Version(val id: String) : WorkerRoute
-}
+enum class WorkerTab { DEPLOYMENTS, VERSIONS }
 
 data class WorkerReleaseState(
     val worker: CloudResource,
-    val route: WorkerRoute = WorkerRoute.Overview,
+    val tab: WorkerTab = WorkerTab.DEPLOYMENTS,
     val deployments: ReleaseRead<ReleasePage<WorkerDeployment>> = ReleaseRead(),
     val versions: ReleaseRead<ReleasePage<WorkerVersion>> = ReleaseRead(),
+    val expandedDeployment: String? = null,
+    val expandedVersion: String? = null,
     val deployment: ReleaseRead<WorkerDeployment> = ReleaseRead(),
     val version: ReleaseRead<WorkerVersion> = ReleaseRead(),
 ) {
@@ -63,115 +59,135 @@ class WorkerReleaseBrowser(
     private val factory: suspend (Connection, CloudResource) -> WorkerReleases,
     private val nowMs: () -> Long,
 ) {
+    private enum class ReadSlot { DEPLOYMENTS, VERSIONS, DEPLOYMENT, VERSION }
+
     private val mutable = MutableStateFlow<WorkerReleaseState?>(null)
     val state = mutable.asStateFlow()
     private var connection: Connection? = null
-    private var request: Job? = null
-    private val stack = mutableListOf<WorkerRoute>()
+    private val requests = mutableMapOf<ReadSlot, Job>()
 
     fun open(connection: Connection, worker: CloudResource) {
         clear()
         if (connection.demo || worker.kind != ResourceKind.WORKER) return
         this.connection = connection
-        stack += WorkerRoute.Overview
         mutable.value = WorkerReleaseState(worker)
         load()
     }
 
     fun clear() {
-        request?.cancel()
-        request = null
+        requests.values.forEach { it.cancel() }
+        requests.clear()
         connection = null
-        stack.clear()
         mutable.value = null
     }
 
-    fun go(route: WorkerRoute) {
+    fun selectTab(tab: WorkerTab) {
         val before = mutable.value ?: return
-        if (before.route == route) return
-        val existing = stack.indexOf(route)
-        if (existing < 0) stack += route
-        else stack.subList(existing + 1, stack.size).clear()
-        activate(route)
+        mutable.value = before.copy(tab = tab)
+        val active = if (tab == WorkerTab.VERSIONS) before.versions else before.deployments
+        if (active.value == null && active.error == null) load(tab = tab)
+    }
+
+    fun toggleDeployment(id: String) {
+        val before = mutable.value ?: return
+        if (before.expandedDeployment == id) {
+            closeDeployment(before)
+        } else {
+            requests.remove(ReadSlot.DEPLOYMENT)?.cancel()
+            mutable.value = before.copy(expandedDeployment = id, deployment = ReleaseRead())
+            reloadDeployment()
+        }
+    }
+
+    fun toggleVersion(id: String) {
+        val before = mutable.value ?: return
+        if (before.expandedVersion == id) closeVersion(before) else openVersion(id)
+    }
+
+    fun openVersion(id: String) {
+        selectTab(WorkerTab.VERSIONS)
+        val before = mutable.value ?: return
+        if (before.expandedVersion == id) return
+        requests.remove(ReadSlot.VERSION)?.cancel()
+        mutable.value = before.copy(expandedVersion = id, version = ReleaseRead())
+        reloadVersion()
+    }
+
+    private fun closeDeployment(before: WorkerReleaseState) {
+        requests.remove(ReadSlot.DEPLOYMENT)?.cancel()
+        mutable.value = before.copy(expandedDeployment = null, deployment = ReleaseRead())
+    }
+
+    private fun closeVersion(before: WorkerReleaseState) {
+        requests.remove(ReadSlot.VERSION)?.cancel()
+        mutable.value = before.copy(expandedVersion = null, version = ReleaseRead())
     }
 
     fun back(): Boolean {
-        if (stack.size < 2) return false
-        stack.removeAt(stack.lastIndex)
-        activate(stack.last())
+        val before = mutable.value ?: return false
+        when (before.tab) {
+            WorkerTab.DEPLOYMENTS -> if (before.expandedDeployment != null) closeDeployment(before) else return false
+            WorkerTab.VERSIONS -> if (before.expandedVersion != null) closeVersion(before) else return false
+        }
         return true
     }
 
-    private fun activate(route: WorkerRoute) {
-        val before = mutable.value ?: return
-        request?.cancel()
-        request = null
-        mutable.value = before.copy(
-            route = route,
-            deployments = before.deployments.copy(loading = false),
-            versions = before.versions.copy(loading = false),
-            deployment = if (route is WorkerRoute.Deployment && before.deployment.value?.id == route.id)
-                before.deployment.copy(loading = false) else ReleaseRead(),
-            version = if (route is WorkerRoute.Version && before.version.value?.id == route.id)
-                before.version.copy(loading = false) else ReleaseRead(),
-        )
-        val active = mutable.value ?: return
-        val read = when (route) {
-            WorkerRoute.Overview, WorkerRoute.History -> active.deployments
-            WorkerRoute.Versions -> active.versions
-            is WorkerRoute.Deployment -> active.deployment
-            is WorkerRoute.Version -> active.version
-        }
-        if (read.value == null && read.error == null) load()
-    }
-
-    fun load(more: Boolean = false) {
+    fun load(more: Boolean = false, tab: WorkerTab? = null) {
         val owner = connection ?: return
         val before = mutable.value ?: return
-        if (request?.isActive == true) return
-        val route = before.route
-        when (route) {
-            WorkerRoute.Overview, WorkerRoute.History -> {
+        when (tab ?: before.tab) {
+            WorkerTab.DEPLOYMENTS -> {
                 val page = if (more) before.deployments.value?.next ?: return else 1
-                read(owner, before, before.deployments, more, { s, r -> s.copy(deployments = r) }) { api ->
+                read(ReadSlot.DEPLOYMENTS, owner, before, before.deployments, more, { s, r -> s.copy(deployments = r) }) { api ->
                     combine(before.deployments.value.takeIf { more }, api.deployments(page), WorkerDeployment::id)
                 }
             }
-            WorkerRoute.Versions -> {
+            WorkerTab.VERSIONS -> {
                 val page = if (more) before.versions.value?.next ?: return else 1
-                read(owner, before, before.versions, more, { s, r -> s.copy(versions = r) }) { api ->
+                read(ReadSlot.VERSIONS, owner, before, before.versions, more, { s, r -> s.copy(versions = r) }) { api ->
                     combine(before.versions.value.takeIf { more }, api.versions(page), WorkerVersion::id)
                 }
-            }
-            is WorkerRoute.Deployment -> if (!more) {
-                read(owner, before, before.deployment, false, { s, r -> s.copy(deployment = r) }) { it.deployment(route.id) }
-            }
-            is WorkerRoute.Version -> if (!more) {
-                read(owner, before, before.version, false, { s, r -> s.copy(version = r) }) { it.version(route.id) }
             }
         }
     }
 
+    fun reloadDeployment() {
+        val owner = connection ?: return
+        val before = mutable.value ?: return
+        val id = before.expandedDeployment ?: return
+        read(ReadSlot.DEPLOYMENT, owner, before, before.deployment, false,
+            { s, r -> s.copy(deployment = r) }) { it.deployment(id) }
+    }
+
+    fun reloadVersion() {
+        val owner = connection ?: return
+        val before = mutable.value ?: return
+        val id = before.expandedVersion ?: return
+        read(ReadSlot.VERSION, owner, before, before.version, false,
+            { s, r -> s.copy(version = r) }) { it.version(id) }
+    }
+
     private fun <T> read(
-        owner: Connection, before: WorkerReleaseState, previous: ReleaseRead<T>, more: Boolean,
+        slot: ReadSlot, owner: Connection, before: WorkerReleaseState, previous: ReleaseRead<T>, more: Boolean,
         update: (WorkerReleaseState, ReleaseRead<T>) -> WorkerReleaseState, run: suspend (WorkerReleases) -> T,
     ) {
-        val pending = update(before, previous.copy(loading = true, error = null, appendFailed = false))
-        mutable.value = pending
-        request = scope.launch {
+        if (requests[slot]?.isActive == true) return
+        mutable.value = update(before, previous.copy(loading = true, error = null, appendFailed = false))
+        requests[slot] = scope.launch {
             val result = try {
                 val api = factory(owner, before.worker)
                 ensureActive()
-                val value = run(api)
-                ReleaseRead(value, if (more) previous.observedAtMs else nowMs())
+                ReleaseRead(run(api), if (more) previous.observedAtMs else nowMs())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 previous.copy(loading = false, appendFailed = more, error = error as? CloudFailure
                     ?: CloudFailure(CloudFailureCode.UNAVAILABLE, "暂时无法读取 Workers，请检查连接后重试"))
             }
+            // Switching tabs doesn't retire a read; closing/replacing a row or changing account does.
             ensureActive()
-            if (mutable.value === pending) mutable.value = update(pending, result)
+            val latest = mutable.value ?: return@launch
+            mutable.value = update(latest, result)
         }
     }
 

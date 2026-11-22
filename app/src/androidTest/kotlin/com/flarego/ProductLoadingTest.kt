@@ -63,39 +63,41 @@ class ProductLoadingTest {
         // The overview renders one honest row per product (域名 + Workers/R2/KV/D1); none is
         // loaded yet, so every row says 未加载 and no count is invented.
         listOf("overview-domains","overview-worker","overview-r2","overview-kv","overview-d1").forEach { tag ->
-            compose.onNodeWithTag(tag).assert(hasAnyDescendant(hasText("未加载", substring = true)))
+            compose.onNodeWithTag("overview-list").performScrollToNode(hasTestTag(tag))
+            compose.onNodeWithTag(tag).assert(hasText("未加载"))
         }
-        compose.onAllNodesWithText("未加载").assertCountEquals(5)
         compose.onNodeWithText("0 个已激活").assertDoesNotExist()
         compose.runOnIdle {assertTrue(calls.isEmpty())}
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("刷新全部产品"))
-        compose.onNodeWithText("刷新全部产品").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("更多").performClick()
+        compose.onNodeWithTag("overview-refresh-all").assertIsDisplayed().performClick()
         compose.runOnIdle {assertEquals(ProductKey.entries.toSet(),calls.toSet())}
     }
     @Test fun domainTabOnlyLoadsZonesAndShowsLoadedCount() {
         install();compose.onNodeWithTag("nav-domains").performClick()
         compose.onNodeWithText("zone.example").assertIsDisplayed()
-        compose.onNodeWithText("已加载 1 · 全部").assertIsDisplayed()
+        compose.onNodeWithText("已托管").assertIsDisplayed()
         compose.runOnIdle {assertEquals(listOf(ProductKey.ZONES),calls)}
     }
     @Test fun productSelectorLoadsOnlyRequestedKindAndPreservesOtherSuccess() {
         failR2=true;install(Page.RESOURCES)
-        compose.onNodeWithText("R2").performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-R2").performClick()
         compose.onNodeWithText("需要 R2 权限").assertIsDisplayed()
-        compose.onNodeWithText("Workers").performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-WORKER").performClick()
         compose.onNodeWithText("first-resource").assertIsDisplayed()
         compose.runOnIdle {assertEquals(listOf(ProductKey.WORKERS,ProductKey.R2),calls)}
     }
     @Test fun paginationAppendsAndOnlyThenLabelsComplete() {
         install(Page.RESOURCES)
-        compose.onNodeWithText("已加载 1 · 尚未完整").assertIsDisplayed()
+        compose.onNodeWithText("当前只显示已加载的结果").assertIsDisplayed()
         compose.onNodeWithText("加载更多").performClick()
         compose.onNodeWithText("second-resource").assertIsDisplayed()
-        compose.onNodeWithText("已加载 2 · 全部").assertIsDisplayed()
+        compose.onNodeWithText("当前只显示已加载的结果").assertDoesNotExist()
     }
     @Test fun accountBillingIsMountedWithoutUserFallbackOrFakeAmount() {
         install(Page.BILLING)
-        compose.onNodeWithText("当前账号账单历史").assertIsDisplayed()
+        compose.onNodeWithText("账单历史").assertIsDisplayed()
         compose.onNodeWithText("未知 USD").assertIsDisplayed()
         compose.onNodeWithText("用户级账单历史 · 旧接口").assertDoesNotExist()
         compose.runOnIdle {assertEquals(listOf(ProductKey.BILLING),calls)}
@@ -103,8 +105,9 @@ class ProductLoadingTest {
     @Test fun taskPageShowsNewStateAndReadOnlyReconcileAction() {
         val task=OperationTask("task",connection.id,ZoneScope(account,"zone"),"dns-records-for-a-zone-create-dns-record",null,"a".repeat(64),null,TaskState.UNKNOWN,"结果待核对",null,null,1,1)
         install(Page.JOBS,listOf(task))
+        compose.onNodeWithTag("job-row-task").performClick()
         compose.onNodeWithText("结果待核对").assertIsDisplayed()
-        compose.onNodeWithText("只读核对").performClick()
+        compose.onNodeWithText("只读核对").performScrollTo().performClick()
         compose.runOnIdle {assertEquals(1,checked)}
     }
     @Test fun aTokenConnectionReadsAccountBillingOnDemandAndKeepsLegacyUserBillingExplicit() {
@@ -157,18 +160,20 @@ class ProductLoadingTest {
     }
     @Test fun oldUserBillingIsAnExplicitSeparatelyLabeledChoice() {
         install(Page.BILLING)
+        compose.onNodeWithContentDescription("账单来源").performClick()
         compose.onNodeWithText("用户账单（旧接口）").performClick()
         compose.onNodeWithText("用户级账单历史 · 旧接口").assertIsDisplayed()
-        compose.onNodeWithText("当前账号账单历史").assertDoesNotExist()
+        compose.onNodeWithText("账单历史").assertDoesNotExist()
     }
     @Test fun workerLegacyDirectoryRequiresAnExplicitChoice() {
         install(Page.RESOURCES)
-        compose.onNodeWithTag("worker-dir-tab-modern").assertIsSelected()
+        compose.onNodeWithTag("worker-directory-selector").assert(hasText("现代目录"))
         // The legacy directory is a separate, explicit choice: this fixture wires no legacy
         // adapter, so the app must report the capability gap instead of reusing the modern
         // rows or silently claiming an empty legacy directory.
+        compose.onNodeWithTag("worker-directory-selector").performClick()
         compose.onNodeWithTag("worker-dir-tab-legacy").performClick()
-        compose.onNodeWithTag("worker-dir-tab-legacy").assertIsSelected()
+        compose.onNodeWithTag("worker-directory-selector").assert(hasText("旧目录"))
         compose.onNodeWithText("旧目录未提供，请在官方控制台查看").assertIsDisplayed()
         compose.onNodeWithText("first-resource").assertDoesNotExist()
         // No speculative legacy request is sent when the adapter is absent.

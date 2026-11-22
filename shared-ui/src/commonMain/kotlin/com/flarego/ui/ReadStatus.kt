@@ -16,7 +16,7 @@ internal fun readStatusText(fromCache: Boolean, loading: Boolean, time: String) 
 
 @Composable
 fun ReadStatus(observedAtMs: Long?, fromCache: Boolean, loading: Boolean, modifier: Modifier = Modifier) {
-    if (observedAtMs == null) return
+    if (observedAtMs == null || (!fromCache && !loading)) return
     Row(
         modifier = modifier
             .fillMaxWidth()

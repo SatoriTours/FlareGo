@@ -5,14 +5,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.ui.SectionCard
 
@@ -21,6 +19,11 @@ fun R2BucketList(
     state: R2BucketListState,
     onIntent: (R2BucketIntent) -> Unit,
     modifier: Modifier = Modifier,
+    scroll: androidx.compose.foundation.ScrollState = rememberScrollState(),
+    directoryActions: @Composable () -> Unit = {},
+    observed: Boolean = true,
+    query: String = "",
+    showCreate: Boolean = false,
     onOpenConfiguration: ((String) -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -32,34 +35,10 @@ fun R2BucketList(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "R2 存储桶",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                OutlinedButton(
-                    onClick = { onIntent(R2BucketIntent.Refresh) },
-                    enabled = !state.loading && !state.refreshing,
-                    modifier = Modifier.testTag("rb-refresh"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("刷新")
-                }
-            }
-
             state.error?.let { err ->
                 Text(
                     text = err,
@@ -78,130 +57,205 @@ fun R2BucketList(
                 )
             }
 
-            state.pendingDeleteName?.let { targetBucket ->
-                val canConfirmDelete = state.typedDeleteName == targetBucket
-                SectionCard(modifier = Modifier.fillMaxWidth().testTag("rb-delete-card")) {
-                    Text(
-                        text = "确认删除存储桶",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Text(
-                        text = "删除存储桶不可逆，且存储桶内所有对象必须已清空。\n目标存储桶：$targetBucket",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    OutlinedTextField(
-                        value = state.typedDeleteName,
-                        onValueChange = { onIntent(R2BucketIntent.TypedDeleteNameChanged(it)) },
-                        label = { Text("逐字输入存储桶名称确认") },
-                        placeholder = { Text(targetBucket) },
-                        modifier = Modifier.fillMaxWidth().testTag("rb-delete-input"),
-                        singleLine = true,
-                    )
-                    if (!canConfirmDelete) {
+            if (!showCreate) {
+                state.pendingDeleteName?.let { targetBucket ->
+                    val canConfirmDelete = state.typedDeleteName == targetBucket
+                    SectionCard(modifier = Modifier.fillMaxWidth().testTag("rb-delete-card")) {
                         Text(
-                            text = "请输入完整的存储桶名称「$targetBucket」以确认删除",
+                            text = "确认删除存储桶",
+                            style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.testTag("rb-delete-hint"),
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedButton(
-                            onClick = { onIntent(R2BucketIntent.CancelDelete) },
-                            modifier = Modifier.weight(1f).testTag("rb-delete-cancel"),
-                        ) {
-                            Text("取消")
-                        }
-                        Button(
-                            onClick = { onIntent(R2BucketIntent.ConfirmDelete) },
-                            enabled = canConfirmDelete && !state.loading,
-                            modifier = Modifier.weight(1f).testTag("rb-delete-confirm"),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        ) {
-                            Text("确认删除")
-                        }
-                    }
-                }
-            }
-
-            state.editingBucketName?.let { editingBucket ->
-                val canSubmit = state.editingOriginalStorageClass in state.storageClasses &&
-                        state.editingStorageClass != state.editingOriginalStorageClass &&
-                        state.editingStorageClass in state.storageClasses &&
-                        !state.loading &&
-                        !state.refreshing
-                SectionCard(modifier = Modifier.fillMaxWidth().testTag("rb-edit-card")) {
-                    Text(
-                        text = "修改默认存储类型",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = "仅影响新上传的对象，不会迁移已有对象。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = "目标存储桶：$editingBucket",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.testTag("rb-edit-target"),
-                    )
-                    Text(
-                        text = "原存储类型：${state.editingOriginalStorageClass ?: "未知"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("rb-edit-original"),
-                    )
-                    Text(
-                        text = "新存储类型",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        listOf("Standard", "InfrequentAccess").forEach { sc ->
-                            FilterChip(
-                                selected = state.editingStorageClass == sc,
-                                onClick = { onIntent(R2BucketIntent.EditStorageClassChanged(sc)) },
-                                label = {
-                                    Text(
-                                        when (sc) {
-                                            "Standard" -> "标准 (Standard)"
-                                            "InfrequentAccess" -> "低频 (InfrequentAccess)"
-                                            else -> sc
-                                        }
-                                    )
-                                },
-                                modifier = Modifier.testTag("rb-edit-class-$sc"),
+                        Text(
+                            text = "删除存储桶不可逆，且存储桶内所有对象必须已清空。\n目标存储桶：$targetBucket",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        OutlinedTextField(
+                            value = state.typedDeleteName,
+                            onValueChange = { onIntent(R2BucketIntent.TypedDeleteNameChanged(it)) },
+                            label = { Text("逐字输入存储桶名称确认") },
+                            placeholder = { Text(targetBucket) },
+                            modifier = Modifier.fillMaxWidth().testTag("rb-delete-input"),
+                            singleLine = true,
+                        )
+                        if (!canConfirmDelete) {
+                            Text(
+                                text = "请输入完整的存储桶名称「$targetBucket」以确认删除",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.testTag("rb-delete-hint"),
                             )
                         }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedButton(
-                            onClick = { onIntent(R2BucketIntent.CancelStorageClassEdit) },
-                            modifier = Modifier.weight(1f).testTag("rb-edit-cancel"),
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("取消")
-                        }
-                        Button(
-                            onClick = { onIntent(R2BucketIntent.SubmitStorageClassEdit) },
-                            enabled = canSubmit,
-                            modifier = Modifier.weight(1f).testTag("rb-edit-submit"),
-                        ) {
-                            Text("保存修改")
+                            OutlinedButton(
+                                onClick = { onIntent(R2BucketIntent.CancelDelete) },
+                                modifier = Modifier.weight(1f).testTag("rb-delete-cancel"),
+                            ) {
+                                Text("取消")
+                            }
+                            Button(
+                                onClick = { onIntent(R2BucketIntent.ConfirmDelete) },
+                                enabled = canConfirmDelete && !state.loading,
+                                modifier = Modifier.weight(1f).testTag("rb-delete-confirm"),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            ) {
+                                Text("确认删除")
+                            }
                         }
                     }
                 }
-            }
 
+                state.editingBucketName?.let { editingBucket ->
+                    val canSubmit = state.editingOriginalStorageClass in state.storageClasses &&
+                            state.editingStorageClass != state.editingOriginalStorageClass &&
+                            state.editingStorageClass in state.storageClasses &&
+                            !state.loading &&
+                            !state.refreshing
+                    SectionCard(modifier = Modifier.fillMaxWidth().testTag("rb-edit-card")) {
+                        Text(
+                            text = "修改默认存储类型",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = "仅影响新上传的对象，不会迁移已有对象。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "目标存储桶：$editingBucket",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.testTag("rb-edit-target"),
+                        )
+                        Text(
+                            text = "原存储类型：${state.editingOriginalStorageClass ?: "未知"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("rb-edit-original"),
+                        )
+                        Text(
+                            text = "新存储类型",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            listOf("Standard", "InfrequentAccess").forEach { sc ->
+                                FilterChip(
+                                    selected = state.editingStorageClass == sc,
+                                    onClick = { onIntent(R2BucketIntent.EditStorageClassChanged(sc)) },
+                                    label = {
+                                        Text(
+                                            when (sc) {
+                                                "Standard" -> "标准 (Standard)"
+                                                "InfrequentAccess" -> "低频 (InfrequentAccess)"
+                                                else -> sc
+                                            }
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("rb-edit-class-$sc"),
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { onIntent(R2BucketIntent.CancelStorageClassEdit) },
+                                modifier = Modifier.weight(1f).testTag("rb-edit-cancel"),
+                            ) {
+                                Text("取消")
+                            }
+                            Button(
+                                onClick = { onIntent(R2BucketIntent.SubmitStorageClassEdit) },
+                                enabled = canSubmit,
+                                modifier = Modifier.weight(1f).testTag("rb-edit-submit"),
+                            ) {
+                                Text("保存修改")
+                            }
+                        }
+                    }
+                }
+
+                if (state.rows.isEmpty() && state.error == null && !state.loading) {
+                    com.flarego.ui.DirectoryGroup {
+                        com.flarego.ui.CompactListRow(when {
+                            !observed -> "尚未读取存储桶"
+                            query.isNotBlank() -> "没有匹配的存储桶"
+                            state.nextCursor != null -> "当前页面没有存储桶"
+                            else -> "暂无存储桶"
+                        }, showDivider = false)
+                    }
+                } else {
+                    state.rows.forEach { row ->
+                        com.flarego.ui.DirectoryGroup {
+                            com.flarego.ui.CompactListRow(
+                                row.name,
+                                modifier = Modifier.testTag("rb-open-${row.name}"),
+                                value = "R2", wrapTitle = true,
+                                onClick = { onIntent(R2BucketIntent.OpenBucket(row.name)) },
+                            )
+                            Text(
+                                "位置：${row.location ?: "自动"} · 类型：${row.storageClass ?: "未知"} · 创建时间：${row.createdAt ?: "—"}",
+                                Modifier.padding(horizontal = 20.dp, vertical = 4.dp).testTag("rb-row-${row.name}"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val isKnownStorageClass = row.storageClass in state.storageClasses
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                onOpenConfiguration?.let { openConfig ->
+                                    TextButton(
+                                        onClick = { openConfig(row.name) },
+                                        enabled = !state.loading && !state.refreshing,
+                                        modifier = Modifier.testTag("rb-config-${row.name}"),
+                                    ) {
+                                        Text("桶设置")
+                                    }
+                                }
+                                TextButton(
+                                    onClick = { onIntent(R2BucketIntent.RequestStorageClassEdit(row.name)) },
+                                    enabled = isKnownStorageClass && !state.loading && !state.refreshing,
+                                    modifier = Modifier.testTag("rb-edit-${row.name}"),
+                                ) {
+                                    Text(if (isKnownStorageClass) "修改存储类型" else "存储类型只读")
+                                }
+                                IconButton(
+                                    onClick = { onIntent(R2BucketIntent.RequestDelete(row.name)) },
+                                    modifier = Modifier.testTag("rb-delete-${row.name}"),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "删除存储桶",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (state.nextCursor != null) {
+                    OutlinedButton(
+                        onClick = { onIntent(R2BucketIntent.LoadMore) },
+                        enabled = !state.loading,
+                        modifier = Modifier.fillMaxWidth().testTag("rb-load-more"),
+                    ) {
+                        Text(if (state.loading) "正在加载..." else "加载更多存储桶")
+                    }
+                }
+                TextButton(onClick = { onIntent(R2BucketIntent.Refresh) },
+                    enabled = !state.loading && !state.refreshing, modifier = Modifier.testTag("rb-refresh")) { Text("刷新存储桶") }
+                directoryActions()
+            }
             SectionCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "创建存储桶",
@@ -303,128 +357,6 @@ fun R2BucketList(
                     modifier = Modifier.fillMaxWidth().testTag("rb-create-submit"),
                 ) {
                     Text("创建存储桶")
-                }
-            }
-
-            Text(
-                text = "存储桶列表 (${state.rows.size})",
-                style = MaterialTheme.typography.titleMedium,
-            )
-
-            if (state.rows.isEmpty()) {
-                SectionCard(modifier = Modifier.fillMaxWidth()) {
-                    when {
-                        state.error != null -> {
-                            Text(
-                                text = "加载存储桶失败",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        state.loading -> {
-                            Text(
-                                text = "正在加载存储桶...",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        else -> {
-                            Text(
-                                text = "尚无数据",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                    }
-                }
-            } else {
-                state.rows.forEach { row ->
-                    SectionCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp),
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                Text(
-                                    text = row.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.testTag("rb-row-${row.name}"),
-                                )
-                                val storageDisplay = row.storageClass ?: "未知"
-                                Text(
-                                    text = "位置：${row.location ?: "自动"} · 类型：$storageDisplay",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = "创建时间：${row.createdAt ?: "—"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        val isKnownStorageClass = row.storageClass in state.storageClasses
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            onOpenConfiguration?.let { openConfig ->
-                                TextButton(
-                                    onClick = { openConfig(row.name) },
-                                    enabled = !state.loading && !state.refreshing,
-                                    modifier = Modifier.testTag("rb-config-${row.name}"),
-                                ) {
-                                    Text("桶设置")
-                                }
-                            }
-                            TextButton(
-                                onClick = { onIntent(R2BucketIntent.RequestStorageClassEdit(row.name)) },
-                                enabled = isKnownStorageClass && !state.loading && !state.refreshing,
-                                modifier = Modifier.testTag("rb-edit-${row.name}"),
-                            ) {
-                                Text(if (isKnownStorageClass) "修改存储类型" else "存储类型只读")
-                            }
-                            TextButton(
-                                onClick = { onIntent(R2BucketIntent.OpenBucket(row.name)) },
-                                modifier = Modifier.testTag("rb-open-${row.name}"),
-                            ) {
-                                Text("进入存储桶")
-                            }
-                            IconButton(
-                                onClick = { onIntent(R2BucketIntent.RequestDelete(row.name)) },
-                                modifier = Modifier.testTag("rb-delete-${row.name}"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "删除存储桶",
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (state.nextCursor != null) {
-                OutlinedButton(
-                    onClick = { onIntent(R2BucketIntent.LoadMore) },
-                    enabled = !state.loading,
-                    modifier = Modifier.fillMaxWidth().testTag("rb-load-more"),
-                ) {
-                    Text(if (state.loading) "正在加载..." else "加载更多存储桶")
                 }
             }
         }

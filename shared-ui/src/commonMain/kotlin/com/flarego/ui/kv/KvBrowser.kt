@@ -116,8 +116,14 @@ class KvBrowser(
         refreshKeys()
     }
     fun selectKey(key:KvKeyEntry) {
-        if(key !in mutable.value.keys)return
+        if(key !in mutable.value.keys || mutable.value.writing)return
+        if (mutable.value.selectedKey?.key == key.key) { closeKey(); return }
         cancel();mutable.value=mutable.value.copy(selectedKey=key,form=KvForm(key=key.key))
+    }
+    fun closeKey() {
+        if (mutable.value.writing) return
+        cancel()
+        mutable.update { it.copy(selectedKey = null, form = KvForm()) }
     }
     fun begin(editor:KvEditor) {
         if(current()==null||mutable.value.writing)return

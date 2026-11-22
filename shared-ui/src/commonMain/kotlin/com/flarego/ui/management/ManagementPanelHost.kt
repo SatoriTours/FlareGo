@@ -14,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import com.flarego.core.application.connection.ReadTarget
 import com.flarego.ui.dns.*
 import com.flarego.ui.zones.ZoneSettingsPanel
+import com.flarego.ui.zones.ZoneSettingsPanelIntent
+import com.flarego.core.model.ZoneSettingsTarget
 import kotlinx.coroutines.flow.StateFlow
 
 /** Independent context; adapter owns leases and all runtime/platform behavior. */
@@ -26,6 +28,7 @@ fun ManagementPanelHost(
     modifier: Modifier = Modifier,
     onBound: (ManagementPanelLease) -> Unit = {},
     onReadUpgrade: ((ReadTarget) -> Unit)? = null,
+    openUniversalSsl: Boolean = false,
 ) {
     when(module) {
         ManagementPanelModule.FILES -> ports.files?.let { p ->
@@ -55,6 +58,10 @@ fun ManagementPanelHost(
         ManagementPanelModule.ZONE_SETTINGS -> ports.zoneSettings?.let { p ->
             BoundPanel(actualContext,module,p,p.state,p::bind,p::clear,ports.onRouteExit,onBack,onBound,modifier,
                 { it.scope==actualContext.scope }) { s,l,admit ->
+                LaunchedEffect(l, openUniversalSsl) {
+                    if (openUniversalSsl && admit() && s.target != ZoneSettingsTarget.UniversalSsl)
+                        p.onIntent(l, ZoneSettingsPanelIntent.Select(actualContext.scope, ZoneSettingsTarget.UniversalSsl))
+                }
                 ZoneSettingsPanel(actualContext.scope,s,{ if(admit())p.onIntent(l,it) },
                     onReadUpgrade=onReadUpgrade?.let { upgrade -> { target -> if(admit())upgrade(target) } })
             }

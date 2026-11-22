@@ -45,20 +45,23 @@ internal class D1SyntheticAdapters(
     val transfers: D1SignedTransferPort,
 )
 
-class FlareGoViewModel private constructor(
+class FlareGoViewModel internal constructor(
     application: Application,
     private val operationDispatcher: kotlinx.coroutines.CoroutineDispatcher,
     private val transportForToken: (String) -> HttpTransport,
     private val transfersForToken: (String) -> TransferPort,
-    private val d1Synthetic: D1SyntheticAdapters?,
+    private val d1Synthetic: D1SyntheticAdapters? = null,
+    updateService: UpdateService = GitHubUpdateService(File(application.cacheDir, "updates")),
+    updateStore: UpdateStore = AndroidUpdateStore(application),
 ) : AndroidViewModel(application) {
     constructor(application: Application, operationDispatcher: kotlinx.coroutines.CoroutineDispatcher,
         transportForToken: (String) -> HttpTransport, transfersForToken: (String) -> TransferPort):
         this(application,operationDispatcher,transportForToken,transfersForToken,null)
     companion object {
         internal fun forD1SyntheticTest(application: Application,dispatcher: kotlinx.coroutines.CoroutineDispatcher,
-            transport: (String) -> HttpTransport,transfers: (String) -> TransferPort,synthetic: D1SyntheticAdapters) =
-            FlareGoViewModel(application,dispatcher,transport,transfers,synthetic)
+            transport: (String) -> HttpTransport,transfers: (String) -> TransferPort,synthetic: D1SyntheticAdapters,
+            updateStore: UpdateStore = AndroidUpdateStore(application)) =
+            FlareGoViewModel(application,dispatcher,transport,transfers,synthetic,updateStore = updateStore)
     }
     // Keep the original three-parameter/default/trailing-lambda constructor intact.
     // The explicit four-parameter constructor adds only the streaming test seam.
@@ -69,8 +72,8 @@ class FlareGoViewModel private constructor(
     val updater =
         UpdateController(
             viewModelScope,
-            GitHubUpdateService(File(application.cacheDir, "updates")),
-            AndroidUpdateStore(application),
+            updateService,
+            updateStore,
             installedCode(application),
             application.packageManager
                 .getPackageInfo(application.packageName, 0)
@@ -775,6 +778,7 @@ class FlareGoViewModel private constructor(
             gatedConnections += connection.id
             return CredentialSaveOutcome.STATE_UNCERTAIN
         }
+        val previousWorkspace = controller.state.value
         // Synchronous transition admission retires old issuer before the first vault write suspension.
         extendedAdapter.invalidateConnection(connection.id)
         controller.invalidateSession(connection.id)
@@ -807,7 +811,8 @@ class FlareGoViewModel private constructor(
         uncertainCredentials.remove(connection.id)
         credentialKinds[connection.id] = kind
         controller.reloadConnections(store.connections())
-        controller.selectConnection(connection)
+        if (expected != null) controller.resumeAfterTokenUpgrade(connection, previousWorkspace)
+        else controller.selectConnection(connection)
         return CredentialSaveOutcome.SAVED
     }
 

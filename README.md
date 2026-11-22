@@ -193,7 +193,7 @@ python3 -m unittest discover -s tools/ci/tests -v
 
 ### 设计原型
 
-仓库保留 HTML 可点击原型，便于讨论界面与架构。需要 Python 3；通过 npm 启动时还需要 Node.js：
+新增页面或改变用户可见的界面、交互时，请从[当前可点击设计稿与预览说明](docs/app-design/README.md)开始。下面是历史原型及架构图的启动方式。需要 Python 3；通过 npm 启动时还需要 Node.js：
 
 ```sh
 npm run dev

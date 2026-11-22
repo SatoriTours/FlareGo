@@ -145,7 +145,7 @@ class WorkerReleasesTest {
         val browser = WorkerReleaseBrowser(this, { _, _ -> api }, { now })
         browser.open(connection, worker)
         runCurrent()
-        browser.go(WorkerRoute.History)
+        browser.selectTab(WorkerTab.DEPLOYMENTS)
         status = 429
         now = 2000L
         browser.load(more = true)
@@ -158,7 +158,7 @@ class WorkerReleasesTest {
         runCurrent()
         assertNull(browser.state.value?.deployments?.error)
         assertNull(browser.state.value?.deployments?.value?.next)
-        assertTrue(browser.back())
+        assertFalse(browser.back())
         offline = true
         browser.load()
         runCurrent()

@@ -18,8 +18,20 @@ import com.flarego.core.application.kv.*
 import com.flarego.core.model.*
 import com.flarego.ui.AppBackHandler
 
+internal fun KvBrowser.backWithinWorkspace(): Boolean {
+    val state = this.state.value
+    if (state.writing) return true
+    when {
+        state.editor != null || content.state.value.secure -> cancel()
+        state.selectedKey != null -> closeKey()
+        state.namespace != null -> backToNamespaces()
+        else -> return false
+    }
+    return true
+}
+
 @Composable
-fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=true) {
+fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=true,query:String="") {
     val s by browser.state.collectAsState()
     val private by browser.content.state.collectAsState()
     var failedOpen by remember(browser){mutableStateOf(false)}
@@ -30,32 +42,45 @@ fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=tr
     DisposableEffect(browser,surface){onDispose{browser.content.surfaceRemoved(surface)}}
     AppBackHandler(backEnabled && account != null && s.context?.account == account &&
         (s.writing || s.editor != null || private.secure || s.namespace != null)) {
-        if (!s.writing) {
-            if (s.editor != null || private.secure) browser.cancel()
-            else browser.backToNamespaces()
-        }
+        browser.backWithinWorkspace()
     }
+    val directoryPosition = androidx.compose.foundation.lazy.rememberLazyListState()
+    val namespacePosition = androidx.compose.foundation.lazy.rememberLazyListState()
     Column(Modifier.fillMaxSize().testTag("kv-browser")){
         if(s.context?.account!=account||account==null){Text("正在绑定当前账号的 KV…",Modifier.padding(16.dp));return@Column}
         com.flarego.ui.ReadStatus(s.observedAtMs,s.fromCache,s.loading)
         if((s.loading && s.observedAtMs==null)||s.writing)LinearProgressIndicator(Modifier.fillMaxWidth())
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal=12.dp).testTag("kv-content"),verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=12.dp)){
-            item{
-                Text("标准 Workers KV",style=MaterialTheme.typography.titleLarge)
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal=12.dp).testTag("kv-content"),
+            state = if (s.namespace == null) directoryPosition else namespacePosition, verticalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(vertical=12.dp)){
+            if (s.namespace != null) item{
                 Text("账号：${account.accountId}",style=MaterialTheme.typography.bodySmall)
                 Text("读取仅代表本次观察；API 接纳不代表全球传播。写入需单独核实当前 Token 的 KV 写权限。",style=MaterialTheme.typography.bodySmall)
             }
             s.error?.let{item{Text(it,color=MaterialTheme.colorScheme.error,modifier=Modifier.testTag("kv-error"))}}
             s.notice?.let{item{Text(it,Modifier.testTag("kv-notice"))}}
             if(s.namespace==null){
-                item{FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                    OutlinedButton(onClick={browser.refreshNamespaces()},enabled=!s.loading,modifier=Modifier.testTag("kv-refresh-namespaces")){Text("刷新")}
-                    Button(onClick={browser.begin(KvEditor.CREATE)},enabled=!s.writing,modifier=Modifier.testTag("kv-create")){Text("创建 namespace")}
-                }}
-                items(s.namespaces,key={it.ref.id}){ns->OutlinedCard(onClick={browser.openNamespace(ns.ref)},modifier=Modifier.fillMaxWidth().testTag("kv-ns-${ns.ref.id}")){
-                    Column(Modifier.padding(12.dp)){Text(ns.title,style=MaterialTheme.typography.titleMedium);Text(ns.ref.id)}
-                }}
+                val matching = s.namespaces.filter { it.title.contains(query, ignoreCase = true) }
+                if (!s.loading && s.error == null && matching.isEmpty()) item {
+                    com.flarego.ui.DirectoryGroup {
+                        com.flarego.ui.CompactListRow(when {
+                            s.observedAtMs == null -> "尚未读取命名空间"
+                            query.isNotBlank() -> "没有匹配的命名空间"
+                            s.namespaceNext != null -> "当前页面没有命名空间"
+                            else -> "暂无命名空间"
+                        }, showDivider = false)
+                    }
+                }
+                items(matching, key = { it.ref.id }) { ns ->
+                    com.flarego.ui.DirectoryGroup {
+                        com.flarego.ui.CompactListRow(ns.title, modifier = Modifier.testTag("kv-ns-${ns.ref.id}"),
+                            value = "KV", onClick = { browser.openNamespace(ns.ref) }, showDivider = false, wrapTitle = true)
+                    }
+                }
                 if(s.namespaceNext!=null)item{OutlinedButton(onClick={browser.refreshNamespaces(true)},enabled=!s.loading,modifier=Modifier.testTag("kv-more-namespaces")){Text("加载更多 namespace")}}
+                item{FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                    TextButton(onClick={browser.refreshNamespaces()},enabled=!s.loading,modifier=Modifier.testTag("kv-refresh-namespaces")){Text("刷新")}
+                    TextButton(onClick={browser.begin(KvEditor.CREATE)},enabled=!s.writing,modifier=Modifier.testTag("kv-create")){Text("创建 namespace")}
+                }}
             }else{
                 item{
                     Text(s.namespace!!.title,style=MaterialTheme.typography.titleMedium)
@@ -77,19 +102,29 @@ fun KvBrowserHost(browser:KvBrowser,account:AccountScope?,backEnabled:Boolean=tr
                 if(s.editor==null){
                     item{OutlinedTextField(s.prefix,{browser.filterPrefix(it)},label={Text("键名前缀（原样匹配）")},modifier=Modifier.fillMaxWidth().testTag("kv-prefix"))}
                     item{OutlinedButton(onClick={browser.refreshKeys()},enabled=!s.loading,modifier=Modifier.testTag("kv-refresh-keys")){Text("刷新键列表")}}
-                    items(s.keys,key={it.key}){key->OutlinedCard(onClick={browser.selectKey(key)},modifier=Modifier.fillMaxWidth().testTag("kv-key-${key.key}")){
-                        Column(Modifier.padding(12.dp)){Text(key.key);Text("到期 UTC Unix 秒：${key.expiration?.toString()?:"未报告"} · metadata：${if(key.hasMetadata)"存在（隐藏）"else"未报告"}",style=MaterialTheme.typography.bodySmall)}
-                    }}
-                    if(s.keyNext!=null)item{OutlinedButton(onClick={browser.refreshKeys(true)},enabled=!s.loading,modifier=Modifier.testTag("kv-more-keys")){Text("继续读取键（含空页）")}}
-                    s.selectedKey?.let{key->item{
-                        Text("当前键：${key.key}",style=MaterialTheme.typography.titleMedium)
-                        FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                            OutlinedButton(onClick=browser::readValue,modifier=Modifier.testTag("kv-read-value")){Text("读取值")}
-                            OutlinedButton(onClick=browser::readMetadata,modifier=Modifier.testTag("kv-read-metadata")){Text("读取 metadata")}
-                            OutlinedButton(onClick={browser.begin(KvEditor.VALUE)},modifier=Modifier.testTag("kv-edit-value")){Text("编辑覆盖")}
-                            OutlinedButton(onClick=browser::prepareDeleteKey,enabled=!s.writing,modifier=Modifier.testTag("kv-delete-key")){Text("删除此键")}
+                    items(s.keys, key = { it.key }) { key ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedCard(onClick = { browser.selectKey(key) },
+                                modifier = Modifier.fillMaxWidth().testTag("kv-key-${key.key}")) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(key.key)
+                                    Text("到期 UTC Unix 秒：${key.expiration?.toString() ?: "未报告"} · metadata：${if (key.hasMetadata) "存在（隐藏）" else "未报告"}",
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            if (s.selectedKey?.key == key.key) {
+                                Text("值与 metadata 默认遮蔽", style = MaterialTheme.typography.bodySmall)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = browser::readValue, modifier = Modifier.testTag("kv-read-value")) { Text("读取值") }
+                                    OutlinedButton(onClick = browser::readMetadata, modifier = Modifier.testTag("kv-read-metadata")) { Text("读取 metadata") }
+                                    OutlinedButton(onClick = { browser.begin(KvEditor.VALUE) }, modifier = Modifier.testTag("kv-edit-value")) { Text("编辑覆盖") }
+                                    OutlinedButton(onClick = browser::prepareDeleteKey, enabled = !s.writing,
+                                        modifier = Modifier.testTag("kv-delete-key")) { Text("删除此键") }
+                                }
+                            }
                         }
-                    }}
+                    }
+                    if(s.keyNext!=null)item{OutlinedButton(onClick={browser.refreshKeys(true)},enabled=!s.loading,modifier=Modifier.testTag("kv-more-keys")){Text("继续读取键（含空页）")}}
                 }
             }
             s.editor?.let{editor->item{KvEditorPanel(browser,s,private,editor)}}
@@ -135,7 +170,7 @@ private fun KvEditorPanel(browser:KvBrowser,s:KvBrowserState,p:KvContentState,ed
                 if(p.textEditable)OutlinedTextField(value,{v->if(!browser.content.setValue(KvSensitiveInput.of(v)))browser.documentNotice("文本超过 64KiB 或不是有效 UTF-8；请使用完整文件导入")},label={Text("值（空值合法，文本最多 64KiB）")},
                     visualTransformation=if(p.revealed)VisualTransformation.None else PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth().testTag("kv-value-input"))
                 else Text("完整值 ${p.valueBytes} 字节；二进制或超 64KiB，使用文件入口，不提供截断编辑",Modifier.testTag("kv-binary-value"))
-                KvCheck("显式显示值与 metadata",p.revealed,"kv-reveal"){browser.content.reveal(it)}
+                KvCheck(if (p.revealed) "隐藏值与 metadata" else "查看值与 metadata",p.revealed,"kv-reveal"){browser.content.reveal(it)}
                 OutlinedTextField(browser.content.metadataForDisplay()?.raw().orEmpty(),{v->browser.content.setMetadata(KvSensitiveInput.of(v))},label={Text("metadata（任意 JSON，序列化后最多 1024 bytes）")},
                     visualTransformation=if(p.revealed)VisualTransformation.None else PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth().testTag("kv-metadata-input"))
                 KvCheck("显式写回已输入／完整观察到的 metadata",form.includeMetadata,"kv-include-metadata"){v->browser.edit{it.copy(includeMetadata=v)}}

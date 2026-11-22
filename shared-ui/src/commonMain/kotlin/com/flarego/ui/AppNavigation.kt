@@ -2,6 +2,7 @@ package com.flarego.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
@@ -18,7 +19,7 @@ import com.flarego.core.model.Page
 
 @Composable
 internal fun AppNavigation(selected: Page, navigate: (Page) -> Unit) {
-    Column(Modifier.background(MaterialTheme.colorScheme.background).navigationBarsPadding()) {
+    Column(Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding()) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).padding(horizontal = 12.dp)
             .selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
@@ -30,14 +31,15 @@ internal fun AppNavigation(selected: Page, navigate: (Page) -> Unit) {
                 Triple(Page.ACCOUNTS, Icons.Outlined.CloudQueue, "accounts"),
             ).forEach { (page, icon, tag) ->
                 val active = page == selected
-                val color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                val color = if (active) homeAccentColor() else MaterialTheme.colorScheme.onSurfaceVariant
                 Column(Modifier.weight(1f).selectable(active, role = Role.Tab, onClick = { navigate(page) })
                     .heightIn(min = 58.dp).padding(vertical = 6.dp).testTag("nav-$tag"),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.width(16.dp).height(2.dp).background(if (active) color else Color.Transparent))
-                    Spacer(Modifier.height(6.dp))
-                    Icon(icon, null, Modifier.size(21.dp), tint = color)
-                    Spacer(Modifier.height(5.dp))
+                    Box(Modifier.width(45.dp).height(26.dp).background(if (active) color else Color.Transparent, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Icon(icon, null, Modifier.size(21.dp), tint = if (active) homeAccentContentColor() else color)
+                    }
+                    Spacer(Modifier.height(3.dp))
                     Text(when (page) {
                         Page.BILLING -> "账单"
                         Page.RESOURCES -> "资源"

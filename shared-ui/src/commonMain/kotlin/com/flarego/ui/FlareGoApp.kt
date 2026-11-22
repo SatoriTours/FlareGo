@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import com.flarego.ui.management.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flarego.core.application.AppController
@@ -42,6 +43,9 @@ import com.flarego.core.ports.*
 import com.flarego.core.updates.UpdateController
 import com.flarego.ui.dns.DnsPage
 import com.flarego.ui.zones.ZonePage
+import com.flarego.ui.r2.backWithinWorkspace
+import com.flarego.ui.kv.backWithinWorkspace
+import com.flarego.ui.d1.backWithinWorkspace
 import com.flarego.ui.workers.WorkerReleaseScreen
 import com.flarego.ui.workers.toolbarTitle
 import kotlinx.coroutines.launch
@@ -102,11 +106,16 @@ fun FlareGoApp(
     val compactWorkerName = workerRelease != null &&
         (workerRelease.worker.name.length > 24 || LocalDensity.current.fontScale >= 1.5f)
     val managementDns = management?.dns?.state?.collectAsState()?.value
+    var dnsBatchOpen by remember(account, state.page, state.domain?.id) { mutableStateOf(false) }
     var discardEdit by remember { mutableStateOf(false) }
     val managementZones = management?.zones?.state?.collectAsState()?.value
     // A late publisher from another account must not expose its content or error.
     val zonePageState = managementZones?.takeIf { it.account == account }
-        ?: ZonePageState(account = account)
+        ?.let { zones ->
+            if (state.page == Page.DNS && zones.selected?.ref?.zoneId != state.domain?.id)
+                zones.copy(selected = null)
+            else zones
+        } ?: ZonePageState(account = account)
     val managementZone = if (management != null && state.page in setOf(Page.DOMAINS, Page.DNS)) zonePageState.selected else null
     val actualPanelContext = panelContext?.takeIf {
         account!=null && managementZone?.ref==it.scope && it.scope.account==account &&
@@ -115,9 +124,12 @@ fun FlareGoApp(
     // Save only navigation choices and an independent live selection stamp, never leases, drafts or plans.
     val routeStamp=actualPanelContext?.let { listOf(it.scope.connectionId,it.scope.account.accountId,it.scope.zoneId,it.currentEpoch.toString(),state.page.name) }
     var savedPanelRoute by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
-    val panelModule=savedPanelRoute?.takeIf { it.size==6 && it.take(5)==routeStamp }?.last()?.let { name -> ManagementPanelModule.entries.firstOrNull { it.name==name } }
+    val ownedPanelRoute = savedPanelRoute?.takeIf { it.size == 6 && it.take(5) == routeStamp }?.last()
+    val panelModule = ManagementPanelModule.entries.firstOrNull { it.name == ownedPanelRoute?.substringBefore(':') }
     var panelLease by remember(account,managementZone?.ref,state.page,panelContext) { mutableStateOf<ManagementPanelLease?>(null) }
-    var zoneTab by rememberSaveable(account,managementZone?.ref) { mutableStateOf(ZoneManagementTab.DETAILS) }
+    var zoneTab by rememberSaveable(account,state.domain?.id ?: managementZone?.ref?.zoneId) {
+        mutableStateOf(if (state.page == Page.DNS) ZoneManagementTab.DNS else ZoneManagementTab.DETAILS)
+    }
     val activeModule=panelModule?.takeIf { actualPanelContext!=null && panelPorts!=null }
     LaunchedEffect(routeStamp) {
         if(savedPanelRoute!=null && savedPanelRoute!!.take(5)!=routeStamp) savedPanelRoute=null
@@ -136,6 +148,48 @@ fun FlareGoApp(
     val pageStates = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
+    var showAllResources by remember(account) { mutableStateOf(true) }
+    var billingSourceMenu by remember(account, state.page) { mutableStateOf(false) }
+    var homeMenu by remember(account, state.page) { mutableStateOf(false) }
+    var syncDetails by remember(account, state.page) { mutableStateOf(false) }
+    val feedback = remember { SnackbarHostState() }
+    val jobDetails = remember(account, state.page) { mutableStateOf<String?>(null) }
+    var homeBucket by rememberSaveable(account?.connectionId, account?.accountId) { mutableStateOf<String?>(null) }
+    val r2Selected = state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2
+    val r2State = r2Browser?.state?.collectAsState()?.value?.takeIf { r2Selected && it.context?.account == account }
+    val r2Config = r2Browser?.configuration?.state?.collectAsState()?.value?.takeIf { r2State != null }
+    val r2C = r2Browser?.c?.state?.collectAsState()?.value?.takeIf { r2State != null }
+    val kvState = kvBrowser?.state?.collectAsState()?.value?.takeIf {
+        state.page == Page.RESOURCES && state.resourceKind == ResourceKind.KV && it.context?.account == account
+    }
+    val d1State = d1Browser?.state?.collectAsState()?.value?.takeIf {
+        state.page == Page.RESOURCES && state.resourceKind == ResourceKind.D1 && it.context?.account == account
+    }
+    var createTarget by remember(account, state.page) { mutableStateOf<ResourceKind?>(null) }
+    LaunchedEffect(createTarget, d1State?.context, kvState?.context, r2State?.context) {
+        when (createTarget) {
+            ResourceKind.D1 -> if (d1State != null) {
+                createTarget = null
+                d1Browser?.begin(com.flarego.ui.d1.D1Editor.CREATE)
+            }
+            ResourceKind.KV -> if (kvState != null) {
+                createTarget = null
+                kvBrowser?.begin(com.flarego.ui.kv.KvEditor.CREATE)
+            }
+            else -> Unit
+        }
+    }
+    val r2Object = r2State?.objects
+    LaunchedEffect(r2Selected) { if (!r2Selected) homeBucket = null }
+    LaunchedEffect(r2State?.context, r2Object?.bucket, account) {
+        if (account != null && r2Object != null) controller.recordBucketOpened(account, r2Object.bucket)
+    }
+    val bucketRequested = homeBucket?.takeIf { r2Selected }
+    LaunchedEffect(r2State?.context, bucketRequested, account) {
+        if (r2State?.context != null && bucketRequested != null && account != null) {
+            r2Browser?.openVisitedBucket(account, bucketRequested)
+        }
+    }
     var dialog by remember(connectionDraft) {
         mutableStateOf<DialogState?>(
             if (connectionDraft.isOpen) DialogState.TokenConnect else null,
@@ -143,14 +197,22 @@ fun FlareGoApp(
     }
     // The Registrar page owns its own search field; rebinding also drops any stale result.
     LaunchedEffect(registrar, account) { registrar?.bind(account) }
-    val searchFlags = remember(account) { mutableMapOf<Page, MutableState<Boolean>>() }
-    val searchQueries = remember(account) { mutableMapOf<Page, MutableState<String>>() }
-    var searchOpen by searchFlags.getOrPut(state.page) { mutableStateOf(false) }
-    var query by searchQueries.getOrPut(state.page) { mutableStateOf("") }
+    val searchKey = state.page to state.resourceKind.takeIf { state.page == Page.RESOURCES }
+    val searchFlags = remember(account) { mutableMapOf<Pair<Page, ResourceKind?>, MutableState<Boolean>>() }
+    val searchQueries = remember(account) { mutableMapOf<Pair<Page, ResourceKind?>, MutableState<String>>() }
+    var searchOpen by searchFlags.getOrPut(searchKey) { mutableStateOf(false) }
+    var query by searchQueries.getOrPut(searchKey) { mutableStateOf("") }
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = remember { FocusRequester() }
+    fun openManagementPanel(module: ManagementPanelModule, universalSsl: Boolean = false) {
+        if (actualPanelContext == null || panelPorts?.available(module) != true) return
+        keyboard?.hide()
+        clearPanel()
+        savedPanelRoute = ArrayList(routeStamp.orEmpty() + (module.name + if (universalSsl) ":ssl" else ""))
+    }
+
     LaunchedEffect(controller) { controller.start() }
-    LaunchedEffect(management, account, state.page) {
+    LaunchedEffect(management, account, state.page, state.domain?.id, controller.operationEpoch) {
         // Same independently stamped route after configuration recreation is still the owned selection.
         // All actual account/Zone/epoch/page changes fail the saved stamp and take the normal clearing path.
         if(activeModule!=null && actualPanelContext!=null) return@LaunchedEffect
@@ -159,9 +221,10 @@ fun FlareGoApp(
             pages.batch?.onIntent(com.flarego.core.application.dns.DnsBatchIntent.Clear)
             if (pages.zones.state.value.account != account) pages.zones.onIntent(ZoneIntent.Clear)
             else pages.zones.onIntent(ZoneIntent.BackToList)
-            if (account != null && state.page in setOf(Page.DOMAINS, Page.DNS)) {
-                pages.zones.onIntent(ZoneIntent.Ensure(account))
-                if (state.page == Page.DNS) state.domain?.takeIf { it.connectionId == account.connectionId }?.let {
+            if (account != null && state.page == Page.DOMAINS) pages.zones.onIntent(ZoneIntent.Ensure(account))
+            if (account != null && state.page == Page.DNS) {
+                if (pages.zones.state.value.account != account) pages.zones.onIntent(ZoneIntent.Ensure(account))
+                state.domain?.takeIf { it.connectionId == account.connectionId }?.let {
                     pages.zones.onIntent(ZoneIntent.Open(ZoneScope(account, it.id)))
                 }
             }
@@ -182,15 +245,17 @@ fun FlareGoApp(
         }
     val zoneEditing = management != null && state.page in setOf(Page.DOMAINS, Page.DNS) &&
         (zonePageState.editorMode != null || zonePageState.preparedChange != null)
-    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null || zoneEditing
+    val nestedResource = (r2Selected && createTarget == ResourceKind.R2) || r2Object != null || bucketRequested != null || r2Config?.open == true || r2C?.open == true ||
+        r2State?.preview != null || r2State?.buckets?.pendingDeleteName != null || r2State?.buckets?.editingBucketName != null ||
+        kvState?.namespace != null || kvState?.editor != null || d1State?.database != null || d1State?.editor != null
+    val detail = state.page in setOf(Page.DNS, Page.BUY, Page.RESOURCE, Page.JOBS) || managementZone != null || zoneEditing || nestedResource
+    val designRoot = !detail && state.selected != null && state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.BILLING)
     val searchQuery = query.trim()
     val searchEnabled =
         activeModule == null && state.selected != null &&
             !(management != null && (state.page == Page.DNS || (state.page == Page.DOMAINS &&
                 (managementZone != null || zonePageState.editorMode != null || zonePageState.preparedChange != null)))) &&
-            !(r2Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.R2) &&
-            !(kvBrowser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.KV) &&
-            !(d1Browser != null && state.page == Page.RESOURCES && state.resourceKind == ResourceKind.D1) &&
+            !nestedResource &&
             state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.DNS, Page.JOBS)
     LaunchedEffect(searchOpen, searchEnabled) {
         if (searchOpen && searchEnabled) focus.requestFocus()
@@ -198,13 +263,30 @@ fun FlareGoApp(
     fun closeSearch() {
         searchOpen = false
         query = ""
+        if (!d1State?.filter.isNullOrEmpty()) d1Browser?.filterName("")
         keyboard?.hide()
         focusManager.clearFocus()
     }
     fun navigateBack() {
         keyboard?.hide()
         focusManager.clearFocus()
-        if (activeModule != null) clearPanel()
+        if (r2Selected && r2Browser != null && (r2State != null || bucketRequested != null)) {
+            val leaveBucket = {
+                homeBucket = null
+                controller.navigate(Page.OVERVIEW)
+            }
+            if (r2State != null && r2Browser.backWithinWorkspace(leaveBucket.takeIf { bucketRequested != null })) return
+            if (bucketRequested != null) { leaveBucket(); return }
+            if (createTarget == ResourceKind.R2) { createTarget = null; return }
+        }
+        if (kvState != null && kvBrowser?.backWithinWorkspace() == true) return
+        if (d1State != null && d1Browser?.backWithinWorkspace() == true) return
+        if (state.page == Page.JOBS && jobDetails.value != null) jobDetails.value = null
+        else if (activeModule != null) clearPanel()
+        else if (dnsBatchOpen) {
+            management?.batch?.onIntent(DnsBatchIntent.Cancel)
+            dnsBatchOpen = false
+        }
         else if (managementDns != null && managementDns.scope?.account == account && managementDns.scope == managementZone?.ref &&
             (state.page == Page.DNS || zoneTab == ZoneManagementTab.DNS) && management != null &&
             (managementDns.preparedChange != null || managementDns.mode != null || managementDns.detail != null)) {
@@ -220,7 +302,7 @@ fun FlareGoApp(
                 else discardEdit = true
             }
         }
-        else if (managementZone != null && account != null && management != null) {
+        else if (state.page == Page.DOMAINS && managementZone != null && account != null && management != null) {
             management.dns.onIntent(DnsIntent.Clear)
             management.batch?.onIntent(DnsBatchIntent.Clear)
             management.zones.onIntent(ZoneIntent.BackToList)
@@ -228,6 +310,7 @@ fun FlareGoApp(
     }
     AppBackHandler(enabled = dialog == null && !discardEdit && (drawer.isOpen || detail || activeModule != null || state.page != Page.OVERVIEW || (searchOpen && searchEnabled))) {
         if (drawer.isOpen) scope.launch { drawer.close() }
+        else if (state.page == Page.JOBS && jobDetails.value != null) navigateBack()
         else if (searchOpen && searchEnabled) closeSearch()
         else navigateBack()
     }
@@ -358,12 +441,60 @@ fun FlareGoApp(
             },
         ) {
             Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
+                containerColor = if (designRoot) directoryBackground() else MaterialTheme.colorScheme.background,
+                contentColor = MaterialTheme.colorScheme.onBackground,
+                snackbarHost = { SnackbarHost(feedback) },
                 topBar = {
+                    val jobsToolbar = state.page == Page.JOBS
+                    val stackIdentity = (designRoot || jobsToolbar) && LocalDensity.current.fontScale >= 1.5f
+                    val identity: @Composable () -> Unit = {
+                        val canSwitch = state.connections.size > 1
+                        val accentIdentity = canSwitch && state.page == Page.OVERVIEW
+                        val identityColor = if (accentIdentity) homeAccentContentColor() else MaterialTheme.colorScheme.onSurfaceVariant
+                        if (canSwitch || (state.selected != null && state.page != Page.ACCOUNTS)) Surface(
+                            shape = CircleShape,
+                            color = if (accentIdentity) homeAccentColor() else MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .heightIn(min = if (canSwitch) 48.dp else 32.dp)
+                                .then(if (canSwitch) Modifier.semantics { contentDescription = "切换云账号" }
+                                    .clickable { keyboard?.hide(); scope.launch { drawer.open() } } else Modifier),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Default.Cloud,
+                                    null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = identityColor,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    state.selected?.name ?: "云账号",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = identityColor,
+                                    modifier = Modifier.widthIn(max = if (stackIdentity) 200.dp else 104.dp),
+                                )
+                                if (canSwitch) {
+                                    Spacer(Modifier.width(2.dp))
+                                    Icon(Icons.Default.ExpandMore, null, Modifier.size(14.dp), tint = identityColor)
+                                }
+                            }
+                        }
+                    }
                     Column(
-                        Modifier.statusBarsPadding()
-                            .background(MaterialTheme.colorScheme.background)
+                        Modifier.background(if (state.page == Page.OVERVIEW || designRoot) homeHeaderColor() else MaterialTheme.colorScheme.background)
+                            .statusBarsPadding()
                     ) {
+                        if (stackIdentity) {
+                            Box(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 6.dp),
+                                contentAlignment = Alignment.CenterEnd) {
+                                identity()
+                            }
+                        }
                         Row(
                             Modifier.fillMaxWidth()
                                 .heightIn(min = 56.dp)
@@ -373,7 +504,7 @@ fun FlareGoApp(
                             if (detail)
                                 IconButton(
                                     onClick = ::navigateBack,
-                                    modifier = Modifier.size(if (workerRelease != null) 48.dp else 44.dp),
+                                    modifier = Modifier.size(if (workerRelease != null || jobsToolbar) 48.dp else 44.dp),
                                 ) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", modifier = Modifier.size(20.dp))
                                 }
@@ -382,52 +513,26 @@ fun FlareGoApp(
                                     Page.DNS -> state.domain?.name ?: state.page.title
                                     Page.DOMAINS -> managementZone?.name ?: state.page.title
                                     Page.RESOURCE -> workerRelease?.toolbarTitle(compactWorkerName) ?: state.resource?.name ?: state.page.title
-                                    Page.RESOURCES -> "资源"
+                                    Page.RESOURCES -> r2Object?.bucket ?: bucketRequested ?: kvState?.namespace?.title ?: d1State?.database?.name ?: "资源"
                                     Page.BILLING -> "账单"
                                     Page.ACCOUNTS -> "账号"
                                     else -> state.page.title
                                 },
                                 modifier = Modifier.weight(1f).padding(start = if (detail) 0.dp else 20.dp)
-                                    .then(if (managementZone != null) Modifier.testTag("zone-detail-name") else Modifier),
-                                style = if (detail) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall,
-                                maxLines = if (workerRelease == null) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
+                                    .then(when {
+                                        managementZone != null -> Modifier.testTag("zone-detail-name")
+                                        designRoot -> Modifier.testTag("directory-page-title")
+                                        else -> Modifier
+                                    }),
+                                style = when {
+                                    detail -> MaterialTheme.typography.titleMedium
+                                    state.page == Page.OVERVIEW || designRoot -> MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold)
+                                    else -> MaterialTheme.typography.headlineSmall
+                                },
+                                maxLines = if (workerRelease != null || jobsToolbar) Int.MAX_VALUE else 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier
-                                    .heightIn(min = if (workerRelease != null) 48.dp else 32.dp)
-                                    .semantics { contentDescription = "切换云账号" }
-                                    .clickable { keyboard?.hide(); scope.launch { drawer.open() } },
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.Default.Cloud,
-                                        null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        state.selected?.name ?: "云账号",
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.widthIn(max = 88.dp),
-                                    )
-                                    Spacer(Modifier.width(2.dp))
-                                    Icon(
-                                        Icons.Default.ExpandMore,
-                                        null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
+                            if (!stackIdentity) identity()
                             if (searchEnabled)
                                 IconButton(
                                     onClick = {
@@ -435,7 +540,7 @@ fun FlareGoApp(
                                             closeSearch()
                                         } else searchOpen = true
                                     },
-                                    modifier = Modifier.size(44.dp),
+                                    modifier = Modifier.size(if (jobsToolbar) 48.dp else 44.dp),
                                 ) {
                                     Icon(
                                         if (searchOpen) Icons.Default.Close
@@ -456,11 +561,8 @@ fun FlareGoApp(
                                     }, modifier = Modifier.size(44.dp).testTag("zone-create")) {
                                         Icon(Icons.Default.Add, if (management != null) "创建 Cloudflare Zone" else "购买域名", modifier = Modifier.size(20.dp))
                                     }
-                                Page.RESOURCES -> if (state.resourceKind.product() in state.supportedProducts && !(
-                                    (r2Browser != null && state.resourceKind == ResourceKind.R2) ||
-                                    (kvBrowser != null && state.resourceKind == ResourceKind.KV) ||
-                                    (d1Browser != null && state.resourceKind == ResourceKind.D1)))
-                                    IconButton(onClick = { dialog = DialogState.Create }, modifier = Modifier.size(44.dp)) {
+                                Page.RESOURCES -> if (!nestedResource && state.resourceKind.product() in state.supportedProducts)
+                                    IconButton(onClick = { dialog = DialogState.Create }, modifier = Modifier.size(48.dp)) {
                                         Icon(Icons.Default.Add, "创建资源", modifier = Modifier.size(20.dp))
                                     }
                                 Page.DNS ->
@@ -472,10 +574,48 @@ fun FlareGoApp(
                                     ) {
                                         Icon(Icons.Default.Add, if (management != null) "刷新 Zone 详情" else "新增 DNS 记录", modifier = Modifier.size(20.dp))
                                     }
+                                Page.OVERVIEW -> Box(Modifier.padding(start = 8.dp)) {
+                                    FilledIconButton(onClick = { homeMenu = true }, modifier = Modifier.size(48.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface,
+                                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )) { Icon(Icons.Default.MoreHoriz, "更多") }
+                                    DropdownMenu(expanded = homeMenu, onDismissRequest = { homeMenu = false }) {
+                                        DropdownMenuItem(text = { Text("刷新全部产品") }, enabled = !state.loading,
+                                            modifier = Modifier.testTag("overview-refresh-all"),
+                                            onClick = { homeMenu = false; controller.refreshAllProducts() })
+                                        DropdownMenuItem(text = { Text("同步详情") },
+                                            modifier = Modifier.testTag("overview-sync-details"),
+                                            onClick = { homeMenu = false; syncDetails = true })
+                                        DropdownMenuItem(text = { Text("操作记录") },
+                                            onClick = { homeMenu = false; controller.navigate(Page.JOBS) })
+                                    }
+                                }
                                 Page.ACCOUNTS ->
                                     IconButton(onClick = openConnection, modifier = Modifier.size(44.dp)) {
                                         Icon(Icons.Default.Add, "连接账号", modifier = Modifier.size(20.dp))
                                     }
+                                Page.BILLING -> {
+                                    val canRead = ProductKey.BILLING in state.supportedProducts
+                                    IconButton(onClick = controller::refresh, enabled = canRead && !state.loading,
+                                        modifier = Modifier.size(48.dp).testTag("toolbar-refresh")) {
+                                        Icon(Icons.Default.Refresh, "刷新", Modifier.size(20.dp))
+                                    }
+                                    if (state.productLoading && canRead) Box {
+                                        IconButton(onClick = { billingSourceMenu = true }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.MoreHoriz, "账单来源")
+                                        }
+                                        DropdownMenu(billingSourceMenu, onDismissRequest = { billingSourceMenu = false }) {
+                                            listOf(BillingSource.ACCOUNT_HISTORY to "账号账单",
+                                                BillingSource.USER_HISTORY_LEGACY to "用户账单（旧接口）").forEach { (source, label) ->
+                                                DropdownMenuItem(text = { Text(label) }, onClick = {
+                                                    billingSourceMenu = false
+                                                    controller.selectBillingSource(source)
+                                                })
+                                            }
+                                        }
+                                    }
+                                }
                                 Page.RESOURCE -> if (workerRelease == null) {
                                     IconButton(onClick = { controller.refresh() }, enabled = !state.loading,
                                         modifier = Modifier.size(44.dp).testTag("toolbar-refresh")) {
@@ -514,7 +654,6 @@ fun FlareGoApp(
                             Page.DOMAINS -> if (management != null) zonePageState.observedAtMs else state.products[ProductKey.ZONES]?.observedAtMs
                             Page.RESOURCES -> state.products[state.resourceKind.product()]?.observedAtMs
                             Page.BILLING -> state.products[ProductKey.BILLING]?.observedAtMs
-                            Page.OVERVIEW -> state.products.values.mapNotNull { it.observedAtMs }.maxOrNull()
                             else -> null
                         }
                         val isCurrentFromCache = when (state.page) {
@@ -529,46 +668,15 @@ fun FlareGoApp(
                             Page.BILLING -> state.products[ProductKey.BILLING]?.loading == true
                             else -> state.loading
                         }
-                        val isListPageWithStatus = !detail && state.selected != null &&
-                            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.BILLING, Page.OVERVIEW)
-                        if (isListPageWithStatus) {
-                            if (currentObservedAtMs != null || isCurrentPageLoading) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 28.dp)
-                                        .padding(horizontal = 20.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .size(6.dp)
-                                            .background(
-                                                if (isCurrentPageLoading) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
-                                                CircleShape,
-                                            )
-                                    )
-                                    Text(
-                                        text = if (currentObservedAtMs != null) {
-                                            readStatusText(isCurrentFromCache, isCurrentPageLoading, observationTime(currentObservedAtMs))
-                                        } else {
-                                            "正在读取…"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            } else {
-                                Spacer(Modifier.height(28.dp))
-                            }
+                        if (!detail && state.selected != null &&
+                            state.page in setOf(Page.DOMAINS, Page.RESOURCES, Page.BILLING) &&
+                            !(state.page == Page.RESOURCES && (r2State != null || kvState != null || d1State != null))) {
+                            ReadStatus(currentObservedAtMs, isCurrentFromCache, isCurrentPageLoading)
                         }
                         if (searchOpen && searchEnabled)
                             OutlinedTextField(
-                                query,
-                                { query = it },
+                                d1State?.filter ?: query,
+                                { if (d1State != null) d1Browser?.filterName(it) else query = it },
                                 placeholder = {
                                     Text(
                                         when (state.page) {
@@ -597,8 +705,8 @@ fun FlareGoApp(
                                     ),
                                 trailingIcon = {
                                     Row {
-                                        if (query.isNotEmpty()) IconButton(onClick = {
-                                            query = ""
+                                        if ((d1State?.filter ?: query).isNotEmpty()) IconButton(onClick = {
+                                            if (d1State != null) d1Browser?.filterName("") else query = ""
                                             focus.requestFocus()
                                         }) { Icon(Icons.Default.Close, "清空搜索") }
                                     }
@@ -622,7 +730,7 @@ fun FlareGoApp(
                     }
                 },
             ) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+                Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
                     state.error?.let { error ->
                         if(activeModule!=null) Text("账号提示：$error",Modifier.padding(horizontal=16.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
                         else Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -652,7 +760,8 @@ fun FlareGoApp(
                             ManagementPanelHost(actualPanelContext,activeModule,panelPorts,
                                 onBack={keyboard?.hide();clearPanel()},
                                 modifier=Modifier.consumeWindowInsets(padding),onBound={panelLease=it},
-                                onReadUpgrade=openUpgrade?.let { upgrade -> { target -> upgrade(setOf(target)) } })
+                                onReadUpgrade=openUpgrade?.let { upgrade -> { target -> upgrade(setOf(target)) } },
+                                openUniversalSsl = ownedPanelRoute?.endsWith(":ssl") == true)
                         } else when (state.page) {
                             Page.OVERVIEW ->
                                 OverviewScreen(
@@ -660,15 +769,19 @@ fun FlareGoApp(
                                     controller::navigate,
                                     { dialog = DialogState.Create },
                                     controller::refreshAllProducts,
-                                    openResource = { kind -> controller.selectResourceKind(kind); controller.navigate(Page.RESOURCES) },
+                                    openResource = { kind -> showAllResources = false; controller.selectResourceKind(kind); controller.navigate(Page.RESOURCES) },
                                     upgrade = openUpgrade,
+                                    openRecent = { visit ->
+                                        val resource = (visit as? RecentVisit.Resource)?.resource
+                                        if (resource?.kind == ResourceKind.R2 && r2Browser != null && visit in state.recent) {
+                                            homeBucket = resource.name
+                                            controller.selectResourceKind(ResourceKind.R2)
+                                            controller.navigate(Page.RESOURCES)
+                                        } else controller.openRecent(visit, managedZones = management != null)
+                                    },
                                 )
                             Page.DOMAINS -> if (management != null) {
-                                val openPanel:(ManagementPanelModule)->Unit = { module ->
-                                    if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {
-                                        keyboard?.hide();clearPanel();savedPanelRoute=ArrayList(routeStamp.orEmpty()+module.name)
-                                    }
-                                }
+                                val openPanel: (ManagementPanelModule) -> Unit = { openManagementPanel(it) }
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
                                     LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
@@ -678,32 +791,71 @@ fun FlareGoApp(
                                                 Modifier.testTag("dns-permission-upgrade")) { Text("申请补充 DNS 读取权限") }
                                         }
                                         DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
-                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null,
+                                            externalBatchOpen = dnsBatchOpen, onBatchOpen = { dnsBatchOpen = it })
                                     } else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
                                 // A Zone list is not a registrar catalogue; this is the only entry to the
                                 // separate read-only search page, and it never implies a purchase.
                                 val openRegistrar = { controller.navigate(Page.BUY) }
-                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent,onRegisterDomain=openRegistrar)
-                                else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
+                                val onZoneIntent: (ZoneIntent) -> Unit = { intent ->
+                                    if (intent is ZoneIntent.Open) controller.openManagedZone(intent.scope, zonePageState)
+                                    else management.zones.onIntent(intent)
+                                }
+                                if(panelPorts==null) ZonePage(zonePageState,onZoneIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent,onRegisterDomain=openRegistrar)
+                                else ZonePage(zonePageState,onZoneIntent,ZoneManagementSlots(
                                     settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
-                                    security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    security = {
+                                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            PanelEntries(listOf(ManagementPanelModule.DNSSEC), panelPorts, actualPanelContext != null, openPanel)
+                                            OutlinedButton(
+                                                onClick = { openManagementPanel(ManagementPanelModule.ZONE_SETTINGS, universalSsl = true) },
+                                                enabled = actualPanelContext != null && panelPorts.zoneSettings != null,
+                                                modifier = Modifier.fillMaxWidth().testTag("management-open-UNIVERSAL_SSL"),
+                                            ) { Text("Universal SSL") }
+                                        }
+                                    },
                                     selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent,onRegisterDomain=openRegistrar)
                             } else Column {
-                                if (state.productLoading) ProductStatus(state.products[ProductKey.ZONES],controller::refresh,{controller.loadMore(ProductKey.ZONES)})
+                                if (state.productLoading) Box(Modifier.padding(horizontal = 20.dp)) {
+                                    DirectoryReadFeedback(state.products[ProductKey.ZONES], controller::refresh, { controller.loadMore(ProductKey.ZONES) })
+                                }
                                 DomainsScreen(state, searchQuery, controller::openDomain, onRegisterDomain = { controller.navigate(Page.BUY) })
                             }
                             Page.RESOURCES ->
-                                ResourcesScreen(state, searchQuery, controller::openResource, controller::selectResourceKind, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
-                                    r2Content = r2Browser?.let { browser -> ({ com.flarego.ui.r2.R2BrowserHost(browser, account, drawer.isClosed && dialog == null) }) },
-                                    kvContent = kvBrowser?.let { browser -> ({ com.flarego.ui.kv.KvBrowserHost(browser, account, drawer.isClosed && dialog == null) }) },
-                                    d1Content = d1Browser?.let { browser -> ({ com.flarego.ui.d1.D1BrowserHost(browser, account, drawer.isClosed && dialog == null) }) })
-                            Page.DNS -> if (management != null) {
-                                val openPanel:(ManagementPanelModule)->Unit = { module ->
-                                    if(actualPanelContext!=null && panelPorts!=null && panelPorts.available(module)) {
-                                        keyboard?.hide();clearPanel();savedPanelRoute=ArrayList(routeStamp.orEmpty()+module.name)
+                                ResourcesScreen(state, searchQuery, controller::openResource,
+                                    { kind -> showAllResources = false; controller.selectResourceKind(kind) }, controller::refresh, {controller.loadMore(state.resourceKind.product())}, controller::selectWorkersMode,
+                                    r2Content = r2Browser?.let { browser -> ({
+                                        com.flarego.ui.r2.R2BrowserHost(browser, account, drawer.isClosed && dialog == null,
+                                            ::navigateBack, searchQuery, openingRecent = bucketRequested != null,
+                                            showBucketCreate = createTarget == ResourceKind.R2)
+                                    }) },
+                                    kvContent = kvBrowser?.let { browser -> ({
+                                        com.flarego.ui.kv.KvBrowserHost(browser, account, drawer.isClosed && dialog == null, searchQuery)
+                                    }) },
+                                    d1Content = d1Browser?.let { browser -> ({
+                                        com.flarego.ui.d1.D1BrowserHost(browser, account, drawer.isClosed && dialog == null, showDirectorySearch = false)
+                                    }) },
+                                    showDirectoryTabs = !nestedResource, showAllResources = showAllResources,
+                                    selectAllResources = { showAllResources = true },
+                                )
+                            Page.DNS -> if (management != null && managementZone == null) {
+                                val domain = state.domain
+                                val target = if (account != null && domain?.connectionId == account.connectionId) ZoneScope(account, domain.id) else null
+                                val error = zonePageState.error
+                                Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                                    if (zonePageState.loading || error == null) {
+                                        Text("正在读取域名与 DNS…")
+                                    } else {
+                                        Notice(error)
+                                        if (target != null) TextButton(onClick = { management.zones.onIntent(ZoneIntent.Open(target)) }) {
+                                            Text("重试")
+                                        }
                                     }
                                 }
+                            } else if (management != null) {
+                                val openPanel: (ManagementPanelModule) -> Unit = { openManagementPanel(it) }
                                 val dnsContent:@Composable (ZoneDetails)->Unit = { zone ->
                                     val dnsState by management.dns.state.collectAsState()
                                     LaunchedEffect(management,zone.ref) { management.dns.onIntent(DnsIntent.Ensure(zone.ref)) }
@@ -713,13 +865,25 @@ fun FlareGoApp(
                                                 Modifier.testTag("dns-permission-upgrade")) { Text("申请补充 DNS 读取权限") }
                                         }
                                         DnsPage(dnsState,management.dns::onIntent,batch=management.batch,
-                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null)
+                                            managementActions=if(panelPorts!=null) ({ PanelEntries(listOf(ManagementPanelModule.FILES,ManagementPanelModule.SCAN,ManagementPanelModule.DNS_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) }) else null,
+                                            externalBatchOpen = dnsBatchOpen, onBatchOpen = { dnsBatchOpen = it })
                                     } else Text("正在加载当前 Zone 的 DNS…",Modifier.padding(16.dp))
                                 }
-                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
+                                if(panelPorts==null) ZonePage(zonePageState,management.zones::onIntent,
+                                    Modifier.consumeWindowInsets(padding),searchQuery,dnsContent, initialDns = true)
                                 else ZonePage(zonePageState,management.zones::onIntent,ZoneManagementSlots(
                                     settings={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.ZONE_SETTINGS),panelPorts,actualPanelContext!=null,openPanel) } },
-                                    security={ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { PanelEntries(listOf(ManagementPanelModule.DNSSEC),panelPorts,actualPanelContext!=null,openPanel) } },
+                                    security = {
+                                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            PanelEntries(listOf(ManagementPanelModule.DNSSEC), panelPorts, actualPanelContext != null, openPanel)
+                                            OutlinedButton(
+                                                onClick = { openManagementPanel(ManagementPanelModule.ZONE_SETTINGS, universalSsl = true) },
+                                                enabled = actualPanelContext != null && panelPorts.zoneSettings != null,
+                                                modifier = Modifier.fillMaxWidth().testTag("management-open-UNIVERSAL_SSL"),
+                                            ) { Text("Universal SSL") }
+                                        }
+                                    },
                                     selectedTab=zoneTab,onTabChanged={zoneTab=it}),Modifier.consumeWindowInsets(padding),searchQuery,dnsContent)
                             } else DnsScreen(state, searchQuery) {
                                     state.domain?.let { domain ->
@@ -728,8 +892,8 @@ fun FlareGoApp(
                                 }
                             Page.RESOURCE -> if (workerRelease != null && workerBrowser != null) {
                                 val workerPages = rememberSaveableStateHolder()
-                                workerPages.SaveableStateProvider("${workerRelease.worker.id}:${workerRelease.route}") {
-                                    WorkerReleaseScreen(workerRelease, workerBrowser, state.selected?.name.orEmpty(), compactWorkerName)
+                                workerPages.SaveableStateProvider(workerRelease.worker.id) {
+                                    WorkerReleaseScreen(workerRelease, workerBrowser, compactWorkerName)
                                 }
                             } else ResourceScreen(state) { openConsole(Page.RESOURCE) }
                             Page.BILLING -> if (ProductKey.BILLING !in state.supportedProducts ||
@@ -741,81 +905,70 @@ fun FlareGoApp(
                                 // billing.read. The provider error stays visible, never swallowed.
                                 val billingError = state.products[ProductKey.BILLING]?.error
                                 Column(
-                                    Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
+                                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
                                 ) {
-                                    SectionCard(Modifier.fillMaxWidth().testTag("billing-permission-card")) {
-                                        Icon(
-                                            Icons.Default.CloudQueue,
-                                            null,
-                                            Modifier.size(32.dp),
-                                            tint = MaterialTheme.colorScheme.primary,
-                                        )
-                                        // An empty product set means this row is a legacy OAuth record:
-                                        // OAuth is retired, so nothing is requested for it at all.
-                                        val legacyAuth = state.supportedProducts.isEmpty()
-                                        Text(
-                                            if (legacyAuth) "该连接需要配置 API Token" else "账单读取尚未启用",
-                                            style = MaterialTheme.typography.titleMedium,
-                                        )
-                                        if (billingError != null) {
-                                            // A real provider refusal is reported as-is; only then does
-                                            // reconnecting make sense.
-                                            Muted("当前连接读取账单时被 Cloudflare 拒绝，准确的错误如下。")
-                                            billingError.publicMessage.takeIf { it.isNotBlank() }?.let { Muted(it) }
-                                        } else if (legacyAuth) {
-                                            Muted(
-                                                "旧版 OAuth 授权已停用，App 不会再刷新或请求它；请在该账号上重新连接并粘贴 API Token，" +
-                                                    "验证成功后会替换旧凭据；如保存结果不确定，会停用该连接直到重新确认。",
+                                    DirectoryHeading("账单历史", Modifier.padding(bottom = 8.dp))
+                                    DirectoryGroup(Modifier.testTag("billing-permission-card")) {
+                                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            // An empty product set means this row is a legacy OAuth record:
+                                            // OAuth is retired, so nothing is requested for it at all.
+                                            val legacyAuth = state.supportedProducts.isEmpty()
+                                            Text(
+                                                if (legacyAuth) "该连接需要配置 API Token" else "无法读取账单历史",
+                                                style = MaterialTheme.typography.titleMedium,
                                             )
-                                        } else {
-                                            // A Token may read billing on demand; the token's own permission
-                                            // decides success, so no permission name is asserted here.
-                                            Muted(
-                                                "账单读取取决于该 API Token 的权限；若无权限请在官方页面为该 Token 勾选账单读取，" +
-                                                    "或直接使用控制台。App 不会猜测未确认的授权范围。",
-                                            )
-                                        }
-                                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (billingError?.code == CloudFailureCode.PERMISSION_REQUIRED && openUpgrade != null) Button(
-                                                onClick = { openUpgrade(setOf(ReadTarget(ReadFeature.BILLING))) },
-                                                modifier = Modifier.fillMaxWidth().testTag("billing-reauthorize"),
-                                            ) {
-                                                Text("申请补充读取权限")
+                                            if (billingError != null) {
+                                                // A real provider refusal is reported as-is; only then does
+                                                // reconnecting make sense.
+                                                if (billingError.code == CloudFailureCode.PERMISSION_REQUIRED) {
+                                                    Muted("当前 Token 没有账单历史读取权限，其他授权不受影响。")
+                                                }
+                                                billingError.publicMessage.takeIf { it.isNotBlank() }?.let { Muted(it) }
+                                            } else if (legacyAuth) {
+                                                Muted(
+                                                    "旧版 OAuth 授权已停用，App 不会再刷新或请求它；请在该账号上重新连接并粘贴 API Token，" +
+                                                        "验证成功后会替换旧凭据；如保存结果不确定，会停用该连接直到重新确认。",
+                                                )
+                                            } else {
+                                                // A Token may read billing on demand; the token's own permission
+                                                // decides success, so no permission name is asserted here.
+                                                Muted(
+                                                    "账单读取取决于该 API Token 的权限；若无权限请在官方页面为该 Token 勾选账单读取，" +
+                                                        "或直接使用控制台。App 不会猜测未确认的授权范围。",
+                                                )
                                             }
-                                            if (billingError?.code == CloudFailureCode.CREDENTIAL_EXPIRED) TextButton(onClick = openConnection) {
-                                                Text("Token 已失效，重新连接")
-                                            }
-                                            OutlinedButton(
-                                                onClick = { openConsole(Page.BILLING) },
-                                                modifier = Modifier.fillMaxWidth().testTag("billing-open-console"),
-                                            ) {
-                                                Text("打开 Cloudflare 控制台")
+                                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                if (billingError?.code == CloudFailureCode.PERMISSION_REQUIRED && openUpgrade != null) Button(
+                                                    onClick = { openUpgrade(setOf(ReadTarget(ReadFeature.BILLING))) },
+                                                    modifier = Modifier.fillMaxWidth().testTag("billing-reauthorize"),
+                                                ) {
+                                                    Text("查看所需权限")
+                                                }
+                                                if (billingError?.code == CloudFailureCode.CREDENTIAL_EXPIRED) TextButton(onClick = openConnection) {
+                                                    Text("Token 已失效，重新连接")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { openConsole(Page.BILLING) },
+                                                    modifier = Modifier.fillMaxWidth().testTag("billing-open-console"),
+                                                ) {
+                                                    Text("打开 Cloudflare 控制台")
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            } else if (state.productLoading) Column {
-                                CompactTabs(
-                                    labels = listOf(
-                                        BillingSource.ACCOUNT_HISTORY.name to "账号账单",
-                                        BillingSource.USER_HISTORY_LEGACY.name to "用户账单（旧接口）",
-                                    ),
-                                    selected = state.billingSource.name,
-                                    onSelect = { key ->
-                                        val source = BillingSource.valueOf(key)
-                                        controller.selectBillingSource(source)
-                                    },
-                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                                    tagPrefix = "billing-source-tab",
-                                )
-                                if (state.billingSource == BillingSource.USER_HISTORY_LEGACY) {
-                                    BillingScreen(state) { openConsole(Page.BILLING) }
-                                } else {
-                                    ProductStatus(state.products[ProductKey.BILLING],controller::refresh,{controller.loadMore(ProductKey.BILLING)})
-                                    val selected = state.selected
-                                    val history = state.products[ProductKey.BILLING]
-                                    if (selected != null && history?.observedAtMs != null)
-                                        ScopedBillingScreen(selected,history.scope,CloudPage((history.content as? ProductContent.Billing)?.items.orEmpty(),history.next,history.total)) { openConsole(Page.BILLING) }
+                            } else if (state.productLoading && state.billingSource == BillingSource.ACCOUNT_HISTORY) {
+                                val history = state.products[ProductKey.BILLING]
+                                val selected = state.selected
+                                if (selected != null && history?.observedAtMs != null) {
+                                    ScopedBillingScreen(selected, history.scope,
+                                        CloudPage((history.content as? ProductContent.Billing)?.items.orEmpty(), history.next, history.total),
+                                        feedback = { DirectoryReadFeedback(history, controller::refresh, { controller.loadMore(ProductKey.BILLING) }) },
+                                        openConsole = { openConsole(Page.BILLING) })
+                                } else Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DirectoryHeading("账单历史")
+                                    DirectoryReadFeedback(history, controller::refresh, { controller.loadMore(ProductKey.BILLING) })
+                                    if (history?.loading != true && history?.error == null) Muted("尚未读取账单历史")
                                 }
                             } else BillingScreen(state) { openConsole(Page.BILLING) }
                             Page.ACCOUNTS ->
@@ -823,10 +976,18 @@ fun FlareGoApp(
                                     state,
                                     openConnection,
                                     { dialog = DialogState.Disconnect(it) },
-                                    { updater?.let { UpdatePanel(it) } },
+                                    {
+                                        updater?.let {
+                                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Muted("设备")
+                                                UpdatePanel(it)
+                                            }
+                                        }
+                                    },
                                     needsToken = needsToken,
+                                    upgrade = openUpgrade,
                                 )
-                            Page.JOBS -> JobsScreen(state, searchQuery, reconcileTask)
+                            Page.JOBS -> JobsScreen(state, searchQuery, jobDetails, reconcileTask)
                             Page.BUY -> if (registrar != null) {
                                 val registrarState by registrar.state.collectAsState()
                                 com.flarego.ui.registrar.DomainRegisterPage(
@@ -851,15 +1012,31 @@ fun FlareGoApp(
                 }
             }
         }
+        if (syncDetails) SyncDetailsDialog(state, { syncDetails = false }, controller::refreshAllProducts,
+            upgrade = openUpgrade?.let { request -> { targets -> syncDetails = false; request(targets) } })
         when (val modal = dialog) {
             DialogState.TokenConnect -> tokenConnection?.let { token ->
-                TokenConnectionDialog(dismiss, token)
+                TokenConnectionDialog(dismiss, token, onConnected = {
+                    dismiss()
+                    scope.launch { feedback.showSnackbar("账号已连接", duration = SnackbarDuration.Short) }
+                })
             }
-            DialogState.Create ->
-                CreateResourceDialog(dismiss) {
+            DialogState.Create -> CreateResourceDialog(
+                onDismiss = dismiss,
+                native = buildSet {
+                    if (r2Browser != null && ProductKey.R2 in state.supportedProducts) add(ResourceKind.R2)
+                    if (kvBrowser != null && ProductKey.KV in state.supportedProducts) add(ResourceKind.KV)
+                    if (d1Browser != null && ProductKey.D1 in state.supportedProducts) add(ResourceKind.D1)
+                },
+                openNative = { kind ->
                     dialog = null
-                    openConsole(Page.RESOURCES)
-                }
+                    closeSearch()
+                    showAllResources = false
+                    controller.selectResourceKind(kind)
+                    createTarget = kind
+                },
+                openConsole = { dialog = null; openConsole(Page.RESOURCES) },
+            )
             is DialogState.Edit ->
                 DnsEditor(
                     modal.domain,

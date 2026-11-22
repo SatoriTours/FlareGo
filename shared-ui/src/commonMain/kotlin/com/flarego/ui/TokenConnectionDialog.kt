@@ -56,11 +56,11 @@ private fun problemHint(problem: TokenProblem): String? = when (problem) {
 
 /** UI-only journey; validation and persistence stay in [TokenConnection]. */
 @Composable
-fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection) {
+fun TokenConnectionDialog(onDismiss: () -> Unit, connection: TokenConnection, onConnected: () -> Unit = onDismiss) {
     val status by connection.state.collectAsState()
     val canCancel = status.phase != TokenPhase.CONNECTING
     val dismiss = { connection.cancel(); onDismiss() }
-    LaunchedEffect(status.connected) { if (status.connected && !status.upgrading) onDismiss() }
+    LaunchedEffect(status.connected) { if (status.connected && !status.upgrading) onConnected() }
 
     // No token, account ID, or clipboard data in saved state.
     var step by rememberSaveable { mutableStateOf(JourneyStep.CREATE) }

@@ -15,8 +15,25 @@ import com.flarego.core.application.d1.*
 import com.flarego.core.model.*
 import com.flarego.ui.AppBackHandler
 
+internal fun D1Browser.backWithinWorkspace(): Boolean {
+    val state = this.state.value
+    val private = content.state.value
+    if (state.writing) return true
+    when {
+        private.resultReady -> {
+            content.closeResult()
+            if (state.editor == null && !private.exportReady && !content.hasDraftInput()) content.withdraw()
+        }
+        state.editor != null -> { cancel(); content.withdraw() }
+        private.secure -> content.withdraw()
+        state.database != null -> back()
+        else -> return false
+    }
+    return true
+}
+
 @Composable
-fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boolean = true) {
+fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boolean = true, showDirectorySearch: Boolean = true) {
     val state by browser.state.collectAsState()
     val private by browser.content.state.collectAsState()
     LaunchedEffect(account) { browser.refreshContext() }
@@ -24,58 +41,85 @@ fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boole
     if (state.context?.account != account || account == null) { Text("请先选择当前账号"); return }
     val protected = private.secure && browser.content.secureNow()
     AppBackHandler(backEnabled && (state.writing || private.resultReady || state.editor != null || private.secure || state.database != null)) {
-        if (!state.writing) when {
-            private.resultReady -> {
-                browser.content.closeResult()
-                // Browse filters and pending exports are drafts too, even without
-                // an editor. Only retire a genuinely idle private session.
-                if (state.editor == null && !private.exportReady && !browser.content.hasDraftInput())
-                    browser.content.withdraw()
-            }
-            state.editor != null -> { browser.cancel(); browser.content.withdraw() }
-            private.secure -> browser.content.withdraw()
-            else -> browser.back()
-        }
+        browser.backWithinWorkspace()
     }
+    var sqlMode by remember(account, state.database?.ref) { mutableStateOf(false) }
     if (protected) DisposableEffect(private.surface) { val surface = private.surface; onDispose { browser.content.surfaceRemoved(surface) } }
-    LazyColumn(Modifier.fillMaxSize().testTag("d1-content"), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("D1 数据库", style = MaterialTheme.typography.headlineSmall); Text("任意 SQL 均按潜在写入处理；写入不自动重试。导入、导出、恢复及删除恢复的生产入口因官方证据不足保持关闭。") }
+    val directoryPosition = androidx.compose.foundation.lazy.rememberLazyListState()
+    val databasePosition = androidx.compose.foundation.lazy.rememberLazyListState()
+    LazyColumn(Modifier.fillMaxSize().testTag("d1-content"),
+        state = if (state.database == null) directoryPosition else databasePosition, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (state.database != null) item {
+            Text("任意 SQL 均按潜在写入处理；写入不自动重试。导入、导出、恢复及删除恢复的生产入口因官方证据不足保持关闭。")
+        }
         item { com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.loading) }
         state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("d1-error")) } }
         state.notice?.let { item { Text(it, Modifier.testTag("d1-notice")) } }
         if ((state.loading && state.observedAtMs==null) || state.writing) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (state.database == null) {
-            item {
-                OutlinedTextField(state.filter, browser::filterName, label = { Text("按名称筛选") }, modifier = Modifier.fillMaxWidth().testTag("d1-filter"))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton({ browser.refreshDatabases() }) { Text("刷新") }
-                    Button({ browser.begin(D1Editor.CREATE) }, Modifier.testTag("d1-create")) { Text("创建数据库") }
-                    OutlinedButton({ browser.begin(D1Editor.UNDELETE) }, Modifier.testTag("d1-undelete")) { Text("恢复已删除 UUID") }
+            if (showDirectorySearch) item {
+                OutlinedTextField(state.filter, browser::filterName,
+                    label = { Text("按名称筛选") }, modifier = Modifier.fillMaxWidth().testTag("d1-filter"))
+            }
+            if (!state.loading && state.error == null && state.databases.isEmpty()) item {
+                com.flarego.ui.DirectoryGroup {
+                    com.flarego.ui.CompactListRow(when {
+                        state.observedAtMs == null -> "尚未读取数据库"
+                        state.filter.isNotBlank() -> "没有匹配的数据库"
+                        state.next != null -> "当前页面没有数据库"
+                        else -> "暂无数据库"
+                    }, showDivider = false)
                 }
             }
             items(state.databases, key = { it.ref.id }) { database ->
-                OutlinedButton({ browser.openDatabase(database.ref) }, modifier = Modifier.fillMaxWidth().testTag("d1-db-${database.ref.id}"),
-                    shape = MaterialTheme.shapes.medium, contentPadding = PaddingValues(16.dp)) {
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(database.name); Text(database.ref.id); Text("复制：${database.replication ?: "未提供"} · ${database.fileSize ?: "未知"} bytes")
-                    }
+                com.flarego.ui.DirectoryGroup {
+                    com.flarego.ui.CompactListRow(database.name, modifier = Modifier.testTag("d1-db-${database.ref.id}"),
+                        value = "D1", onClick = { browser.openDatabase(database.ref) }, showDivider = false, wrapTitle = true)
                 }
             }
             if (state.next != null) item { OutlinedButton({ browser.refreshDatabases(true) }, Modifier.testTag("d1-more")) { Text("加载更多数据库") } }
+            item {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton({ browser.refreshDatabases() }) { Text("刷新") }
+                    TextButton({ browser.begin(D1Editor.CREATE) }, Modifier.testTag("d1-create")) { Text("创建数据库") }
+                    TextButton({ browser.begin(D1Editor.UNDELETE) }, Modifier.testTag("d1-undelete")) { Text("恢复已删除 UUID") }
+                }
+            }
         } else {
             val database = state.database!!
             item {
                 OutlinedButton(browser::back, Modifier.testTag("d1-back")) { Text("返回数据库列表") }
                 Text(database.name, style = MaterialTheme.typography.titleLarge); Text(database.ref.id)
                 Text("复制：${database.replication ?: "未提供"} · 文件大小：${database.fileSize ?: "未知"} bytes")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(!sqlMode, {
+                        if (!state.writing) {
+                            if (state.editor in setOf(D1Editor.SQL, D1Editor.RAW)) browser.cancel()
+                            sqlMode = false
+                        }
+                    }, label = { Text("数据浏览") }, modifier = Modifier.weight(1f).testTag("d1-workspace-browse"))
+                    FilterChip(sqlMode, {
+                        if (!state.writing && state.editor != D1Editor.SQL) {
+                            sqlMode = true
+                            browser.begin(D1Editor.SQL)
+                        }
+                    }, label = { Text("SQL") }, modifier = Modifier.weight(1f).testTag("d1-open-SQL"))
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(browser::showDetails, Modifier.testTag("d1-details")) { Text("完整详情") }
-                    D1Editor.entries.filter { it !in setOf(D1Editor.CREATE, D1Editor.UNDELETE) }.forEach { editor ->
-                        OutlinedButton({ browser.begin(editor) }, enabled = !state.writing, modifier = Modifier.testTag("d1-open-${editor.name}")) { Text(editorLabel(editor)) }
+                    if (sqlMode) {
+                        OutlinedButton({ browser.begin(D1Editor.RAW) }, enabled = !state.writing,
+                            modifier = Modifier.testTag("d1-open-RAW")) { Text(editorLabel(D1Editor.RAW)) }
+                    } else {
+                        OutlinedButton(browser::showDetails, Modifier.testTag("d1-details")) { Text("完整详情") }
+                        D1Editor.entries.filter { it !in setOf(D1Editor.CREATE, D1Editor.UNDELETE, D1Editor.SQL, D1Editor.RAW) }
+                            .forEach { editor ->
+                                OutlinedButton({ browser.begin(editor) }, enabled = !state.writing,
+                                    modifier = Modifier.testTag("d1-open-${editor.name}")) { Text(editorLabel(editor)) }
+                            }
                     }
                 }
             }
-            item {
+            if (!sqlMode) item {
                 OutlinedButton({ browser.content.begin() }, Modifier.testTag("d1-private-begin")) { Text("开启受保护的内容会话") }
                 if (protected) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     PrivateField(browser,D1Field.TABLE,"表名", "d1-table",private.revealed)
@@ -244,7 +288,8 @@ fun D1BrowserHost(browser: D1Browser, account: AccountScope?, backEnabled: Boole
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton({ browser.observeTask(task.id) }) { Text("重读精确目标") }
             if (task.pollPath != null && task.state in setOf(TaskState.ACCEPTED,TaskState.UNKNOWN,TaskState.RUNNING)) OutlinedButton({ browser.continueTask(task.id) },Modifier.testTag("d1-continue-${task.id}")) { Text("仅继续原任务轮询") }
-            if (D1TaskTargets.unsettled(task)) OutlinedButton({ close = true }) { Text("人工处置") }
+            if (D1TaskTargets.unsettled(task)) OutlinedButton({ close = true },
+                Modifier.testTag("d1-close-task-${task.id}")) { Text("人工处置") }
         }
     }
     if (close) {

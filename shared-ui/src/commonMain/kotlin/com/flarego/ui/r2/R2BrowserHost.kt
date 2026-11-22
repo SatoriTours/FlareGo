@@ -12,13 +12,56 @@ import com.flarego.core.model.AccountScope
 import com.flarego.core.application.r2.R2WriteRuntime
 import com.flarego.ui.AppBackHandler
 
+internal fun R2Browser.backWithinWorkspace(leaveBucket: (() -> Unit)? = null): Boolean {
+    val state = this.state.value
+    val configState = configuration.state.value
+    val cState = c.state.value
+    if (state.writing || configState.writing || configState.sippy.writing || cState.writing) return true
+    when {
+        cState.open -> c.hide()
+        configState.open -> onConfigurationIntent(when {
+            configState.preview != null -> R2ConfigurationIntent.CancelPreview
+            configState.deleteRequested -> R2ConfigurationIntent.CancelDeleteConfiguration
+            configState.domainDeleteRequested -> R2ConfigurationIntent.CancelDeleteCustomDomain
+            configState.sippy.disableRequested -> R2ConfigurationIntent.CancelDisableSippy
+            configState.sippy.secureReady -> R2ConfigurationIntent.EndSippySecureEditing
+            else -> R2ConfigurationIntent.Close
+        })
+        state.preview != null -> cancelPreview()
+        state.objects?.pendingDeleteKey != null -> onObjectIntent(R2ObjectIntent.CancelDelete)
+        state.objects?.pendingBulkDelete == true -> onObjectIntent(R2ObjectIntent.CancelBulkDelete)
+        state.stagedUpload != null -> onObjectIntent(R2ObjectIntent.CancelUpload)
+        state.objects?.selected?.isNotEmpty() == true -> onObjectIntent(R2ObjectIntent.ClearSelection)
+        state.objects?.expandedKey != null -> onObjectIntent(R2ObjectIntent.CloseDetails)
+        state.objects != null -> {
+            onObjectIntent(R2ObjectIntent.BackToBuckets)
+            leaveBucket?.invoke()
+        }
+        state.buckets.pendingDeleteName != null -> onBucketIntent(R2BucketIntent.CancelDelete)
+        state.buckets.editingBucketName != null -> onBucketIntent(R2BucketIntent.CancelStorageClassEdit)
+        else -> return false
+    }
+    return true
+}
+
 /** Integration only: drafts, confirmation ownership and task evidence stay in the browser/runtime. */
 @Composable
-fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boolean = true) {
+fun R2BrowserHost(
+    browser: R2Browser,
+    account: AccountScope?,
+    backEnabled: Boolean = true,
+    onBack: (() -> Unit)? = null,
+    query: String = "",
+    openingRecent: Boolean = false,
+    showBucketCreate: Boolean = false,
+) {
     val state by browser.state.collectAsState()
     val tasks by browser.writeTasks.collectAsState()
     val configState by browser.configuration.state.collectAsState()
     val cState by browser.c.state.collectAsState()
+    val directoryScroll = androidx.compose.foundation.rememberScrollState()
+    val createScroll = androidx.compose.foundation.rememberScrollState()
+    val objectsScroll = androidx.compose.foundation.rememberScrollState()
     var cBucketChoice by remember(browser, account) { mutableStateOf<String?>(null) }
     var cBucketMenu by remember(browser, account) { mutableStateOf(false) }
     LaunchedEffect(browser, account) { browser.refreshContext() }
@@ -27,28 +70,11 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boole
     AppBackHandler(backEnabled && current && (busy || cState.open || configState.open ||
         state.preview != null || state.objects != null || state.buckets.pendingDeleteName != null ||
         state.buckets.editingBucketName != null)) {
-        // Consume Back while a write is in flight; leaving the surface must not cancel it.
-        if (!busy) when {
-            cState.open -> browser.c.hide()
-            configState.open -> browser.onConfigurationIntent(when {
-                configState.preview != null -> R2ConfigurationIntent.CancelPreview
-                configState.deleteRequested -> R2ConfigurationIntent.CancelDeleteConfiguration
-                configState.domainDeleteRequested -> R2ConfigurationIntent.CancelDeleteCustomDomain
-                configState.sippy.disableRequested -> R2ConfigurationIntent.CancelDisableSippy
-                configState.sippy.secureReady -> R2ConfigurationIntent.EndSippySecureEditing
-                else -> R2ConfigurationIntent.Close
-            })
-            state.preview != null -> browser.cancelPreview()
-            state.objects != null -> browser.onObjectIntent(when {
-                state.objects!!.pendingDeleteKey != null -> R2ObjectIntent.CancelDelete
-                state.objects!!.pendingBulkDelete -> R2ObjectIntent.CancelBulkDelete
-                state.stagedUpload != null -> R2ObjectIntent.CancelUpload
-                state.objects!!.selected.isNotEmpty() -> R2ObjectIntent.ClearSelection
-                else -> R2ObjectIntent.BackToBuckets
-            })
-            state.buckets.pendingDeleteName != null -> browser.onBucketIntent(R2BucketIntent.CancelDelete)
-            else -> browser.onBucketIntent(R2BucketIntent.CancelStorageClassEdit)
-        }
+        if (onBack != null) onBack() else browser.backWithinWorkspace()
+    }
+    if (openingRecent && state.objects == null) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        return
     }
     if (cState.open) {
         // The batch C surface takes over the route while it is open (its own back button closes it).
@@ -57,13 +83,24 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boole
     }
     Column(Modifier.fillMaxSize().testTag("r2-browser")) {
         if(current) com.flarego.ui.ReadStatus(state.observedAtMs,state.fromCache,state.buckets.loading)
-        if (!configState.open) {
-            Text("当前显示默认 jurisdiction 的桶。${if (browser.writesAvailable) R2Browser.WRITE_READY_NOTICE else R2Browser.WRITE_NOTICE}",
-                modifier = Modifier.fillMaxWidth().padding(12.dp).testTag("r2-read-only-notice"), style = MaterialTheme.typography.bodySmall)
-        }
         if (!current) {
             Text("正在绑定当前账号的 R2…", Modifier.padding(16.dp))
         } else {
+            val objects = state.objects
+            if (objects != null && state.preview == null) {
+                com.flarego.ui.CompactTabs(
+                    listOf("objects" to "对象", "configuration" to "配置"),
+                    if (configState.open) "configuration" else "objects",
+                    { tab ->
+                        if (!busy && (tab == "configuration") != configState.open) {
+                            browser.onConfigurationIntent(if (tab == "configuration")
+                                R2ConfigurationIntent.Open(objects.bucket) else R2ConfigurationIntent.Close)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    tagPrefix = "r2-workspace",
+                )
+            }
             if (!configState.open) {
                 state.notice?.takeIf { it != R2Browser.WRITE_NOTICE && it != R2Browser.WRITE_READY_NOTICE }?.let {
                     Text(it, Modifier.padding(horizontal = 12.dp).testTag("r2-write-result"), style = MaterialTheme.typography.bodySmall)
@@ -72,37 +109,6 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boole
                     Text("已暂存 ${staged.length} 字节，SHA-256 校验已生成；尚未发送", Modifier.padding(horizontal = 12.dp).testTag("r2-staged-file"))
                 }
                 if (state.writing) LinearProgressIndicator(Modifier.fillMaxWidth())
-                val bucket = cBucketChoice?.takeIf { selected -> state.buckets.rows.any { it.name == selected } }
-                    ?: state.buckets.rows.singleOrNull()?.name
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-                    if (state.buckets.rows.size > 1) {
-                        Box {
-                            OutlinedButton(onClick = { cBucketMenu = true }, modifier = Modifier.testTag("r2-c-bucket-choice")) {
-                                Text(bucket?.let { "目标桶：$it" } ?: "选择作业／通知的目标桶")
-                            }
-                            DropdownMenu(expanded = cBucketMenu, onDismissRequest = { cBucketMenu = false }) {
-                                state.buckets.rows.forEach { row ->
-                                    DropdownMenuItem(text = { Text(row.name) }, onClick = { cBucketChoice = row.name; cBucketMenu = false },
-                                        modifier = Modifier.testTag("r2-c-bucket-${row.name}"))
-                                }
-                            }
-                        }
-                    }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { bucket?.let { browser.onCBucketSelected(it); browser.c.open(R2CScreen.JOBS) } },
-                            enabled = bucket != null, modifier = Modifier.testTag("r2-c-jobs"),
-                        ) { Text("后台作业") }
-                        OutlinedButton(
-                            onClick = { bucket?.let { browser.onCBucketSelected(it); browser.c.open(R2CScreen.NOTIFICATIONS) } },
-                            enabled = bucket != null, modifier = Modifier.testTag("r2-c-notifications"),
-                        ) { Text("事件通知") }
-                        OutlinedButton(
-                            onClick = { browser.c.open(R2CScreen.METRICS) },
-                            modifier = Modifier.testTag("r2-c-metrics"),
-                        ) { Text("账号指标") }
-                    }
-                }
             }
             Box(Modifier.weight(1f)) {
                 if (configState.open) {
@@ -124,9 +130,53 @@ fun R2BrowserHost(browser: R2Browser, account: AccountScope?, backEnabled: Boole
                             }
                         }
                     } else {
-                        state.objects?.let { R2ObjectList(it.copy(loading = it.loading || state.writing), browser::onObjectIntent) }
-                            ?: R2BucketList(
-                                state = state.buckets.copy(loading = state.buckets.loading || state.writing),
+                        state.objects?.let { objects ->
+                            R2ObjectList(objects.copy(loading = objects.loading || state.writing), { intent ->
+                                if (intent == R2ObjectIntent.BackToBuckets && onBack != null) onBack()
+                                else browser.onObjectIntent(intent)
+                            }, scroll = objectsScroll, showDirectoryBack = onBack == null)
+                        } ?: R2BucketList(
+                                state = state.buckets.copy(loading = state.buckets.loading || state.writing,
+                                    rows = state.buckets.rows.filter { it.name.contains(query, ignoreCase = true) }),
+                                scroll = if (showBucketCreate) createScroll else directoryScroll,
+                                query = query,
+                                observed = state.observedAtMs != null,
+                                showCreate = showBucketCreate,
+                                directoryActions = {
+                                Text("当前显示默认 jurisdiction 的桶。${if (browser.writesAvailable) R2Browser.WRITE_READY_NOTICE else R2Browser.WRITE_NOTICE}",
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp).testTag("r2-read-only-notice"), style = MaterialTheme.typography.bodySmall)
+                                    val bucket = cBucketChoice?.takeIf { selected -> state.buckets.rows.any { it.name == selected } }
+                                        ?: state.buckets.rows.singleOrNull()?.name
+                                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                                        if (state.buckets.rows.size > 1) {
+                                            Box {
+                                                OutlinedButton(onClick = { cBucketMenu = true }, modifier = Modifier.testTag("r2-c-bucket-choice")) {
+                                                    Text(bucket?.let { "目标桶：$it" } ?: "选择作业／通知的目标桶")
+                                                }
+                                                DropdownMenu(expanded = cBucketMenu, onDismissRequest = { cBucketMenu = false }) {
+                                                    state.buckets.rows.forEach { row ->
+                                                        DropdownMenuItem(text = { Text(row.name) }, onClick = { cBucketChoice = row.name; cBucketMenu = false },
+                                                            modifier = Modifier.testTag("r2-c-bucket-${row.name}"))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(
+                                                onClick = { bucket?.let { browser.onCBucketSelected(it); browser.c.open(R2CScreen.JOBS) } },
+                                                enabled = bucket != null, modifier = Modifier.testTag("r2-c-jobs"),
+                                            ) { Text("后台作业") }
+                                            OutlinedButton(
+                                                onClick = { bucket?.let { browser.onCBucketSelected(it); browser.c.open(R2CScreen.NOTIFICATIONS) } },
+                                                enabled = bucket != null, modifier = Modifier.testTag("r2-c-notifications"),
+                                            ) { Text("事件通知") }
+                                            OutlinedButton(
+                                                onClick = { browser.c.open(R2CScreen.METRICS) },
+                                                modifier = Modifier.testTag("r2-c-metrics"),
+                                            ) { Text("账号指标") }
+                                        }
+                                    }
+                                },
                                 onIntent = browser::onBucketIntent,
                                 onOpenConfiguration = { bucket ->
                                     browser.onConfigurationIntent(R2ConfigurationIntent.Open(bucket))

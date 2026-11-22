@@ -45,6 +45,8 @@ data class R2BucketListState(
 )
 
 sealed interface R2ObjectIntent {
+    data class ToggleDetails(val key: String) : R2ObjectIntent
+    data object CloseDetails : R2ObjectIntent
     data class PrefixChanged(val value: String) : R2ObjectIntent
     data class RequestDownload(val key: String) : R2ObjectIntent
     data class RequestUpload(val key: String) : R2ObjectIntent
@@ -81,6 +83,7 @@ data class R2ObjectListState(
     val pendingBulkDelete: Boolean = false,
     val validationMessage: String? = null,
     val notice: String? = null,
+    val expandedKey: String? = null,
 )
 
 /** 仅展示用；不可执行负载，也不代表写权限。 */

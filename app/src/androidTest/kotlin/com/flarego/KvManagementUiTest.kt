@@ -91,7 +91,7 @@ class KvManagementUiTest {
     private val callbacks=object:Application.ActivityLifecycleCallbacks {
         override fun onActivityPreCreated(a:Activity,s:Bundle?){
             if(a !is MainActivity||model!=null)return
-            val m=FlareGoViewModel(application,Dispatchers.IO,{transport()},{transfers})
+            val m=FlareGoViewModel(application,Dispatchers.IO,{transport()},{transfers}, updateStore = ManualUpdateFixtureStore())
             initial=m.controller.state.value.connections.map{it.id}.toSet();model=m
             a.viewModelStore.put("androidx.lifecycle.ViewModelProvider.DefaultKey:com.flarego.FlareGoViewModel",m)
         }
@@ -123,14 +123,14 @@ class KvManagementUiTest {
         compose.runOnIdle{model!!.viewModelScope.launch{model!!.connect("KV Synthetic",account,"synthetic-kv-token")}}
         waitFor{model!!.controller.state.value.selected?.accountId==account}
         compose.onNodeWithTag("nav-resources").performClick()
-        compose.onNodeWithText("KV",useUnmergedTree=true).performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-KV").performClick()
         waitFor{browser.state.value.namespaces.isNotEmpty()}
         if(open)openNamespace()
     }
     @Test fun systemBackCancelsEditorBeforeReturningToNamespaceDirectory() {
         install()
-        compose.onNodeWithContentDescription("切换云账号").performClick()
-        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithContentDescription("切换云账号").assertDoesNotExist()
         assertNotNull(browser.state.value.namespace)
         click("kv-new-value")
         hideKeyboard()
@@ -259,6 +259,33 @@ class KvManagementUiTest {
         compose.runOnIdle{model?.let{m->m.controller.state.value.connections.filter{it.id !in initial}.forEach(m::disconnect)}}
         waitFor{model?.controller?.state?.value?.connections?.none{it.id !in initial}!=false}
     }
+    @Test fun actualCreateKvFromResourceMenuChecksTargetCancelsAndConfirmsOnce() {
+        assertTrue(initial.isEmpty())
+        compose.runOnIdle { model!!.viewModelScope.launch { model!!.connect("KV Synthetic", account, "synthetic-kv-token") } }
+        waitFor { model!!.controller.state.value.selected?.accountId == account }
+        compose.onNodeWithTag("nav-resources").performClick()
+        fun openAndPrepare() {
+            compose.onNodeWithContentDescription("创建资源").performClick()
+            compose.onNodeWithTag("resource-create-KV").performClick()
+            waitFor { browser.state.value.editor == KvEditor.CREATE }
+            input("kv-title-input", "Created")
+            prepare()
+            compose.onNodeWithText("账号：$account").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("标题：Created").performScrollTo().assertIsDisplayed()
+            assertTrue(requests.all { it.method == "GET" })
+        }
+        openAndPrepare()
+        compose.onNodeWithTag("kv-cancel-confirm").performClick()
+        waitFor { compose.activity.hasWindowFocus() && browser.state.value.editor == null }
+        assertTrue(requests.all { it.method == "GET" })
+        openAndPrepare()
+        stages("menu-create")
+        val write = requests.single { it.method != "GET" }
+        assertEquals("POST", write.method)
+        assertEquals(base, write.path)
+        assertEquals(TaskState.ACCEPTED, browser.state.value.tasks.single().state)
+    }
+
     @Test fun actualEntryNamespaceCreateRenameDeleteHaveIndependentConfirmations(){
         install(false);capture("directory",false)
         click("kv-create");input("kv-title-input","Created");prepare();stages("create")
@@ -281,7 +308,13 @@ class KvManagementUiTest {
     }
     @Test fun binaryReadAndMetadataArePrivateAndDeletionUsesCurrentSingleKey(){
         install();click("kv-key-binary/key");click("kv-read-metadata")
-        waitFor{browser.content.state.value.metadataReady};capture("metadata-private",false)
+        waitFor{browser.content.state.value.metadataReady}
+        compose.runOnIdle { assertTrue(browser.content.state.value.secure); assertFalse(browser.content.state.value.revealed) }
+        click("kv-reveal")
+        compose.runOnIdle { assertTrue(browser.content.state.value.revealed) }
+        click("kv-reveal")
+        compose.runOnIdle { assertFalse(browser.content.state.value.revealed) }
+        capture("metadata-private",false)
         click("kv-cancel-editor");click("kv-read-value");waitFor{browser.content.state.value.valueReady}
         compose.onNodeWithTag("kv-binary-value").performScrollTo().assertIsDisplayed();capture("binary-private",false)
         click("kv-cancel-editor");click("kv-delete-key");stages("delete-key")

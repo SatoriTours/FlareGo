@@ -102,8 +102,10 @@ class RefreshFeedbackUiTest {
         compose.onNodeWithText(message).assertIsDisplayed()
     }
 
+    private fun openOverviewMenu() = compose.onNodeWithContentDescription("更多").performClick()
+
     private fun refreshAll() {
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("overview-refresh-all"))
+        openOverviewMenu()
         compose.onNodeWithTag("overview-refresh-all").performClick()
     }
 
@@ -112,7 +114,7 @@ class RefreshFeedbackUiTest {
         refreshAll()
         // OAuth is retired: the old record keeps its row but sends no request at all.
         compose.runOnIdle { assertTrue("legacy OAuth must not read any product", calls.isEmpty()) }
-        compose.onNodeWithTag("overview-d1").performScrollTo().assert(hasAnyDescendant(hasText("当前授权方案未支持")))
+        compose.onNodeWithTag("overview-d1").performScrollTo().assert(hasText("当前授权方案未支持"))
         compose.onNodeWithTag("overview-d1").performClick()
         compose.onNodeWithText("当前授权方案未支持 D1 数据库").assertIsDisplayed()
         capture("unsupported-d1")
@@ -129,11 +131,11 @@ class RefreshFeedbackUiTest {
         capture("unsupported-billing")
     }
 
-    @Test fun toolbarRefreshActuallyReadsAndReportsCompletion() {
+    @Test fun overviewMenuReadsAllProductsWithoutPermanentSuccessBanner() {
         install()
         compose.runOnIdle { assertTrue(calls.isEmpty()) }
-        compose.onNodeWithContentDescription("刷新").performClick()
-        assertRefreshSummary("读取完成：6 项成功")
+        refreshAll()
+        compose.onNodeWithText("读取完成：6 项成功").assertDoesNotExist()
         compose.runOnIdle { assertEquals(6, calls.size) }
         capture("success")
     }
@@ -142,16 +144,11 @@ class RefreshFeedbackUiTest {
         gate = CompletableDeferred()
         install()
         refreshAll()
+        openOverviewMenu()
         compose.onNodeWithTag("overview-refresh-all").assertIsNotEnabled()
-        compose.onNodeWithContentDescription("正在刷新").assertIsDisplayed()
-        compose.onNodeWithTag("toolbar-refresh").assertIsNotEnabled()
-        compose.onNodeWithText("正在刷新产品…").assertIsDisplayed()
-        capture("loading")
         compose.runOnIdle { assertEquals(6, calls.size); gate!!.complete(Unit) }
-        assertRefreshSummary("读取完成：6 项成功")
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("overview-refresh-all"))
-        compose.onNodeWithTag("overview-refresh-all").assertIsEnabled()
-        refreshAll()
+        compose.onNodeWithTag("overview-refresh-all").assertIsEnabled().performClick()
+        compose.onNodeWithText("读取完成：6 项成功").assertDoesNotExist()
         compose.runOnIdle { assertEquals(12, calls.size) }
     }
 
@@ -173,7 +170,7 @@ class RefreshFeedbackUiTest {
         compose.runOnIdle { unavailable = true }
         refreshAll()
         assertRefreshSummary("读取完成：5 项成功，1 项失败")
-        compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasAnyDescendant(hasText("1+ · 更新失败")))
+        compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasText("1+ · 更新失败"))
         val networkError = "域名：暂时无法加载，请稍后重试"
         val overview = compose.onNode(hasScrollToNodeAction())
         overview.performScrollToNode(hasText(networkError))
@@ -186,8 +183,8 @@ class RefreshFeedbackUiTest {
         capture("stale-error")
         compose.runOnIdle { unavailable = false }
         refreshAll()
-        assertRefreshSummary("读取完成：6 项成功")
-        compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasAnyDescendant(hasText("1")))
+        compose.onNodeWithText("读取完成：6 项成功").assertDoesNotExist()
+        compose.onNodeWithTag("overview-domains").performScrollTo().assert(hasText("1"))
     }
 
     @Test fun failureFeedbackIsReachableInDarkThemeWithLargeText() {

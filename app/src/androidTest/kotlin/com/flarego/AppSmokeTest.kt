@@ -128,7 +128,7 @@ class AppSmokeTest {
         enterExistingToken()
         assertTrue("Token 输入框应为空且掩码", emptyMaskedTokenField())
         compose.onNodeWithContentDescription("取消").performClick()
-        compose.onNodeWithContentDescription("切换云账号").performClick()
+        compose.onNodeWithContentDescription("切换云账号").assertDoesNotExist()
         compose.onNodeWithText("Production · 演示").assertDoesNotExist()
         compose.onNodeWithText("Dev sandbox · 演示").assertDoesNotExist()
     }

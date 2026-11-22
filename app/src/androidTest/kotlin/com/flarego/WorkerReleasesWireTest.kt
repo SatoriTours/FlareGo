@@ -111,7 +111,7 @@ class WorkerReleasesWireTest {
         val browser = WorkerReleaseBrowser(this, { _, _ -> client }, { clock })
         browser.open(owner, row)
         yield()
-        browser.go(WorkerRoute.History)
+        browser.selectTab(WorkerTab.DEPLOYMENTS)
         browser.load(more = true)
         yield()
         val failedPage = checkNotNull(browser.state.value).deployments
@@ -121,7 +121,7 @@ class WorkerReleasesWireTest {
         throttled = false
         browser.load(more = true)
         yield()
-        assertTrue(browser.back())
+        assertFalse(browser.back())
         clock = 2000L
         offline = true
         browser.load()

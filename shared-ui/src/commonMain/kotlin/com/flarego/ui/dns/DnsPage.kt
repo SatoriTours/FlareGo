@@ -16,10 +16,27 @@ import com.flarego.ui.SectionCard
 import kotlinx.serialization.json.*
 
 @Composable
-fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifier = Modifier, batch: DnsBatchPagePort? = null, managementActions: (@Composable () -> Unit)? = null) {
+fun DnsPage(
+    state: DnsPageState,
+    onIntent: (DnsIntent) -> Unit,
+    modifier: Modifier = Modifier,
+    batch: DnsBatchPagePort? = null,
+    managementActions: (@Composable () -> Unit)? = null,
+    externalBatchOpen: Boolean? = null,
+    onBatchOpen: ((Boolean) -> Unit)? = null,
+) {
     val scope = state.scope
     val batchState = batch?.state?.collectAsState()?.value
-    var batchOpen by remember(scope) { mutableStateOf(false) }
+    var localBatchOpen by remember(scope) { mutableStateOf(false) }
+    val batchOpen = externalBatchOpen ?: localBatchOpen
+    fun setBatchOpen(open: Boolean) {
+        if (onBatchOpen != null) onBatchOpen(open) else localBatchOpen = open
+    }
+    val recordList = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    com.flarego.ui.AppBackHandler(batchOpen && externalBatchOpen == null && batch != null) {
+        batch?.onIntent(DnsBatchIntent.Cancel)
+        setBatchOpen(false)
+    }
     DisposableEffect(batch, scope) {
         batch?.onIntent(DnsBatchIntent.Clear)
         if (scope != null) batch?.onIntent(DnsBatchIntent.Bind(scope))
@@ -76,7 +93,7 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
                 batchOpen && batch != null && batchState != null -> Column(Modifier.fillMaxSize()) {
                     Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                         OutlinedButton(
-                            onClick = { batch.onIntent(DnsBatchIntent.Cancel); batchOpen = false },
+                            onClick = { batch.onIntent(DnsBatchIntent.Cancel); setBatchOpen(false) },
                             modifier = Modifier.testTag("dns-close-batch"),
                         ) {
                             Text("返回单条 DNS")
@@ -151,7 +168,10 @@ fun DnsPage(state: DnsPageState, onIntent: (DnsIntent) -> Unit, modifier: Modifi
                         DnsWriteMode.REPLACE -> DnsWriteMethod.PUT
                         else -> DnsWriteMethod.POST
                     })
-                else -> DnsRecordsBody(state, writable, task, onIntent, if (batch != null) ({ batchOpen = true }) else null, managementActions)
+                else -> recordList.SaveableStateProvider("dns-records") {
+                    DnsRecordsBody(state, writable, task, onIntent,
+                        if (batch != null) ({ setBatchOpen(true) }) else null, managementActions)
+                }
             }
         }
     }

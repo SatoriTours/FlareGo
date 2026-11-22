@@ -1,6 +1,8 @@
 package com.flarego.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -8,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.flarego.core.updates.*
+
+private const val MaxUpdateNotesChars = 12_000
 
 @Composable
 fun UpdatePanel(controller: UpdateController) {
@@ -22,7 +26,7 @@ fun UpdatePanel(controller: UpdateController) {
             )
             Muted("v${state.installedName}")
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             UpdateChannel.entries.forEach { channel ->
                 FilterChip(
                     selected = state.preferences.channel == channel,
@@ -89,7 +93,16 @@ fun UpdatePanel(controller: UpdateController) {
         AlertDialog(
             onDismissRequest = { notesOpen = false },
             title = { Text("更新说明") },
-            text = { Text(state.available?.notes?.take(12000).orEmpty().ifBlank { "此版本未提供更新说明" }) },
+            text = {
+                val notes = state.available?.notes.orEmpty()
+                Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    Text(notes.take(MaxUpdateNotesChars).ifBlank { "此版本未提供更新说明" })
+                    if (notes.length > MaxUpdateNotesChars) {
+                        Spacer(Modifier.height(8.dp))
+                        Muted("说明过长，仅显示前 12000 个字符")
+                    }
+                }
+            },
             confirmButton = { TextButton({ notesOpen = false }) { Text("关闭") } },
         )
 }

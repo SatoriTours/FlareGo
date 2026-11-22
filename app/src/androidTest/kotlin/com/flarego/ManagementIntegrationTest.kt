@@ -95,6 +95,7 @@ class ManagementIntegrationTest {
         compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
         compose.onNodeWithContentDescription("取消搜索").performClick()
         compose.onNodeWithTag("zone-row-runtime-zone").performClick()
+        compose.waitUntil(10000) { m.management.dns.state.value.rows.any { it.id == "record" } }
         compose.onNodeWithTag("zone-detail-name").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
         compose.waitUntil(10000) { m.management.zones.state.value.selected == null && !m.management.zones.state.value.loading }
@@ -102,6 +103,7 @@ class ManagementIntegrationTest {
         compose.onNodeWithTag("zone-create").performClick()
         compose.onNodeWithTag("zone-create-name").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithText("放弃修改").assertIsDisplayed().performClick()
         compose.onNodeWithTag("zone-row-runtime-zone").assertIsDisplayed()
         screenshot("zones-returned")
         compose.runOnIdle { assertEquals(0, writes.get()) }
@@ -174,9 +176,11 @@ class ManagementIntegrationTest {
         compose.onNodeWithTag("zone-demo-notice").assertExists()
         compose.onNodeWithTag("zone-row-zone-demo").performScrollTo().performClick()
         compose.waitUntil(10000) { m.management.zones.state.value.selected!=null }
+        compose.onNodeWithTag("zone-tab-dns").assertIsSelected()
+        compose.waitUntil(10000) { m.management.dns.state.value.rows.isNotEmpty() }
+        compose.onNodeWithTag("zone-tab-details").performClick()
         compose.onNodeWithTag("zone-status").assertExists()
         compose.onNodeWithTag("zone-tab-dns").performClick()
-        compose.waitUntil(10000) { m.management.dns.state.value.rows.isNotEmpty() }
         compose.onNodeWithTag("dns-demo-notice").assertExists()
         compose.runOnIdle {
             assertEquals("flarego.dev",m.management.dns.state.value.zoneName)

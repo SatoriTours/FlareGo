@@ -97,7 +97,8 @@ class R2ManagementUiTest {
         val m = model!!
         compose.setContent { FlareGoApp(m.controller, m::disconnect, {}, r2Browser = m.r2Browser) }
         compose.onNodeWithTag("nav-resources").performClick()
-        compose.onNodeWithText("R2", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-R2").performClick()
         compose.waitUntil(10000) { m.r2Browser.state.value.buckets.rows.isNotEmpty() }
     }
     private fun captureBucketEvidence(name: String) {
@@ -287,6 +288,7 @@ class R2ManagementUiTest {
         compose.runOnIdle { assertNull(model!!.r2Browser.state.value.preview) }
     }
     private fun previewObjectDelete() {
+        compose.onNodeWithTag("ro-row-dir/sub/file.txt").performScrollTo().performClick()
         compose.onNodeWithTag("ro-delete-dir/sub/file.txt").performScrollTo().performClick()
         compose.onNodeWithTag("ro-delete-input").performTextInput("dir/sub/file.txt")
         androidx.test.espresso.Espresso.closeSoftKeyboard()
@@ -343,6 +345,28 @@ class R2ManagementUiTest {
             assertEquals(1, requests.count { it.method == "DELETE" })
         }
     }
+    @Test fun recentBucketOpensTheObjectWorkspaceAndBackReturnsHome() {
+        install(); openBucket()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithTag("rb-open-my-bucket").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("nav-overview").performClick()
+        compose.onNodeWithTag("recent-resource-R2-my-bucket").performClick()
+        compose.waitUntil(10000) { model!!.r2Browser.state.value.objects?.bucket == "my-bucket" }
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("recent-resource-R2-my-bucket").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(requests.all { it.method == "GET" }) }
+    }
+
+    @Test fun objectPrefixSurvivesSwitchingToConfigurationAndBack() {
+        install(); openBucket()
+        compose.onNodeWithTag("ro-prefix-input").performScrollTo().performTextInput("dir/")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.onNodeWithTag("r2-workspace-configuration").performClick()
+        compose.onNodeWithTag("r2-workspace-objects").performClick()
+        compose.onNodeWithTag("ro-prefix-input").performScrollTo().assertTextContains("dir/")
+        compose.runOnIdle { assertTrue(requests.all { it.method == "GET" }) }
+    }
+
     @Test fun uploadChooserCancellationPreservesDraftAndDoesNotUpload() {
         install(); openBucket()
         compose.onNodeWithTag("ro-upload-key").performScrollTo().performTextInput("dir/new.txt")

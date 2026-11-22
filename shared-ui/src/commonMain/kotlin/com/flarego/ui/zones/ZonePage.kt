@@ -14,6 +14,9 @@ import com.flarego.core.model.*
 import com.flarego.ui.SectionCard
 import com.flarego.ui.CompactTabs
 import com.flarego.ui.CompactListRow
+import com.flarego.ui.DirectoryGroup
+import com.flarego.ui.DirectoryHeading
+import com.flarego.ui.zoneStatusLabel
 import com.flarego.ui.Muted
 import com.flarego.ui.EmptyState
 import com.flarego.ui.Pill
@@ -29,8 +32,9 @@ fun ZonePage(
     modifier: Modifier = Modifier,
     query: String = "",
     dnsContent: @Composable (ZoneDetails) -> Unit = {},
+    initialDns: Boolean = false,
     onRegisterDomain: (() -> Unit)? = null,
- ) = ZonePageContent(state,onIntent,modifier,null,query,dnsContent,onRegisterDomain)
+ ) = ZonePageContent(state,onIntent,modifier,null,query,dnsContent,onRegisterDomain,initialDns)
 
 /** Required slots keep the original trailing-lambda overload source-compatible. */
 @Composable
@@ -49,6 +53,7 @@ private fun ZonePageContent(
     state:ZonePageState,onIntent:(ZoneIntent)->Unit,modifier:Modifier,
     slots:ZoneManagementSlots?,query:String,dnsContent:@Composable (ZoneDetails)->Unit,
     onRegisterDomain:(()->Unit)?=null,
+    initialDns: Boolean = false,
 ) {
     val account = state.account
     val editorMode = state.editorMode
@@ -73,7 +78,7 @@ private fun ZonePageContent(
         })
     }
     var statusFilter by rememberSaveable(account) { mutableStateOf("all") }
-    var localTab by rememberSaveable(account, selected?.ref) { mutableStateOf("details") }
+    var localTab by rememberSaveable(account, selected?.ref) { mutableStateOf(if (initialDns) "dns" else "details") }
     val tab = slots?.selectedTab?.name?.lowercase() ?: localTab
     Column(modifier.fillMaxSize()) {
         if (state.demo) Text("示例 · 未调用云 API", Modifier.padding(horizontal = 20.dp, vertical = 6.dp).testTag("zone-demo-notice"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
@@ -109,24 +114,7 @@ private fun ZonePageContent(
                     Column(
                         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)
                     ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            CompactTabs(
-                                listOf("all" to "全部", "active" to "已激活", "pending" to "待激活"),
-                                statusFilter,
-                                { statusFilter = it },
-                                modifier = Modifier.weight(1f),
-                                tagPrefix = "zone-filter",
-                            )
-                            Text(
-                                "${matchingZones.size} 个",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        DirectoryHeading("已托管", Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
                         if (query.isNotBlank()) {
                             Text(
                                 "已加载域名中匹配 ${matchingZones.size} 个",
@@ -136,28 +124,16 @@ private fun ZonePageContent(
                             )
                         }
                         ZoneTaskSummary(task, onIntent)
-                        matchingZones.forEachIndexed { index, zone ->
-                            CompactListRow(
-                                title = zone.name,
-                                modifier = Modifier.testTag("zone-row-${zone.ref.zoneId}"),
-                                subtitle = when (zone.status) {
-                                    "active" -> "已激活 · DNS 托管"
-                                    "pending" -> "等待名称服务器"
-                                    else -> zone.status
-                                },
-                                trailing = {
-                                    Pill(
-                                        text = when (zone.status) {
-                                            "active" -> "已激活"
-                                            "pending" -> "待激活"
-                                            else -> zone.status
-                                        },
-                                        warning = zone.status != "active",
-                                    )
-                                },
-                                showDivider = index < matchingZones.lastIndex,
-                                onClick = { onIntent(ZoneIntent.Open(zone.ref)) },
-                            )
+                        if (matchingZones.isNotEmpty()) DirectoryGroup(Modifier.padding(horizontal = 16.dp)) {
+                            matchingZones.forEachIndexed { index, zone ->
+                                CompactListRow(
+                                    title = zone.name,
+                                    modifier = Modifier.testTag("zone-row-${zone.ref.zoneId}"),
+                                    value = zoneStatusLabel(zone.status), wrapTitle = true,
+                                    showDivider = index < matchingZones.lastIndex,
+                                    onClick = { onIntent(ZoneIntent.Open(zone.ref)) },
+                                )
+                            }
                         }
                         if (matchingZones.isEmpty() && !state.loading && state.error == null) {
                             Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -169,14 +145,18 @@ private fun ZonePageContent(
                                 )
                             }
                         }
-                        Text(
-                            "仅显示已加载的 DNS 托管区域，不是注册商域名目录。",
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("${matchingZones.size} 个", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            CompactTabs(
+                                listOf("all" to "全部", "active" to "已激活", "pending" to "待激活"),
+                                statusFilter,
+                                { statusFilter = it },
+                                tagPrefix = "zone-filter",
+                                wrapLabels = true,
+                            )
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.Center,

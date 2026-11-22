@@ -43,6 +43,7 @@ class D1ManagementUiTest {
     private var unknown = false
     private var partial = false
     private var productionAuthority = false
+    private var allowD1Writes = true
     private var afterQuery: (suspend () -> Unit)? = null
     private val exportSql = "-- complete synthetic export\n" + "INSERT INTO t VALUES ('synthetic');\n".repeat(3000)
     private fun envelope(result: String) = """{"success":true,"errors":[],"messages":[],"result":$result}"""
@@ -62,7 +63,8 @@ class D1ManagementUiTest {
         val result = when {
             r.path == "/accounts/$account" -> """{"id":"$account","name":"D1 Synthetic"}"""
             r.path == "/user/tokens/verify" -> """{"id":"self","status":"active"}"""
-            r.path == "/user/tokens/self" -> """{"id":"self","status":"active","policies":[{"id":"p","effect":"allow","permission_groups":[{"id":"d1-write"}],"resources":{"com.cloudflare.api.account.$account":"*"}}]}"""
+            r.path == "/user/tokens/self" -> if (allowD1Writes) """{"id":"self","status":"active","policies":[{"id":"p","effect":"allow","permission_groups":[{"id":"d1-write"}],"resources":{"com.cloudflare.api.account.$account":"*"}}]}"""
+                else """{"id":"self","status":"active","policies":[]}"""
             r.path == "/user/tokens/permission_groups" -> """[{"id":"d1-write","name":"D1 Write","scopes":["com.cloudflare.api.account"]}]"""
             r.method == "GET" && r.path.startsWith("$base?") -> "[${row()}]"
             r.method == "GET" && r.path.contains("/time_travel/bookmark") -> """{"bookmark":"synthetic-frozen-bookmark"}"""
@@ -106,7 +108,7 @@ class D1ManagementUiTest {
                     D1TokenAuthorityIssuer(connection,1,{1},OperationClock(System::currentTimeMillis)),guard)
                 else CloudflareD1Client(connection,gateway,transfers,content) { _,_,_ -> guard() }
             },signed)
-            val m = FlareGoViewModel.forD1SyntheticTest(application,Dispatchers.IO,{ transport() },{ transfers },adapters)
+            val m = FlareGoViewModel.forD1SyntheticTest(application,Dispatchers.IO,{ transport() },{ transfers },adapters, updateStore = ManualUpdateFixtureStore())
             initial = m.controller.state.value.connections.map { it.id }.toSet(); model = m
             a.viewModelStore.put("androidx.lifecycle.ViewModelProvider.DefaultKey:com.flarego.FlareGoViewModel",m)
         }
@@ -135,9 +137,14 @@ class D1ManagementUiTest {
     private fun install(open: Boolean = true) {
         compose.runOnIdle { model!!.viewModelScope.launch { model!!.connect("D1 Synthetic",account,"synthetic-d1-token") } }
         waitFor { model!!.controller.state.value.selected?.accountId == account }
-        compose.onNodeWithTag("nav-resources").performClick(); compose.onNodeWithTag("resource-tab-D1").performClick()
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-D1").performClick()
         waitFor { browser.state.value.databases.isNotEmpty() }
-        if (open) { click("d1-db-$uuid"); waitFor { browser.state.value.database != null } }
+        if (open) {
+            scroll("d1-db-$uuid").performClick()
+            waitFor { browser.state.value.database != null }
+        }
     }
     @Test fun systemBackCancelsPrivateEditorBeforeReturningToDatabaseDirectory() {
         install()
@@ -243,10 +250,55 @@ class D1ManagementUiTest {
         compose.runOnIdle { model?.let { m -> m.controller.state.value.connections.filter { it.id !in initial }.forEach(m::disconnect) } }
         waitFor { model?.controller?.state?.value?.connections?.none { it.id !in initial } != false }
     }
+    private fun openD1FromCreateMenu() {
+        assertTrue(initial.isEmpty())
+        val m = checkNotNull(model)
+        compose.runOnIdle { m.viewModelScope.launch { m.connect("D1 Synthetic", account, "synthetic-d1-token") } }
+        waitFor { m.controller.state.value.selected?.accountId == account }
+        compose.onNodeWithTag("nav-resources").performClick()
+    }
+
+    private fun prepareD1FromCreateMenu() {
+        compose.onNodeWithContentDescription("创建资源").performClick()
+        compose.onNodeWithTag("resource-create-D1").performClick()
+        waitFor { browser.state.value.editor == D1Editor.CREATE }
+        input("d1-name", "Created")
+        prepare()
+        compose.onNodeWithText("账号：$account").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("名称：Created").performScrollTo().assertIsDisplayed()
+        assertTrue(requests.all { it.method == "GET" })
+    }
+
+    @Test fun nativeCreateD1FromMenuCancelThenConfirmSyntheticCreate() {
+        openD1FromCreateMenu()
+        prepareD1FromCreateMenu()
+        compose.onNodeWithTag("d1-cancel-confirm").performClick()
+        waitFor { compose.activity.hasWindowFocus() && browser.state.value.editor == null }
+        assertTrue(requests.all { it.method == "GET" })
+        prepareD1FromCreateMenu()
+        stages("menu-create", account)
+        val write = requests.single { it.method != "GET" }
+        assertEquals("POST", write.method)
+        assertEquals(base, write.path)
+        assertTrue(bodies.single().contains("\"name\":\"Created\""))
+        assertEquals(TaskState.SUCCEEDED, browser.state.value.tasks.single().state)
+    }
+
+    @Test fun nativeCreateD1FromMenuWithProductionGuardAndMissingGrantNeverWrites() {
+        productionAuthority = true
+        allowD1Writes = false
+        openD1FromCreateMenu()
+        prepareD1FromCreateMenu()
+        stages("menu-create-denied", account)
+        assertEquals(TaskState.FAILED, browser.state.value.tasks.single().state)
+        assertTrue(requests.any { it.path == "/user/tokens/self" })
+        assertTrue(requests.all { it.method == "GET" })
+    }
+
     @Test fun directoryCreateDetailsReplicationAndDeleteUseRealEntry() {
         install(false); capture("directory",false); click("d1-create"); input("d1-name","Created"); prepare(); stages("create",account)
         assertEquals(1,requests.count { it.method == "POST" && it.path == base })
-        click("d1-db-$uuid"); waitFor { browser.state.value.database != null }; click("d1-details"); waitFor { browser.content.state.value.resultReady }
+        scroll("d1-db-$uuid").performClick(); waitFor { browser.state.value.database != null }; click("d1-details"); waitFor { browser.content.state.value.resultReady }
         click("d1-open-PUT"); compose.runOnIdle { browser.edit { it.copy(replication = D1Replication.auto) } }; prepare(); stages("put")
         click("d1-open-PATCH"); compose.runOnIdle { browser.edit { it.copy(replication = null) } }; prepare(); stages("patch")
         assertEquals("{}",bodies.last()); click("d1-open-DELETE"); prepare(); stages("delete")
@@ -338,7 +390,10 @@ class D1ManagementUiTest {
     @Test fun controlledBrowseAndRawBatchKeepTypesAndDoNotTurnCustomSqlIntoRead() {
         install(); click("d1-private-begin"); input("d1-table","private-table"); input("d1-filter-column","id"); input("d1-filter-value","private-filter"); input("d1-sort-column","id")
         for (kind in D1BrowseKind.entries) { val before = requests.size; click("d1-browse-${kind.name}"); waitFor { requests.size > before && !browser.state.value.loading }; assertTrue(browser.state.value.tasks.isEmpty()) }
-        click("d1-open-RAW"); click("d1-json-mode"); input("d1-json","""{"batch":[{"sql":"SELECT 'private-batch;';","params":[]},{"sql":"PRAGMA user_version=3;","params":[]}]}""")
+        val database = browser.state.value.database?.ref
+        click("d1-open-SQL"); click("d1-workspace-browse")
+        assertEquals(database, browser.state.value.database?.ref)
+        click("d1-open-SQL"); click("d1-open-RAW"); click("d1-json-mode"); input("d1-json","""{"batch":[{"sql":"SELECT 'private-batch;';","params":[]},{"sql":"PRAGMA user_version=3;","params":[]}]}""")
         prepare(); stages("raw-batch"); assertEquals(1,requests.count { it.path.endsWith("/raw") })
         click("d1-result-next"); click("d1-reveal"); scroll("d1-result-page").assertTextContains("9223372036854775807",substring = true); capture("raw-types",false)
     }
@@ -365,7 +420,7 @@ class D1ManagementUiTest {
     @Test fun undeleteExactUuidAndProductionMissingEvidenceRemainClosed() {
         install(false); click("d1-undelete"); input("d1-uuid",uuid); input("d1-name","Restored"); prepare(); stages("undelete")
         assertTrue(bodies.single().contains("new_name")); assertEquals(1,requests.count { it.path.endsWith("/undelete") })
-        click("d1-db-$uuid"); waitFor { browser.state.value.database != null }; productionAuthority = true
+        scroll("d1-db-$uuid").performClick(); waitFor { browser.state.value.database != null }; productionAuthority = true
         click("d1-open-EXPORT"); prepare(); stages("production-export-closed")
         assertEquals(TaskState.FAILED,browser.state.value.tasks.first { it.actionKey == "d1-export-database" }.state)
         assertTrue(requests.none { it.path == "$path/export" }); capture("production-evidence-closed",false)
@@ -373,10 +428,17 @@ class D1ManagementUiTest {
     @Test fun partialAndUnknownKeepDurableDatabaseGateWithoutReplay() {
         partial = true; install(); click("d1-open-SQL"); input("d1-sql","SELECT 1; INSERT INTO t VALUES(2);"); prepare(); stages("partial")
         assertEquals(TaskState.PARTIAL,browser.state.value.tasks.single().state); assertTrue(browser.content.state.value.resultReady)
+        click("d1-workspace-browse")
         click("d1-open-DELETE"); prepareExpectBlocked(); assertEquals(1,requests.count { it.path.endsWith("/query") }); assertTrue(requests.none { it.method == "DELETE" })
-        compose.runOnIdle { browser.closeTask(browser.state.value.tasks.single().id,uuid,true) }; waitFor { browser.state.value.tasks.single().state == TaskState.ACTION_REQUIRED }
+        click("d1-close-task-${browser.state.value.tasks.single().id}")
+        compose.onNodeWithTag("d1-close-confirm").assertIsNotEnabled()
+        compose.onNodeWithTag("d1-close-id").performScrollTo().performTextReplacement(uuid)
+        hideKeyboard()
+        compose.onNodeWithTag("d1-close-ack").performScrollTo().performClick()
+        compose.onNodeWithTag("d1-close-confirm").assertIsEnabled().performClick()
+        waitFor { browser.state.value.tasks.single().state == TaskState.ACTION_REQUIRED }
         partial = false; unknown = true; click("d1-open-SQL"); input("d1-sql","INSERT INTO t VALUES(3);"); prepare(); stages("unknown")
-        assertTrue(browser.state.value.tasks.any { it.state == TaskState.UNKNOWN }); click("d1-open-PUT"); prepareExpectBlocked(); capture("unknown-gate",false)
+        assertTrue(browser.state.value.tasks.any { it.state == TaskState.UNKNOWN }); click("d1-workspace-browse"); click("d1-open-PUT"); prepareExpectBlocked(); capture("unknown-gate",false)
         assertEquals(2,requests.count { it.path.endsWith("/query") }); assertTrue(requests.none { it.method == "PUT" })
     }
     private fun prepareExpectBlocked() { click("d1-prepare"); waitFor { browser.state.value.error != null }; assertNull(browser.content.state.value.confirmation) }

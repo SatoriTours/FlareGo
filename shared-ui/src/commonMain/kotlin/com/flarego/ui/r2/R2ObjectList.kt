@@ -1,6 +1,11 @@
 package com.flarego.ui.r2
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,8 +41,12 @@ fun R2ObjectList(
     state: R2ObjectListState,
     onIntent: (R2ObjectIntent) -> Unit,
     modifier: Modifier = Modifier,
+    scroll: androidx.compose.foundation.ScrollState = rememberScrollState(),
+    showDirectoryBack: Boolean = true,
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val uploadAnchor = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
         if (state.loading || state.refreshing) {
@@ -48,7 +57,7 @@ fun R2ObjectList(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -57,7 +66,7 @@ fun R2ObjectList(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconButton(
+                if (showDirectoryBack) IconButton(
                     onClick = { onIntent(R2ObjectIntent.BackToBuckets) },
                     modifier = Modifier.testTag("ro-back-buckets"),
                 ) {
@@ -210,6 +219,23 @@ fun R2ObjectList(
                 }
             }
 
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (state.prefix.isEmpty()) {
+                    Text("桶根目录", Modifier.padding(vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    TextButton(onClick = { onIntent(R2ObjectIntent.PrefixChanged("")) },
+                        modifier = Modifier.testTag("ro-root-prefix")) { Text("桶根目录") }
+                    val parent = state.prefix.removeSuffix("/").substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
+                    if (parent != null) TextButton(onClick = { onIntent(R2ObjectIntent.PrefixChanged("$parent/")) }) {
+                        Text("上一级前缀")
+                    }
+                }
+                TextButton(onClick = {
+                    if (state.uploadKey.isEmpty() && state.prefix.endsWith('/'))
+                        onIntent(R2ObjectIntent.UploadKeyChanged(state.prefix))
+                    scope.launch { uploadAnchor.bringIntoView() }
+                }, modifier = Modifier.testTag("ro-open-upload")) { Text("上传文件") }
+            }
             // 前缀筛选
             OutlinedTextField(
                 value = state.prefix,
@@ -219,6 +245,134 @@ fun R2ObjectList(
                 singleLine = true,
             )
 
+            if (!state.loading && state.error == null) {
+                val folders = state.rows.asSequence().map { it.key }.filter { it.startsWith(state.prefix) }
+                    .map { it.removePrefix(state.prefix).substringBefore('/', "") }
+                    .filter { it.isNotEmpty() }.distinct().toList()
+                if (folders.isNotEmpty()) {
+                    com.flarego.ui.DirectoryHeading("已加载键的下级前缀")
+                    com.flarego.ui.DirectoryGroup {
+                        folders.forEach { segment ->
+                            val prefix = state.prefix + segment + "/"
+                            com.flarego.ui.CompactListRow("$segment/", value = "前缀",
+                                modifier = Modifier.testTag("ro-folder-$prefix"),
+                                onClick = { onIntent(R2ObjectIntent.PrefixChanged(prefix)) },
+                                wrapTitle = true, showDivider = false)
+                        }
+                    }
+                }
+            }
+            Text(
+                text = "对象列表 (${state.rows.size})",
+                style = MaterialTheme.typography.titleMedium,
+            )
+
+            if (state.rows.isEmpty()) {
+                SectionCard(modifier = Modifier.fillMaxWidth()) {
+                    when {
+                        state.error != null -> {
+                            Text(
+                                text = "加载失败",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        state.loading -> {
+                            Text(
+                                text = "正在加载对象...",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = "尚无数据",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+            } else {
+                state.rows.forEach { row ->
+                    val isChecked = row.key in state.selected
+                    SectionCard(modifier = Modifier.fillMaxWidth()) {
+                        val expanded = state.expandedKey == row.key
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { onIntent(R2ObjectIntent.ToggleSelection(row.key)) },
+                                modifier = Modifier.testTag("ro-checkbox-${row.key}"),
+                            )
+                            com.flarego.ui.CompactListRow(
+                                row.key, modifier = Modifier.weight(1f).testTag("ro-row-${row.key}"),
+                                value = formatBytes(row.size), showDivider = false, wrapTitle = true,
+                                onClick = { onIntent(R2ObjectIntent.ToggleDetails(row.key)) },
+                            )
+                        }
+                        if (expanded) {
+                            Text("完整键：${row.key}", style = MaterialTheme.typography.bodySmall)
+                            Text("ETag：${row.etag ?: "未提供"} · 最后修改：${row.lastModified ?: "未提供"}",
+                                style = MaterialTheme.typography.bodySmall)
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = { clipboardManager.setText(AnnotatedString(row.key)) },
+                                    modifier = Modifier.testTag("ro-copy-${row.key}"),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("复制键名")
+                                }
+                                OutlinedButton(
+                                    onClick = { onIntent(R2ObjectIntent.RequestDownload(row.key)) },
+                                    modifier = Modifier.testTag("ro-download-${row.key}"),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("下载")
+                                }
+                                OutlinedButton(
+                                    onClick = { onIntent(R2ObjectIntent.RequestDelete(row.key)) },
+                                    modifier = Modifier.testTag("ro-delete-${row.key}"),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error,
+                                    ),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("删除")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.nextCursor != null) {
+                OutlinedButton(
+                    onClick = { onIntent(R2ObjectIntent.LoadMore) },
+                    enabled = !state.loading,
+                    modifier = Modifier.fillMaxWidth().testTag("ro-load-more"),
+                ) {
+                    Text(if (state.loading) "正在加载..." else "加载更多对象")
+                }
+            }
             // 上传区域
             SectionCard(modifier = Modifier.fillMaxWidth().testTag("ro-upload-card")) {
                 Text(
@@ -230,9 +384,11 @@ fun R2ObjectList(
                     onValueChange = { onIntent(R2ObjectIntent.UploadKeyChanged(it)) },
                     label = { Text("对象键 (Key)") },
                     placeholder = { Text("例如 path/to/file.png") },
-                    modifier = Modifier.fillMaxWidth().testTag("ro-upload-key"),
+                    modifier = Modifier.fillMaxWidth().bringIntoViewRequester(uploadAnchor).testTag("ro-upload-key"),
                     singleLine = true,
                 )
+                Text("同名键可能覆盖已有对象。选择文件只暂存，核对后再发送。",
+                    style = MaterialTheme.typography.bodySmall)
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -249,7 +405,7 @@ fun R2ObjectList(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("选择文件并上传")
+                        Text("选择文件")
                     }
                     if (state.uploadKey.isNotBlank()) {
                         Button(
@@ -257,7 +413,7 @@ fun R2ObjectList(
                             enabled = !state.loading,
                             modifier = Modifier.testTag("ro-upload-confirm"),
                         ) {
-                            Text("确认上传")
+                            Text("预览上传")
                         }
                         OutlinedButton(
                             onClick = { onIntent(R2ObjectIntent.CancelUpload) },
@@ -305,132 +461,6 @@ fun R2ObjectList(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 ) {
                     Text("批量删除已选 (${state.selected.size})")
-                }
-            }
-
-            Text(
-                text = "对象列表 (${state.rows.size})",
-                style = MaterialTheme.typography.titleMedium,
-            )
-
-            if (state.rows.isEmpty()) {
-                SectionCard(modifier = Modifier.fillMaxWidth()) {
-                    when {
-                        state.error != null -> {
-                            Text(
-                                text = "加载失败",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        state.loading -> {
-                            Text(
-                                text = "正在加载对象...",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        else -> {
-                            Text(
-                                text = "尚无数据",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                    }
-                }
-            } else {
-                state.rows.forEach { row ->
-                    val isChecked = row.key in state.selected
-                    SectionCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Checkbox(
-                                checked = isChecked,
-                                onCheckedChange = { onIntent(R2ObjectIntent.ToggleSelection(row.key)) },
-                                modifier = Modifier.testTag("ro-checkbox-${row.key}"),
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Text(
-                                    text = row.key,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    modifier = Modifier.testTag("ro-row-${row.key}"),
-                                )
-                                Text(
-                                    text = "大小：${formatBytes(row.size)} · ETag：${row.etag ?: "—"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = "最后修改：${row.lastModified ?: "—"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            OutlinedButton(
-                                onClick = { clipboardManager.setText(AnnotatedString(row.key)) },
-                                modifier = Modifier.testTag("ro-copy-${row.key}"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("复制键名")
-                            }
-                            OutlinedButton(
-                                onClick = { onIntent(R2ObjectIntent.RequestDownload(row.key)) },
-                                modifier = Modifier.testTag("ro-download-${row.key}"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudDownload,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("下载")
-                            }
-                            OutlinedButton(
-                                onClick = { onIntent(R2ObjectIntent.RequestDelete(row.key)) },
-                                modifier = Modifier.testTag("ro-delete-${row.key}"),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error,
-                                ),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("删除")
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (state.nextCursor != null) {
-                OutlinedButton(
-                    onClick = { onIntent(R2ObjectIntent.LoadMore) },
-                    enabled = !state.loading,
-                    modifier = Modifier.fillMaxWidth().testTag("ro-load-more"),
-                ) {
-                    Text(if (state.loading) "正在加载..." else "加载更多对象")
                 }
             }
         }

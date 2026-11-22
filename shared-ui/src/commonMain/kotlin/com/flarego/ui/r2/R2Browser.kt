@@ -270,8 +270,10 @@ class R2Browser(
                     val notice = if (wasConfiguration) configurationTaskNotice(task) else taskNotice(task)
                     mutable.value = mutable.value.copy(notice = notice, preview = null,
                         objects = mutable.value.objects?.copy(notice = notice))
-                    if (command is R2Command.Object && (command as R2Command.Object).write is R2ObjectWrite.Upload) clearUpload()
+                    val uploaded = (command as? R2Command.Object)?.write is R2ObjectWrite.Upload
+                    if (uploaded) clearUpload()
                     command = null
+                    if (uploaded && task.state == TaskState.SUCCEEDED) loadObjects(false)
                     if (wasConfiguration) {
                         configuration.onRootSettled(notice, reload = task.state == TaskState.SUCCEEDED)
                     }
@@ -452,14 +454,21 @@ class R2Browser(
             R2BucketIntent.ConfirmDelete -> b.pendingDeleteName?.let {
                 prepareWrite(R2Command.Bucket(R2BucketWrite.Delete(bound!!.account, it, b.typedDeleteName)))
             }
-            is R2BucketIntent.OpenBucket -> if (b.rows.any { it.name == intent.name }) {
-                invalidateDraft(); job?.cancel(); seen.clear()
-                mutable.value = mutable.value.copy(objects = R2ObjectListState(intent.name))
-                loadObjects(false)
-            }
+            is R2BucketIntent.OpenBucket -> if (b.rows.any { it.name == intent.name }) openBucket(intent.name)
             R2BucketIntent.Refresh -> loadBuckets(false)
             R2BucketIntent.LoadMore -> loadBuckets(true)
         }
+    }
+
+    /** Read by exact bucket identity from an account-scoped visit, including later directory pages. */
+    internal fun openVisitedBucket(account: AccountScope, bucket: String) {
+        if (current() && bound?.account == account && !mutable.value.writing) openBucket(bucket)
+    }
+
+    private fun openBucket(name: String) {
+        invalidateWrite(); invalidateDraft(); job?.cancel(); seen.clear()
+        mutable.update { it.copy(objects = R2ObjectListState(name), buckets = it.buckets.copy(loading = false)) }
+        loadObjects(false)
     }
 
     fun onObjectIntent(intent: R2ObjectIntent) {
@@ -468,6 +477,10 @@ class R2Browser(
         val o = mutable.value.objects ?: return
         fun update(next: R2ObjectListState) { mutable.value = mutable.value.copy(objects = next) }
         when (intent) {
+            is R2ObjectIntent.ToggleDetails -> if (o.rows.any { it.key == intent.key }) {
+                update(o.copy(expandedKey = intent.key.takeUnless { it == o.expandedKey }))
+            }
+            R2ObjectIntent.CloseDetails -> update(o.copy(expandedKey = null))
             R2ObjectIntent.BackToBuckets -> {
                 invalidateDraft(); epoch++; job?.cancel(); seen.clear()
                 mutable.value = mutable.value.copy(objects = null)
@@ -478,7 +491,7 @@ class R2Browser(
             R2ObjectIntent.LoadMore -> loadObjects(true)
             is R2ObjectIntent.PrefixChanged -> {
                 invalidateDraft(); job?.cancel(); seen.clear()
-                update(o.copy(prefix = intent.value, selected = emptySet(), pendingBulkDelete = false, pendingDeleteKey = null, loading = false))
+                update(o.copy(prefix = intent.value, expandedKey = null, selected = emptySet(), pendingBulkDelete = false, pendingDeleteKey = null, loading = false))
                 loadObjects(false)
             }
             is R2ObjectIntent.UploadKeyChanged -> { invalidateDraft(); update(o.copy(uploadKey = intent.value, validationMessage = null)) }
@@ -572,7 +585,8 @@ class R2Browser(
                 val merged = if (append) old.rows + rows else rows
                 if (merged.map { it.key }.toSet().size != merged.size) throw invalidPage()
                 mutable.value = mutable.value.copy(objects = mutable.value.objects!!.copy(
-                    rows = merged, nextCursor = (page.next as? PageToken.Cursor)?.value, loading = false, error = null))
+                    rows = merged, expandedKey = mutable.value.objects?.expandedKey?.takeIf { key -> merged.any { it.key == key } },
+                    nextCursor = (page.next as? PageToken.Cursor)?.value, loading = false, error = null))
             } catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { if (valid(context, generation)) mutable.value = mutable.value.copy(objects = mutable.value.objects!!.copy(loading = false, error = safe(e))) }
         }

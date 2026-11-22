@@ -121,6 +121,11 @@ enum class Page(val title: String) {
     JOBS("操作记录"),
 }
 
+sealed interface RecentVisit {
+    data class Zone(val domain: Domain) : RecentVisit
+    data class Resource(val resource: CloudResource) : RecentVisit
+}
+
 data class AppState(
     val connections: List<Connection>,
     val selected: Connection?,
@@ -142,6 +147,7 @@ data class AppState(
     val billingSource: BillingSource = BillingSource.ACCOUNT_HISTORY,
     val legacyBillingLoading: Boolean = false,
     val workersMode: WorkersDirectoryMode = WorkersDirectoryMode.MODERN,
+    val recent: List<RecentVisit> = emptyList(),
 )
 
 class CloudException(val publicMessage: String, val uncertain: Boolean = false) :

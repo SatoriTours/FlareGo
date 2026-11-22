@@ -170,7 +170,8 @@ class R2CManagementUiTest {
         val m = checkNotNull(model)
         compose.setContent { FlareGoApp(m.controller, m::disconnect, {}, r2Browser = m.r2Browser) }
         compose.onNodeWithTag("nav-resources").performClick()
-        compose.onNodeWithText("R2", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-R2").performClick()
         compose.waitUntil(10000) { !m.r2Browser.state.value.buckets.loading && synchronized(requests) { requests.any { it.path.endsWith("/r2/buckets?per_page=50") } } }
     }
 

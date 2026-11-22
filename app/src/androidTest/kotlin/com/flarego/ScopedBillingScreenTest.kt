@@ -21,7 +21,7 @@ class ScopedBillingScreenTest {
         compose.setContent { FlareGoTheme {
             ScopedBillingScreen(connection,account,CloudPage(listOf(entry()),null,null),{})
         } }
-        compose.onNodeWithText("当前账号账单历史").assertIsDisplayed()
+        compose.onNodeWithText("账单历史").assertIsDisplayed()
         compose.onNodeWithText("未知 USD").assertIsDisplayed()
         compose.onNodeWithText("用户级账单历史 · 旧接口").assertDoesNotExist()
         compose.onNodeWithText("0 USD").assertDoesNotExist()
@@ -35,7 +35,7 @@ class ScopedBillingScreenTest {
             ScopedBillingScreen(connection,user,CloudPage(listOf(entry(user,"20.99")),null,null),{opened++})
         } }
         compose.onNodeWithText("用户级账单历史 · 旧接口").assertIsDisplayed()
-        compose.onNodeWithText("当前账号账单历史").assertDoesNotExist()
+        compose.onNodeWithText("账单历史").assertDoesNotExist()
         compose.onNodeWithText("20.99 USD").assertIsDisplayed()
         compose.onNodeWithText("在官方控制台查看费用与发票").performClick()
         compose.runOnIdle { assertEquals(1,opened) }
@@ -48,7 +48,7 @@ class ScopedBillingScreenTest {
         } }
         compose.onNodeWithText("账单范围与当前连接不一致，请重新加载").assertIsDisplayed()
         compose.onNodeWithText("Scoped charge").assertDoesNotExist()
-        compose.onNodeWithText("当前账号账单历史").assertDoesNotExist()
+        compose.onNodeWithText("账单历史").assertDoesNotExist()
     }
 
     @Test fun mixedScopeRowsAreNotPublishedUnderAnAccountTitle() {
@@ -79,6 +79,6 @@ class ScopedBillingScreenTest {
             ScopedBillingScreen(connection,ZoneScope(account,"zone"),CloudPage(emptyList(),null,null),{})
         } }
         compose.onNodeWithText("不支持此账单范围，请选择账号或用户").assertIsDisplayed()
-        compose.onNodeWithText("当前账号账单历史").assertDoesNotExist()
+        compose.onNodeWithText("账单历史").assertDoesNotExist()
     }
 }

@@ -43,6 +43,7 @@ class R2DocumentPickerIntegrationTest {
     private var downloadCalls = 0
     private var pickerResolvedByUser = false
     private var failDownloadAfterFirstChunk = false
+    private var createdBucket = false
     private val byteCount = 5L * 1024 * 1024
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
     private fun zeroDigest(): String {
@@ -88,6 +89,17 @@ class R2DocumentPickerIntegrationTest {
                 """{"key":"dir/new.bin","size":"$length","etag":"synthetic","uploaded":"2026-10-18T00:00:00Z"}"""
             }
             request.path.contains("/objects?") -> """[{"key":"dir/remote.bin","size":$byteCount,"etag":"synthetic"}]"""
+            request.path.endsWith("/r2/buckets/new-bucket") -> when (request.method) {
+                "PUT" -> {
+                    assertEquals("InfrequentAccess", request.headers["cf-r2-storage-class"])
+                    assertEquals(HttpBody.Empty, request.payload)
+                    createdBucket = true
+                    """{"name":"new-bucket","storage_class":"InfrequentAccess"}"""
+                }
+                "GET" -> if (createdBucket) """{"name":"new-bucket","storage_class":"InfrequentAccess"}"""
+                    else return@HttpTransport HttpResponse(404, "not found")
+                else -> error("Unexpected bucket method")
+            }
             request.path.endsWith("/r2/buckets/my-bucket") -> """{"name":"my-bucket","storage_class":"Standard"}"""
             request.path.contains("/r2/buckets?") -> """{"buckets":[{"name":"my-bucket","storage_class":"Standard"}]}"""
             else -> "[]"
@@ -99,7 +111,7 @@ class R2DocumentPickerIntegrationTest {
             if (activity !is MainActivity) return
             activityCreates.incrementAndGet()
             if (model != null) return // Real recreation must retain the original store, not reinject a new VM.
-            val m = FlareGoViewModel(application, Dispatchers.IO, { transport() }, { transfers })
+            val m = FlareGoViewModel(application, Dispatchers.IO, { transport() }, { transfers }, updateStore = ManualUpdateFixtureStore())
             initialConnections = m.controller.state.value.connections.map { it.id }.toSet()
             initialGrants += application.contentResolver.persistedUriPermissions.map { it.uri.toString() }
             initialStaging = stagingFiles()
@@ -128,7 +140,8 @@ class R2DocumentPickerIntegrationTest {
         }
         compose.waitUntil(10000) { m.controller.state.value.selected?.accountId == account }
         compose.onNodeWithTag("nav-resources").performClick()
-        compose.onNodeWithText("R2", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("resource-type-selector").performClick()
+        compose.onNodeWithTag("resource-tab-R2").performClick()
         compose.waitUntil(10000) { m.r2Browser.state.value.buckets.rows.isNotEmpty() }
         compose.onNodeWithTag("rb-open-my-bucket").performScrollTo().performClick()
         compose.waitUntil(10000) { m.r2Browser.state.value.objects?.rows?.isNotEmpty() == true }
@@ -225,6 +238,39 @@ class R2DocumentPickerIntegrationTest {
         waitFor("All private staging owned by this test must be released") { stagingFiles() == initialStaging }
         ownedFiles.forEach { shell("rm -f /sdcard/Download/${quote(it)}") }
     }
+    @Test fun nativeCreateR2FromResourceMenuChecksTargetCancelsAndConfirmsOnce() {
+        val m = checkNotNull(model)
+        assertTrue(initialConnections.isEmpty())
+        compose.runOnIdle { m.viewModelScope.launch { m.connect("R2 Picker Fixture", account, "synthetic-picker-token") } }
+        compose.waitUntil(12_000) { m.controller.state.value.selected?.accountId == account }
+        compose.onNodeWithTag("nav-resources").performClick()
+        compose.onNodeWithContentDescription("创建资源").performClick()
+        compose.onNodeWithTag("resource-create-R2").performClick()
+        compose.onNodeWithTag("rb-create-mode-put").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("rb-create-name").performScrollTo().performTextReplacement("new-bucket")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.onNodeWithTag("rb-storage-class-InfrequentAccess").performScrollTo().performClick()
+        fun review() {
+            compose.onNodeWithTag("rb-create-submit").performScrollTo().performClick()
+            compose.waitUntil(12_000) { m.r2Browser.state.value.preview != null }
+            compose.onNodeWithText("目标存储桶：new-bucket").performScrollTo().assertIsDisplayed()
+            assertTrue(requests.all { it.method == "GET" })
+        }
+        review()
+        compose.onNodeWithTag("rp-cancel").performScrollTo().performClick()
+        assertTrue(requests.all { it.method == "GET" })
+        review()
+        val bitmap = checkNotNull(automation.takeScreenshot())
+        try {
+            java.io.File(application.cacheDir, "reaccept-r2-create-review.png").outputStream().use {
+                assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { bitmap.recycle() }
+        compose.onNodeWithTag("rp-confirm").performScrollTo().performClick()
+        compose.waitUntil(12_000) { m.r2Browser.writeTasks.value.singleOrNull()?.state == TaskState.SUCCEEDED }
+        assertEquals("/accounts/$account/r2/buckets/new-bucket", requests.single { it.method == "PUT" }.path)
+    }
+
     @Test fun nativeOpenDocumentCancellationReturnsToTheSameVmAndCanOpenAgain() {
         val m = openR2(); uploadPicker()
         assertEquals(1, activityCreates.get())
@@ -242,7 +288,9 @@ class R2DocumentPickerIntegrationTest {
     @Test fun nativeOpenDocumentStagesExactBytesAndOnlyExplicitConfirmationUploads() {
         val name = ownedName("source")
         shell("dd if=/dev/zero of=/sdcard/Download/${quote(name)} bs=8192 count=640 2>/dev/null")
-        val m = openR2(); captureEvidence("object-list"); uploadPicker(); downloads()
+        val m = openR2()
+        compose.onNodeWithTag("ro-prefix-input").performScrollTo().performTextInput("dir/")
+        captureEvidence("object-list"); uploadPicker(); downloads()
         waitFor("The owned source must be selected through the OS picker") { clickSystem(name) }
         compose.waitUntil(15000) { m.r2Browser.state.value.stagedUpload != null }
         compose.runOnIdle {
@@ -263,6 +311,11 @@ class R2DocumentPickerIntegrationTest {
             assertEquals(1, requests.count { it.method == "PUT" })
             assertEquals(byteCount, uploadLength); assertEquals(zeroDigest(), uploadSha256)
             assertNull(m.r2Browser.state.value.stagedUpload)
+            assertEquals("dir/", m.r2Browser.state.value.objects?.prefix)
+        }
+        compose.waitUntil(10_000) {
+            val write = requests.indexOfFirst { it.method == "PUT" }
+            write >= 0 && requests.drop(write + 1).any { it.method == "GET" && "/objects?" in it.path && "prefix=dir%2F" in it.path }
         }
         captureEvidence("upload-settled")
         assertEquals(zeroDigest(), shell("sha256sum /sdcard/Download/${quote(name)}").trim().substringBefore(' '))
@@ -293,6 +346,7 @@ class R2DocumentPickerIntegrationTest {
     @Test fun nativeCreateDocumentDeliversToRetainedVmAndDoesNotReplayAfterRecreation() {
         val name = ownedName("recreate-download")
         val m = openR2()
+        compose.onNodeWithTag("ro-row-dir/remote.bin").performScrollTo().performClick()
         compose.onNodeWithTag("ro-download-dir/remote.bin").performScrollTo().performClick(); waitPicker()
         val original = recreateUnderPicker(); saveSystem(name)
         compose.waitUntil(15000) { m.r2Browser.state.value.objects?.notice?.contains("已保存") == true }
@@ -324,6 +378,7 @@ class R2DocumentPickerIntegrationTest {
     }
     @Test fun nativeCreateDocumentCancellationDoesNotDownloadOrCreateATask() {
         val m = openR2()
+        compose.onNodeWithTag("ro-row-dir/remote.bin").performScrollTo().performClick()
         compose.onNodeWithTag("ro-download-dir/remote.bin").performScrollTo().performClick(); waitPicker()
         cancelSystem()
         compose.waitUntil(10000) { m.r2Browser.state.value.objects?.notice?.contains("取消") == true }
@@ -336,6 +391,7 @@ class R2DocumentPickerIntegrationTest {
         val name = ownedName("failed-download")
         failDownloadAfterFirstChunk = true
         val m = openR2()
+        compose.onNodeWithTag("ro-row-dir/remote.bin").performScrollTo().performClick()
         compose.onNodeWithTag("ro-download-dir/remote.bin").performScrollTo().performClick(); waitPicker(); saveSystem(name)
         compose.waitUntil(15000) { m.r2Browser.state.value.objects?.notice?.contains("未完成") == true }
         assertEquals(1, downloadCalls)
@@ -354,6 +410,7 @@ class R2DocumentPickerIntegrationTest {
     @Test fun nativeCreateDocumentPublishesExactStreamedBytes() {
         val name = ownedName("download")
         val m = openR2()
+        compose.onNodeWithTag("ro-row-dir/remote.bin").performScrollTo().performClick()
         compose.onNodeWithTag("ro-download-dir/remote.bin").performScrollTo().performClick(); waitPicker(); saveSystem(name)
         compose.waitUntil(15000) { m.r2Browser.state.value.objects?.notice?.contains("已保存") == true }
         assertEquals(1, downloadCalls)

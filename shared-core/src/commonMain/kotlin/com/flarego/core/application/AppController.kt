@@ -40,6 +40,21 @@ class AppController(
     private var uiEpoch = 0
     private var revision = 0
     private var dnsRevision = 0
+    private var objectReturnPage: Page? = null
+    private val recentByAccount = mutableMapOf<AccountScope, List<RecentVisit>>()
+
+    private fun recordVisit(visit: RecentVisit) {
+        val owner = account(state.value.selected) ?: return
+        fun sameObject(other: RecentVisit) = when {
+            visit is RecentVisit.Zone && other is RecentVisit.Zone -> visit.domain.id == other.domain.id
+            visit is RecentVisit.Resource && other is RecentVisit.Resource ->
+                visit.resource.kind == other.resource.kind && visit.resource.id == other.resource.id
+            else -> false
+        }
+        val recent = (listOf(visit) + recentByAccount[owner].orEmpty().filterNot(::sameObject)).take(3)
+        recentByAccount[owner] = recent
+        mutable.update { it.copy(recent = recent) }
+    }
     private val writeLock = Mutex()
 
     private suspend fun session(connection: Connection): CloudSession {
@@ -133,6 +148,7 @@ class AppController(
     }
 
     fun navigate(page: Page) {
+        objectReturnPage = null
         workerReleases?.clear()
         bumpUiEpoch()
         dnsRevision++
@@ -156,7 +172,7 @@ class AppController(
     fun back() {
         if (state.value.page == Page.RESOURCE && workerReleases?.back() == true) return
         navigate(
-            when (state.value.page) {
+            objectReturnPage ?: when (state.value.page) {
                 Page.DNS,
                 Page.BUY -> Page.DOMAINS
                 Page.RESOURCE -> Page.RESOURCES
@@ -168,22 +184,41 @@ class AppController(
     fun selectConnection(connection: Connection) {
         bumpUiEpoch()
         if (connection !in state.value.connections) return
+        val fromDetail = objectReturnPage
+        objectReturnPage = null
         workerReleases?.clear()
         revision++
         dnsRevision++
         val root =
-            when (state.value.page) {
+            fromDetail ?: when (state.value.page) {
                 Page.DNS,
                 Page.BUY -> Page.DOMAINS
                 Page.RESOURCE -> Page.RESOURCES
                 else -> state.value.page
             }
         mutable.update {
-            AppState(it.connections, connection, page = root, operations = store.operations(), productLoading = loader != null, resourceKind = it.resourceKind, tasks = it.tasks, workersMode = it.workersMode)
+            AppState(it.connections, connection, page = root, operations = store.operations(), productLoading = loader != null, resourceKind = it.resourceKind, tasks = it.tasks, workersMode = it.workersMode,
+                recent = recentByAccount[account(connection)].orEmpty())
         }
         resetProducts()
         // Selection/startup remain lazy; only an explicit overview refresh reads all products.
         if (loader != null) loadActive() else refresh()
+    }
+
+    /** Restore only the same, still-selected workspace after a confirmed credential replacement. */
+    fun resumeAfterTokenUpgrade(connection: Connection, previous: AppState) {
+        val owner = account(connection)
+        if (account(previous.selected) != owner || account(state.value.selected) != owner ||
+            state.value.page != previous.page) return
+        val returnPage = objectReturnPage
+        selectConnection(connection)
+        val domain = previous.domain?.takeIf { it.connectionId == connection.id }
+        when {
+            previous.page == Page.DNS && domain != null && management != null ->
+                openDomain(domain, fromHome = returnPage == Page.OVERVIEW, managed = true)
+            previous.page == Page.BILLING && previous.billingSource != state.value.billingSource ->
+                selectBillingSource(previous.billingSource)
+        }
     }
 
     fun invalidateSession(id: String) {
@@ -203,6 +238,7 @@ class AppController(
 
     fun reloadConnections(connections: List<Connection>) {
         bumpUiEpoch()
+        recentByAccount.keys.retainAll(connections.mapNotNull(::account).toSet())
         val selected = state.value.selected
         val retained = connections.firstOrNull { it.id == selected?.id }
         sessions.keys.retainAll(connections.map { it.id }.toSet())
@@ -215,34 +251,64 @@ class AppController(
             }
         } else {
             // Invalidate every outstanding read before dropping the old account's data.
+            objectReturnPage = null
             workerReleases?.clear()
             revision++
             dnsRevision++
             mutable.update {
-                AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = loader != null)
+                AppState(connections, connections.firstOrNull(), operations = store.operations(), productLoading = loader != null,
+                    recent = recentByAccount[account(connections.firstOrNull())].orEmpty())
             }
             resetProducts()
             if (loader != null) loadActive() else refresh()
         }
     }
 
-    fun openResource(resource: CloudResource) {
+    fun openResource(resource: CloudResource) = openResource(resource, fromHome = false)
+
+    private fun openResource(resource: CloudResource, fromHome: Boolean) {
         val connection = state.value.selected ?: return
-        if (loader != null && (resource.resourceRef?.scope != account(connection) || resource !in state.value.inventory.resources)) return
+        if (loader != null && (resource.resourceRef?.scope != account(connection) ||
+            (!fromHome && resource !in state.value.inventory.resources))) return
+        objectReturnPage = if (fromHome) Page.OVERVIEW else Page.RESOURCES
         bumpUiEpoch()
         mutable.update { it.copy(page = Page.RESOURCE, resource = resource, error = null) }
         workerReleases?.open(connection, resource)
+        if (resource.kind in setOf(ResourceKind.WORKER, ResourceKind.R2)) recordVisit(RecentVisit.Resource(resource))
     }
 
-    fun openDomain(domain: Domain) {
-        bumpUiEpoch()
+    fun recordBucketOpened(owner: AccountScope, bucket: String) {
+        if (owner != account(state.value.selected) || state.value.page != Page.RESOURCES ||
+            state.value.resourceKind != ResourceKind.R2) return
+        recordVisit(RecentVisit.Resource(CloudResource(bucket, bucket, ResourceKind.R2, "")))
+    }
+
+    fun openDomain(domain: Domain) = openDomain(domain, fromHome = false, managed = false)
+
+    private fun openDomain(domain: Domain, fromHome: Boolean, managed: Boolean) {
         if (domain.connectionId != state.value.selected?.id) return
-        if (loader != null && domain !in state.value.inventory.domains) return
+        if (loader != null && !fromHome && !managed && domain !in state.value.inventory.domains) return
+        objectReturnPage = if (fromHome) Page.OVERVIEW else Page.DOMAINS
+        bumpUiEpoch()
         workerReleases?.clear()
-        mutable.update {
-            it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null)
+        mutable.update { it.copy(page = Page.DNS, domain = domain, dns = emptyList(), error = null) }
+        if (!managed) loadDns(domain)
+        recordVisit(RecentVisit.Zone(domain))
+    }
+
+    fun openManagedZone(ref: ZoneScope, page: com.flarego.core.application.zones.ZonePageState) {
+        if (ref.account != account(state.value.selected) || page.account != ref.account) return
+        val zone = page.zones.firstOrNull { it.ref == ref } ?: return
+        openDomain(Domain(ref.zoneId, zone.name, zone.status, ref.connectionId), fromHome = false, managed = true)
+    }
+
+    fun openRecent(visit: RecentVisit, managedZones: Boolean) {
+        val owner = account(state.value.selected) ?: return
+        if (state.value.page != Page.OVERVIEW || visit !in recentByAccount[owner].orEmpty()) return
+        when (visit) {
+            is RecentVisit.Zone -> openDomain(visit.domain, fromHome = true, managed = managedZones)
+            is RecentVisit.Resource -> openResource(visit.resource, fromHome = true)
         }
-        loadDns(domain)
     }
 
     fun reportDisconnectFailure() {

@@ -32,6 +32,7 @@ fun CompactListRow(
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     showDivider: Boolean = true,
+    wrapTitle: Boolean = false,
 ) {
     Column(modifier.fillMaxWidth()) {
         Row(
@@ -56,7 +57,7 @@ fun CompactListRow(
                 Text(
                     title,
                     style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
+                    maxLines = if (wrapTitle) Int.MAX_VALUE else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (!subtitle.isNullOrEmpty()) {
@@ -108,6 +109,7 @@ fun CompactTabs(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     tagPrefix: String = "tab",
+    wrapLabels: Boolean = false,
 ) {
     val textStyle = when {
         labels.size >= 5 -> MaterialTheme.typography.labelSmall
@@ -151,7 +153,7 @@ fun CompactTabs(
                     text = label,
                     color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = textStyle.copy(fontWeight = if (active) FontWeight.Medium else FontWeight.Normal),
-                    maxLines = 1,
+                    maxLines = if (wrapLabels) Int.MAX_VALUE else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

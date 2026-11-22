@@ -574,6 +574,9 @@ class DnsManagementUiTest {
         }
         compose.onNodeWithTag("nav-domains").performClick()
         click("zone-row-ui-zone")
+        compose.onNodeWithTag("zone-tab-dns").assertIsSelected()
+        compose.runOnIdle { assertTrue(dns.intents.contains(DnsIntent.Ensure(zone.ref))) }
+        compose.onNodeWithTag("zone-tab-details").performClick()
         compose.onNodeWithTag("zone-nameservers").performScrollTo().assertTextContains("ada.ns.cloudflare.com", substring = true)
         listOf("overview", "domains", "resources", "billing", "accounts").forEach { compose.onNodeWithTag("nav-$it").assertExists() }
         compose.onNodeWithTag("zone-demo-notice").assertExists()

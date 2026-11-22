@@ -46,6 +46,7 @@ class JobsExperienceUiTest {
             tasks = listOf(task()), operations = listOf(Operation("one", connection.id, "更新应用设置", OperationStatus.UNKNOWN, "旧摘要")))
         compose.setContent { FlareGoTheme { JobsScreen(state, " 设置 ") { checked = it } } }
         compose.onNodeWithText("更新应用设置").assertIsDisplayed()
+        compose.onNodeWithTag("job-row-one").performScrollTo().performClick()
         compose.onNodeWithText("写入结果未知，请只读核对").assertIsDisplayed()
         compose.onNodeWithText("只读核对").performClick()
         compose.runOnIdle { assertEquals("one", checked) }
@@ -60,6 +61,7 @@ class JobsExperienceUiTest {
             operations = listOf(Operation("one", connection.id, "更新应用设置", OperationStatus.UNKNOWN, "唯一摘要关键词")))
         compose.setContent { FlareGoTheme { JobsScreen(state, "唯一摘要关键词") { checked = it } } }
         compose.onNodeWithText("更新应用设置").assertIsDisplayed()
+        compose.onNodeWithTag("job-row-one").performScrollTo().performClick()
         compose.onNodeWithText("只读核对").performClick()
         compose.runOnIdle { assertEquals("one", checked) }
         compose.onNodeWithText("没有匹配的操作记录").assertDoesNotExist()
@@ -77,6 +79,7 @@ class JobsExperienceUiTest {
         val state = AppState(listOf(connection), connection, tasks = listOf(task()))
         compose.setContent { FlareGoTheme { JobsScreen(state, "写入结果未知") } }
         compose.onNodeWithText("云资源任务").assertIsDisplayed()
+        compose.onNodeWithTag("job-row-one").performScrollTo().performClick()
         compose.onNodeWithText("写入结果未知，请只读核对").assertIsDisplayed()
     }
 
@@ -101,7 +104,7 @@ class JobsExperienceUiTest {
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 FlareGoTheme {
                     Surface(Modifier.width(widthDp.dp).fillMaxHeight()) {
-                        JobsScreen(state, "", {})
+                        JobsScreen(state, "", reconcile = {})
                     }
                 }
             }
@@ -127,13 +130,15 @@ class JobsExperienceUiTest {
         installJobsAt(320, 2f)
         assertNoteKeepsFullWidthAndNoOverflow(320)
         compose.onNodeWithText("更新应用设置").assertIsDisplayed()
-        compose.onNodeWithText("只读核对").assertIsDisplayed()
+        compose.onNodeWithTag("job-row-one").performScrollTo().performClick()
+        compose.onNodeWithText("只读核对").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun jobsNoteIsNotClippedAtPhoneWidthLargeFont() {
         installJobsAt(411, 2f)
         assertNoteKeepsFullWidthAndNoOverflow(411)
         compose.onNodeWithText("更新应用设置").assertIsDisplayed()
-        compose.onNodeWithText("只读核对").assertIsDisplayed()
+        compose.onNodeWithTag("job-row-one").performScrollTo().performClick()
+        compose.onNodeWithText("只读核对").performScrollTo().assertIsDisplayed()
     }
 }

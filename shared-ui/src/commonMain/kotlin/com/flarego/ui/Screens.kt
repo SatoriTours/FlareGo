@@ -11,9 +11,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +34,7 @@ import kotlinx.coroutines.launch
 
 private val ListPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OverviewScreen(
     state: AppState,
@@ -36,90 +43,155 @@ fun OverviewScreen(
     refreshAll: () -> Unit = {},
     openResource: (ResourceKind) -> Unit = { navigate(Page.RESOURCES) },
     upgrade: ((Set<ReadTarget>) -> Unit)? = null,
+    openRecent: (RecentVisit) -> Unit = {},
 ) {
+    val colors = MaterialTheme.colorScheme
     val readable = state.products.filterKeys { it in state.supportedProducts }
-    val loading = readable.values.any { it.loading }
+    val loading = state.loading || readable.values.any { it.loading }
     val failures = readable.filterValues { it.error != null }
-    val completed = readable.values.count { !it.loading }
-    val succeeded = readable.values.count { !it.loading && it.error == null && it.observedAtMs != null }
-    LazyColumn(contentPadding = ListPadding) {
-        if (state.productLoading && readable.isNotEmpty()) item {
-            if (loading) Muted("已完成 $completed/${readable.size} 项读取", Modifier.padding(vertical = 8.dp))
-            else Muted("读取完成：$succeeded 项成功" + if (failures.isEmpty()) "" else "，${failures.size} 项失败",
-                Modifier.padding(vertical = 8.dp))
-        }
-        item { Muted("已加载资源", Modifier.padding(top = 8.dp, bottom = 8.dp)) }
-        item {
-            CompactListRow("域名", Modifier.testTag("overview-domains"),
-                value = overviewLoadedCount(state, ProductKey.ZONES), icon = Icons.Outlined.Language,
-                onClick = { navigate(Page.DOMAINS) })
-        }
-        listOf(ResourceKind.WORKER, ResourceKind.R2, ResourceKind.KV, ResourceKind.D1).forEach { kind ->
-            item {
-                CompactListRow(when (kind) {
-                    ResourceKind.WORKER -> "Workers"
-                    ResourceKind.R2 -> "R2 存储"
-                    ResourceKind.KV -> "KV 存储"
-                    ResourceKind.D1 -> "D1 数据库"
-                }, Modifier.testTag("overview-${kind.name.lowercase()}"),
-                    value = overviewLoadedCount(state, kind.product()), icon = kind.icon(),
-                    onClick = { openResource(kind) })
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Muted("快速访问", Modifier.weight(1f))
-                TextButton(onClick = { navigate(Page.JOBS) }) { Text("操作记录", style = MaterialTheme.typography.bodySmall) }
-            }
-        }
-        items(state.inventory.domains.take(2), key = { "domain:${it.id}" }) { domain ->
-            CompactListRow(domain.name, subtitle = "DNS 与站点设置", onClick = { navigate(Page.DOMAINS) })
-        }
-        items(state.inventory.resources.take(3), key = { "resource:${it.kind}:${it.id}" }) { resource ->
-            CompactListRow(resource.name, subtitle = resource.kind.label, onClick = { openResource(resource.kind) })
-        }
-        if (state.inventory.domains.isEmpty() && state.inventory.resources.isEmpty()) item {
-            Muted("加载资源后显示快捷入口", Modifier.padding(vertical = 12.dp))
-        }
-        val pendingTasks = state.tasks.filter { it.connectionId == state.selected?.id &&
-            it.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED, TaskState.ACTION_REQUIRED, TaskState.RECONCILING) }
-        val taskIds = state.tasks.filter { it.connectionId == state.selected?.id }.map { it.id }.toSet()
-        val pending = pendingTasks.size + state.operations.count { it.connectionId == state.selected?.id &&
-            it.id !in taskIds && it.status == OperationStatus.UNKNOWN }
-        if (pending > 0) item {
-            OutlinedButton(onClick = { navigate(Page.JOBS) }, modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
-                Text("$pending 项操作待核对")
-                Spacer(Modifier.weight(1f))
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(15.dp))
-            }
-        }
-        if (state.productLoading) {
-            item {
-                TextButton(onClick = refreshAll, enabled = !loading,
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("overview-refresh-all")) {
-                    Text(if (loading) "正在刷新产品…" else "刷新全部产品")
+    val entries = listOf(null, ResourceKind.WORKER, ResourceKind.R2, ResourceKind.KV, ResourceKind.D1)
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val largeText = LocalDensity.current.fontScale >= 1.5f
+        val columns = if (maxWidth < 340.dp || largeText) 2 else 3
+        val compactViewport = maxHeight < 500.dp && !largeText
+        PullToRefreshBox(isRefreshing = loading, onRefresh = { if (!loading) refreshAll() }) {
+            LazyColumn(Modifier.fillMaxSize().background(homeResourcesColor()).testTag("overview-list")) {
+                item {
+                    Column(Modifier.fillMaxWidth().background(colors.surface).padding(horizontal = 20.dp)
+                        .padding(top = if (compactViewport) 8.dp else 14.dp, bottom = if (compactViewport) 6.dp else 14.dp)) {
+                        HomeSectionTitle("最近访问")
+                        Spacer(Modifier.height(if (compactViewport) 2.dp else 8.dp))
+                        if (state.recent.isEmpty()) Muted("打开域名、Worker 或 R2 桶后，会显示在这里。",
+                            Modifier.padding(vertical = 16.dp))
+                        state.recent.forEachIndexed { i, recent ->
+                            val domain = (recent as? RecentVisit.Zone)?.domain
+                            val resource = (recent as? RecentVisit.Resource)?.resource
+                            val name = domain?.name ?: resource?.name.orEmpty()
+                            val label = if (domain != null) "域名" else if (resource?.kind == ResourceKind.WORKER) "Worker" else "R2 桶"
+                            val tag = if (domain != null) "recent-zone-${domain.id}" else "recent-resource-${resource?.kind?.name}-${resource?.id}"
+                            Row(Modifier.fillMaxWidth().heightIn(min = if (compactViewport) 48.dp else 60.dp)
+                                .clickable { openRecent(recent) }.testTag(tag),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(31.dp).background(homeAccentColor(), RoundedCornerShape(9.dp)),
+                                    contentAlignment = Alignment.Center) {
+                                    Icon(resource?.kind?.icon() ?: Icons.Outlined.Language, null, Modifier.size(21.dp),
+                                        tint = homeAccentContentColor())
+                                }
+                                Text(name, Modifier.weight(1f).padding(horizontal = 14.dp),
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Muted(label)
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.padding(start = 10.dp).size(18.dp),
+                                    tint = colors.onSurfaceVariant)
+                            }
+                            if (i != state.recent.lastIndex) HorizontalDivider(Modifier.padding(start = 45.dp))
+                        }
+                    }
+                    HorizontalDivider()
                 }
-            }
-            failures.forEach { (product, loaded) ->
-                item(key = "error:$product") { Notice("${product.overviewLabel()}：${loaded.error!!.publicMessage}") }
-            }
-            val refused = failures.filterValues { it.error?.code == CloudFailureCode.PERMISSION_REQUIRED }.keys
-            if (refused.isNotEmpty() && upgrade != null) item {
-                TextButton(onClick = { upgrade(refused.map { productReadTarget(it, state.workersMode) }.toSet()) },
-                    modifier = Modifier.fillMaxWidth().testTag("overview-permission-upgrade")) {
-                    Text("申请补充读取权限")
+                item {
+                    HomeSectionTitle("我的资源", Modifier.padding(horizontal = 20.dp,
+                        vertical = if (compactViewport) 8.dp else 14.dp))
                 }
+                items(entries.chunked(columns)) { row ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = if (compactViewport) 6.dp else 8.dp)
+                        .height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { kind ->
+                            val tag = kind?.name?.lowercase() ?: "domains"
+                            val label = when (kind) {
+                                null -> "域名"
+                                ResourceKind.WORKER -> "Workers"
+                                ResourceKind.R2 -> "R2 存储"
+                                ResourceKind.KV -> "KV 存储"
+                                ResourceKind.D1 -> "D1 数据库"
+                            }
+                            Surface(
+                                onClick = { if (kind == null) navigate(Page.DOMAINS) else openResource(kind) },
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                                    .background(colors.outlineVariant, RoundedCornerShape(16.dp))
+                                    .padding(bottom = 2.dp).testTag("overview-$tag"),
+                                shape = RoundedCornerShape(16.dp), color = colors.surface,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, colors.outlineVariant),
+                            ) {
+                                Column(Modifier.heightIn(min = if (compactViewport) 96.dp else 114.dp)
+                                    .padding(horizontal = 5.dp, vertical = if (compactViewport) 5.dp else 10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(if (compactViewport) 4.dp else 5.dp, Alignment.CenterVertically)) {
+                                    Icon(kind?.icon() ?: Icons.Outlined.Language, null,
+                                        Modifier.size(if (compactViewport) 25.dp else 31.dp), tint = homeAccentColor())
+                                    Text(label, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
+                                    val count = overviewLoadedCount(state, kind?.product() ?: ProductKey.ZONES)
+                                    Text(count, textAlign = TextAlign.Center,
+                                        style = if (count.all { it.isDigit() || it == '+' })
+                                            MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold)
+                                        else MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+                if (loading && readable.isNotEmpty()) item {
+                    Muted("已完成 ${readable.values.count { !it.loading }}/${readable.size} 项读取", Modifier.padding(16.dp))
+                }
+                if (failures.isNotEmpty()) item {
+                    val succeeded = readable.values.count { !it.loading && it.error == null && it.observedAtMs != null }
+                    Muted(if (loading) "${failures.size} 项未能读取" else "读取完成：$succeeded 项成功，${failures.size} 项失败",
+                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    TextButton(onClick = refreshAll, enabled = !loading, modifier = Modifier.padding(horizontal = 12.dp)) { Text("重试读取") }
+                }
+                failures.forEach { (product, loaded) ->
+                    item(key = "error:$product") { Box(Modifier.padding(horizontal = 16.dp)) {
+                        Notice("${product.overviewLabel()}：${loaded.error!!.publicMessage}")
+                    } }
+                }
+                val refused = failures.filterValues { it.error?.code == CloudFailureCode.PERMISSION_REQUIRED }.keys
+                if (refused.isNotEmpty() && upgrade != null) item {
+                    TextButton(onClick = { upgrade(refused.map { productReadTarget(it, state.workersMode) }.toSet()) },
+                        modifier = Modifier.fillMaxWidth().testTag("overview-permission-upgrade")) { Text("申请补充读取权限") }
+                }
+                val tasks = state.tasks.filter { it.connectionId == state.selected?.id }
+                val pending = tasks.count { it.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED,
+                    TaskState.ACTION_REQUIRED, TaskState.RECONCILING) } + state.operations.count { operation ->
+                    operation.connectionId == state.selected?.id && operation.status == OperationStatus.UNKNOWN &&
+                        tasks.none { it.id == operation.id }
+                }
+                if (pending > 0) item {
+                    OutlinedButton(onClick = { navigate(Page.JOBS) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text("$pending 项操作待核对") }
+                }
+                items(state.inventory.notices) { Box(Modifier.padding(horizontal = 16.dp)) { Notice(it) } }
+                item { Spacer(Modifier.height(20.dp)) }
             }
         }
-        items(state.inventory.notices) { Notice(it) }
     }
 }
+
+@Composable
+private fun HomeSectionTitle(label: String, modifier: Modifier = Modifier) {
+    Text(label, modifier, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+internal fun homeHeaderColor() = if (MaterialTheme.colorScheme.surface.luminance() > .5f) Color(0xFFE1ECE3)
+    else MaterialTheme.colorScheme.surfaceContainer
+
+@Composable
+private fun homeResourcesColor() = if (MaterialTheme.colorScheme.surface.luminance() > .5f) Color(0xFFF4F4EF)
+    else MaterialTheme.colorScheme.background
+
+@Composable
+internal fun homeAccentColor() = if (MaterialTheme.colorScheme.surface.luminance() > .5f) Color(0xFF007D59)
+    else MaterialTheme.colorScheme.primary
+
+@Composable
+internal fun homeAccentContentColor() = if (MaterialTheme.colorScheme.surface.luminance() > .5f) Color.White
+    else MaterialTheme.colorScheme.onPrimary
 
 internal fun productReadTarget(product: ProductKey, workersMode: WorkersDirectoryMode) =
     ReadTarget(if (product == ProductKey.WORKERS && workersMode == WorkersDirectoryMode.LEGACY) ReadFeature.WORKERS_LEGACY
         else ReadFeature.entries.first { it.product == product })
 
-private fun ProductKey.overviewLabel(): String = when (this) {
+internal fun ProductKey.overviewLabel(): String = when (this) {
     ProductKey.ZONES -> "域名"
     ProductKey.WORKERS -> "Workers"
     ProductKey.R2 -> "R2"
@@ -152,20 +224,7 @@ private fun overviewLoadedCount(state: AppState, product: ProductKey): String {
 fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit, onRegisterDomain: (() -> Unit)? = null) {
     val domains = state.inventory.domains.filter { it.name.contains(query, true) }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "全部域名",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Muted("${domains.size} 个 · ${if (state.selected?.demo == true) "演示账号" else "当前账号"}")
-            }
-        }
+        item { DirectoryHeading("已托管", Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
         if (domains.isEmpty())
             item {
                 Box(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -174,23 +233,10 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit, onRegi
                 }
             }
         itemsIndexed(domains, key = { _, domain -> domain.id }) { index, domain ->
-            CompactListRow(
-                title = domain.name,
-                subtitle = "Cloudflare DNS",
-                icon = Icons.Default.Language,
-                onClick = { open(domain) },
-                trailing = {
-                    Pill(
-                        when (domain.status) {
-                            "active" -> "已激活"
-                            "pending" -> "待激活"
-                            else -> domain.status
-                        },
-                        domain.status != "active",
-                    )
-                },
-                showDivider = index < domains.lastIndex,
-            )
+            DirectoryItem(index, domains.size, Modifier.padding(horizontal = 16.dp)) {
+                CompactListRow(domain.name, value = zoneStatusLabel(domain.status), onClick = { open(domain) },
+                    showDivider = false, wrapTitle = true)
+            }
         }
         items(state.inventory.notices.filter { it.startsWith("域名") }) {
             Box(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) { Notice(it) }
@@ -209,19 +255,24 @@ fun DomainsScreen(state: AppState, query: String, open: (Domain) -> Unit, onRegi
 @Composable
 fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Unit,
     selectKind: (ResourceKind) -> Unit = {}, refresh: () -> Unit = {}, more: () -> Unit = {}, selectWorkers: (com.flarego.core.ports.WorkersDirectoryMode) -> Unit = {},
-    r2Content: (@Composable () -> Unit)? = null, kvContent: (@Composable () -> Unit)? = null, d1Content: (@Composable () -> Unit)? = null) {
-    var filter by remember { mutableStateOf<ResourceKind?>(null) }
+    r2Content: (@Composable () -> Unit)? = null, kvContent: (@Composable () -> Unit)? = null, d1Content: (@Composable () -> Unit)? = null,
+    showDirectoryTabs: Boolean = true, showAllResources: Boolean = !state.productLoading,
+    selectAllResources: () -> Unit = {}) {
     Column {
-        val selectedKind = if (state.productLoading) state.resourceKind else filter
-        CompactTabs(
-            (if (!state.productLoading) listOf("all" to "全部") else emptyList()) +
+        if (showDirectoryTabs) DirectoryPicker(
+            label = "资源类型",
+            options = (if (state.productLoading) emptyList() else listOf("all" to "全部")) +
                 listOf("WORKER" to "Workers", "R2" to "R2", "KV" to "KV", "D1" to "D1"),
-            selected = selectedKind?.name ?: "all",
+            selected = if (!state.productLoading && showAllResources) "all" else state.resourceKind.name,
             onSelect = { key ->
-                val kind = ResourceKind.entries.firstOrNull { it.name == key }
-                if (state.productLoading && kind != null) selectKind(kind) else filter = kind
-            }, modifier = Modifier.padding(horizontal = 20.dp), tagPrefix = "resource-tab",
+                if (key == "all") selectAllResources()
+                else ResourceKind.entries.firstOrNull { it.name == key }?.let(selectKind)
+            },
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            tag = "resource-type-selector",
+            optionPrefix = "resource-tab",
         )
+        if (showDirectoryTabs) DirectoryHeading("当前账号", Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         if (state.productLoading && state.resourceKind.product() !in state.supportedProducts) {
             Notice("当前授权方案未支持 ${state.resourceKind.name} ${state.resourceKind.label}")
             return@Column
@@ -238,33 +289,10 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
             Box(Modifier.weight(1f)) { d1Content() }
             return@Column
         }
-        if (state.productLoading && state.resourceKind == ResourceKind.WORKER) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("目录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                CompactTabs(
-                    labels = listOf(
-                        "modern" to "现代目录",
-                        "legacy" to "旧目录",
-                    ),
-                    selected = state.workersMode.name.lowercase(),
-                    onSelect = { key ->
-                        if (key == "modern") selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.MODERN)
-                        else selectWorkers(com.flarego.core.ports.WorkersDirectoryMode.LEGACY)
-                    },
-                    modifier = Modifier.weight(1f),
-                    tagPrefix = "worker-dir-tab",
-                )
-            }
-        }
         val product = state.products[state.resourceKind.product()]
-        if (state.productLoading) ProductStatus(product,refresh,more)
         val resources =
             state.inventory.resources.filter {
-                (if (state.productLoading) it.kind == state.resourceKind else (filter == null || it.kind == filter)) && it.name.contains(query, true)
+                (if (state.productLoading || !showAllResources) it.kind == state.resourceKind else true) && it.name.contains(query, true)
             }
         LazyColumn(
             contentPadding = ListPadding,
@@ -283,9 +311,27 @@ fun ResourcesScreen(state: AppState, query: String, open: (CloudResource) -> Uni
                         else -> "尝试其他类型或刷新列表"
                     }) }
             else if (resources.isEmpty() && state.productLoading && product?.loading != true && product?.error == null)
-                item { EmptyState("尚未读取资源", "点击刷新当前产品读取列表") }
-            items(resources, key = { "${it.kind}:${it.id}" }) {
-                ResourceRow(it, state.selected?.demo == true) { open(it) }
+                item { EmptyState("尚未读取资源", "刷新当前产品读取列表", "刷新当前产品", refresh) }
+            if (state.productLoading && (product?.error != null || product?.loading == true))
+                item { DirectoryReadFeedback(product, refresh, more, showPagination = false) }
+            itemsIndexed(resources, key = { _, resource -> "${resource.kind}:${resource.id}" }) { index, resource ->
+                DirectoryItem(index, resources.size) {
+                    val kind = when (resource.kind) {
+                        ResourceKind.WORKER -> if (resource.legacy) "旧 Worker" else "Worker"
+                        ResourceKind.R2 -> "R2 桶"
+                        ResourceKind.KV -> "KV"
+                        ResourceKind.D1 -> "D1"
+                    }
+                    CompactListRow(resource.name, value = resource.usage ?: kind, onClick = { open(resource) },
+                        showDivider = false, wrapTitle = true)
+                }
+            }
+            if (state.productLoading) item { DirectoryReadFeedback(product, refresh, more, showReadState = false) }
+            if (state.productLoading && state.resourceKind == ResourceKind.WORKER) item {
+                DirectoryPicker("Workers 目录",
+                    listOf("modern" to "现代目录", "legacy" to "旧目录"), state.workersMode.name.lowercase(),
+                    onSelect = { selectWorkers(if (it == "legacy") WorkersDirectoryMode.LEGACY else WorkersDirectoryMode.MODERN) },
+                    tag = "worker-directory-selector", optionPrefix = "worker-dir-tab")
             }
             items(state.inventory.notices.filterNot { it.startsWith("域名") }) { Notice(it) }
         }
@@ -413,7 +459,11 @@ fun ResourceScreen(state: AppState, openConsole: () -> Unit) {
 
 /** Typed history presentation; ownership and row scope are checked before any amounts are shown. */
 @Composable
-fun ScopedBillingScreen(connection: Connection, scope: CloudScope, history: CloudPage<BillingEntry>, openConsole: () -> Unit) {
+fun ScopedBillingScreen(
+    connection: Connection, scope: CloudScope, history: CloudPage<BillingEntry>,
+    openConsole: () -> Unit,
+    feedback: @Composable () -> Unit = {},
+) {
     val source = when (scope) {
         is AccountScope -> BillingSource.ACCOUNT_HISTORY
         is UserScope -> BillingSource.USER_HISTORY_LEGACY
@@ -434,28 +484,25 @@ fun ScopedBillingScreen(connection: Connection, scope: CloudScope, history: Clou
         Notice("账单数据与所选范围不一致，请重新加载")
         return
     }
-    LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(contentPadding = ListPadding) {
         if (connection.demo) item { Notice("演示 · 示例数据，不产生真实扣款") }
-        item { Text(source.title, style = MaterialTheme.typography.titleMedium) }
+        item { DirectoryHeading(if (source == BillingSource.ACCOUNT_HISTORY) "账单历史" else source.title, Modifier.padding(bottom = 8.dp)) }
         if (source == BillingSource.USER_HISTORY_LEGACY) {
             item { Notice("用户级历史可能包含其他账号，不能作为当前账号费用。") }
         }
-        item { Muted("已加载 ${history.items.size} 条历史记录，未提供费用预估") }
-        if (history.items.isEmpty()) item { Notice("暂无账单历史") }
-        items(history.items) { bill ->
-            SectionCard {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(bill.occurredAt?.substringBefore('T') ?: "时间未知", style = MaterialTheme.typography.titleMedium)
-                    Text("${bill.amount ?: "未知"} ${bill.currency ?: "币种未知"}",
-                        style = MaterialTheme.typography.titleMedium)
-                }
-                Text(bill.description ?: "未提供账单说明", style = MaterialTheme.typography.bodyMedium)
-                Muted(bill.status?.let { "状态：$it" } ?: "状态未知")
-                Muted(bill.id)
-                bill.invoiceId?.let { Muted("发票：$it") }
-                bill.receiptId?.let { Muted("收据：$it") }
+        if (history.items.isEmpty()) item { DirectoryGroup { CompactListRow("暂无账单历史", showDivider = false) } }
+        itemsIndexed(history.items) { index, bill ->
+            DirectoryItem(index, history.items.size) {
+                BillingHistoryRow(
+                    bill.occurredAt?.substringBefore('T') ?: "时间未知",
+                    "${bill.amount ?: "未知"} ${bill.currency ?: "币种未知"}",
+                    listOfNotNull(bill.description ?: "未提供账单说明",
+                        bill.status?.let { "状态：$it" } ?: "状态未知", bill.id,
+                        bill.invoiceId?.let { "发票：$it" }, bill.receiptId?.let { "收据：$it" }),
+                )
             }
         }
+        item { feedback() }
         item {
             OutlinedButton(onClick = openConsole, modifier = Modifier.fillMaxWidth()) {
                 Text("在官方控制台查看费用与发票")
@@ -466,53 +513,45 @@ fun ScopedBillingScreen(connection: Connection, scope: CloudScope, history: Clou
 
 @Composable
 fun BillingScreen(state: AppState, openConsole: () -> Unit) {
-    LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val billing = state.billing
+    val bills = billing?.invoices.orEmpty()
+    LazyColumn(contentPadding = ListPadding) {
         item {
-            SectionCard {
-                Muted("本月预估${if (state.selected?.demo == true) " · 演示 USD" else ""}")
-                Text(
-                    state.billing?.estimate?.let { "$$it" } ?: "—",
-                    style = MaterialTheme.typography.headlineLarge,
-                )
-                Muted(
-                    if (state.selected?.demo == true) "预算示例 $100 · 已使用 48.6%"
-                    else "Cloudflare API 未提供可靠的账号费用预估"
-                )
+            DirectoryHeading(if (state.selected?.demo == true) "账单历史 · 示例" else BillingSource.USER_HISTORY_LEGACY.title)
+        }
+        billing?.notice?.let { item { Notice(it) } }
+        if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (bills.isEmpty() && !state.loading) item {
+            DirectoryGroup { CompactListRow("暂无可用账单", showDivider = false) }
+            DirectoryHeading("用户级旧接口需要额外的用户级只读权限。", Modifier.padding(top = 8.dp))
+        }
+        itemsIndexed(bills, key = { _, bill -> bill.id }) { index, bill ->
+            DirectoryItem(index, bills.size) {
+                BillingHistoryRow(bill.date, "${bill.amount ?: "未知"} ${bill.currency}", listOf(bill.description, bill.id))
             }
         }
-        state.billing?.notice?.let { item { Notice(it) } }
-        item {
-            Text(
-                if (state.selected?.demo == true) "历史账单 · 示例" else BillingSource.USER_HISTORY_LEGACY.title,
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-        if (state.billing?.invoices.isNullOrEmpty())
-            item {
-                EmptyState(
-                    "暂无可用账单",
-                    "用户级旧接口需要额外的用户级只读权限；当前凭据未提供时可在控制台查看",
-                    "打开控制台",
-                    openConsole,
-                )
-            }
-        items(state.billing?.invoices.orEmpty(), key = { it.id }) { bill ->
-            SectionCard {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(bill.date, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "${bill.amount ?: "未知"} ${bill.currency}",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-                Text(bill.description, style = MaterialTheme.typography.bodyMedium)
-                Muted(bill.id)
-            }
+        billing?.estimate?.let { estimate ->
+            item { Muted("本月预估：$$estimate", Modifier.padding(top = 12.dp)) }
         }
         item {
-            OutlinedButton(onClick = openConsole, modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = openConsole, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Text("在官方控制台查看费用与发票")
             }
+        }
+    }
+}
+
+@Composable
+private fun BillingHistoryRow(date: String, amount: String, details: List<String>) {
+    var expanded by androidx.compose.runtime.saveable.rememberSaveable(date, amount, details.lastOrNull()) { mutableStateOf(false) }
+    Column {
+        if (LocalDensity.current.fontScale >= 1.5f) {
+            CompactListRow(date, subtitle = amount, showDivider = false, onClick = { expanded = !expanded })
+        } else {
+            CompactListRow(date, value = amount, showDivider = false, onClick = { expanded = !expanded })
+        }
+        if (expanded) Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp)) {
+            details.forEach { Muted(it) }
         }
     }
 }
@@ -525,12 +564,12 @@ fun AccountsScreen(
     updates: @Composable () -> Unit = {},
     /** Legacy OAuth records keep their row but must be reconfigured with an API Token. */
     needsToken: (Connection) -> Boolean = { false },
+    upgrade: ((Set<ReadTarget>) -> Unit)? = null,
 ) {
     LazyColumn(contentPadding = ListPadding, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (state.connections.isEmpty()) item { ServiceSetupCard(connect) }
-        item { Notice("账号仅保存于本机，授权凭据使用 Android Keystore 加密保存。") }
-        item { updates() }
         items(state.connections, key = { it.id }) { connection ->
+            var detailsOpen by androidx.compose.runtime.saveable.rememberSaveable(connection.id, connection.accountId) { mutableStateOf(false) }
             val legacy = !connection.demo && needsToken(connection)
             SectionCard {
                 Row(
@@ -563,6 +602,28 @@ fun AccountsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+                TextButton(onClick = { detailsOpen = !detailsOpen },
+                    modifier = Modifier.testTag("connection-details-toggle")) {
+                    Text(if (detailsOpen) "收起连接详情" else "连接详情")
+                }
+                if (detailsOpen) {
+                    Muted(if (connection.demo) "演示账号没有云端凭据" else if (legacy)
+                        "旧授权停用，当前连接需要配置 API Token" else "凭据已在本机加密保存")
+                    Muted("FlareGo 只按实际读取结果判断权限；未读取不代表已授权。")
+                    val scoped = AccountScope(connection.id, connection.accountId)
+                    val denied = if (state.selected == connection) {
+                        state.products.filterValues {
+                            it.scope == scoped && it.error?.code == CloudFailureCode.PERMISSION_REQUIRED
+                        }.keys
+                    } else emptySet()
+                    if (denied.isNotEmpty()) {
+                        Muted("当前缺少读取权限：${denied.joinToString("、") { it.overviewLabel() }}")
+                        if (upgrade != null) TextButton(onClick = {
+                            upgrade(denied.map { productReadTarget(it, state.workersMode) }.toSet())
+                        }) { Text("核对并补充读取权限") }
+                    }
+                    if (!connection.demo && !legacy) Muted("替换时核验可保留的读取范围；写权限不会自动迁移。")
+                }
                 if (!connection.demo) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { remove(connection) }) {
@@ -579,11 +640,18 @@ fun AccountsScreen(
                 Text("连接 Cloudflare 账号")
             }
         }
+        item { Notice("账号仅保存于本机，授权凭据使用 Android Keystore 加密保存。") }
+        item { updates() }
     }
 }
 
 @Composable
-fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> Unit)? = null) {
+fun JobsScreen(
+    state: AppState,
+    query: String,
+    expanded: MutableState<String?> = remember(state.selected?.id, state.selected?.accountId) { mutableStateOf(null) },
+    reconcile: (suspend (String) -> Unit)? = null,
+) {
     val scope = rememberCoroutineScope()
     var checking by remember(state.selected?.id) { mutableStateOf<String?>(null) }
     var checkError by remember(state.selected?.id) { mutableStateOf<String?>(null) }
@@ -604,22 +672,24 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
         item { Muted("当前账号的最近 200 条本机操作", Modifier.fillMaxWidth()) }
         checkError?.let { item { Notice(it) } }
         items(tasks, key = { "task:${it.id}" }) { task ->
-            SectionCard {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        title(task),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Pill(taskLabel(task.state), warning = task.state != TaskState.SUCCEEDED)
-                }
-                Text(task.safeDetail, style = MaterialTheme.typography.bodyMedium)
-                if (reconcile != null && task.state !in listOf(TaskState.SUCCEEDED, TaskState.FAILED)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            val key = "task:${task.id}"
+            val open = expanded.value == key
+            val pending = task.state in setOf(TaskState.UNKNOWN, TaskState.PARTIAL, TaskState.ACCEPTED, TaskState.ACTION_REQUIRED, TaskState.RECONCILING)
+            DirectoryGroup {
+                CompactListRow(title(task), value = taskLabel(task.state),
+                    modifier = Modifier.testTag("job-row-${task.id}"), showDivider = open, wrapTitle = true,
+                    onClick = { expanded.value = key.takeUnless { open } })
+                if (open) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+                    .testTag("job-detail-${task.id}"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(task.safeDetail, style = MaterialTheme.typography.bodyMedium)
+                    task.resourceRef?.let { Muted("目标：${it.externalId}") }
+                    if (task.scope is ZoneScope && task.resourceRef == null) Muted("Zone：${(task.scope as ZoneScope).zoneId}")
+                    Muted("来源：此设备")
+                    if (task.updatedAtMs > 0) Muted("更新于 ${observationTime(task.updatedAtMs)}")
+                    if (pending) {
+                        Muted("请求可能已经送达；不会自动再提交。若需人工处置，请在对应对象的任务区核对原目标。")
+                    }
+                    if (reconcile != null && task.state !in listOf(TaskState.SUCCEEDED, TaskState.FAILED)) {
                         TextButton(
                             enabled = checking == null,
                             onClick = {
@@ -632,9 +702,7 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
                                     finally { checking = null }
                                 }
                             },
-                        ) {
-                            Text(if (checking == task.id) "核对中" else "只读核对")
-                        }
+                        ) { Text(if (checking == task.id) "核对中" else "只读核对") }
                     }
                 }
             }
@@ -646,89 +714,20 @@ fun JobsScreen(state: AppState, query: String, reconcile: (suspend (String) -> U
             )
         }
         items(operations, key = { "operation:${it.id}" }) { op ->
-            SectionCard {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        op.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Pill(op.status.label, warning = op.status != OperationStatus.SUCCESS)
+            val key = "operation:${op.id}"
+            val open = expanded.value == key
+            DirectoryGroup {
+                CompactListRow(op.title, value = op.status.label, modifier = Modifier.testTag("job-row-${op.id}"),
+                    showDivider = open, wrapTitle = true, onClick = { expanded.value = key.takeUnless { open } })
+                if (open) Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text(op.detail, style = MaterialTheme.typography.bodyMedium)
+                    Muted("来源：此设备")
                 }
-                Text(op.detail, style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
 }
 
-@Composable
-fun ProductStatus(state: ProductLoadState?, refresh: () -> Unit, more: () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        // A refresh of already-loaded rows must still report progress; hiding it made an
-        // in-flight read look like a finished one.
-        if (state?.loading == true) LinearProgressIndicator(Modifier.fillMaxWidth())
-        state?.error?.let { Notice(it.publicMessage, refresh) }
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        Modifier
-                            .size(6.dp)
-                            .background(
-                                if (state?.loading == true) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
-                                androidx.compose.foundation.shape.CircleShape,
-                            )
-                    )
-                    Text(
-                        if (state?.observedAtMs == null) {
-                            if (state?.loading == true) "正在读取…" else "未加载"
-                        } else "已加载 ${state.content.count()} · ${if (state.allPagesLoaded) "全部" else "尚未完整"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (state?.next != null) {
-                        TextButton(
-                            enabled = !state.loading,
-                            onClick = more,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text("加载更多", style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                    IconButton(
-                        enabled = state?.loading != true,
-                        onClick = refresh,
-                        modifier = Modifier.size(32.dp).testTag("product-refresh"),
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            "刷新当前产品",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
 internal fun taskLabel(state: TaskState): String = when(state) {
     TaskState.QUEUED -> "等待执行"
     TaskState.RUNNING -> "执行中"

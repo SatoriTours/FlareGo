@@ -188,6 +188,21 @@ class ExtendedManagementUiTest {
         compose.onNodeWithTag("management-back").performClick();compose.onNodeWithTag("zone-tab-security").assertIsSelected()
         compose.onNodeWithTag("zone-tab-settings").performClick();click("management-open-ZONE_SETTINGS");visible("zs-current-value")
     }
+    @Test fun securityShortcutUsesOwnedUniversalSslReadAndReturnsToSecurity() {
+        val h = install(app = true)
+        openZone(h)
+        compose.onNodeWithTag("zone-tab-security").performClick()
+        click("management-open-UNIVERSAL_SSL")
+        visible("zs-tab-universal")
+        compose.runOnIdle {
+            assertTrue(h.calls.any { it.second == ZoneSettingsPanelIntent.Select(h.scope, ZoneSettingsTarget.UniversalSsl) })
+            assertTrue(h.confirms().isEmpty())
+        }
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithTag("zone-tab-security").assertIsSelected()
+        compose.onNodeWithTag("management-host").assertDoesNotExist()
+    }
+
     @Test fun systemBackReleasesPanelAndKeepsZoneAndTab() {
         val h = install(app = true); openDns(h)
         compose.onNodeWithTag("dns-more").performClick(); click("management-open-FILES"); visible("df-header")

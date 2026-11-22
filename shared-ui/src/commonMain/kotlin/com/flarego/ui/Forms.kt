@@ -237,19 +237,26 @@ fun DisconnectDialog(connection: Connection, onDismiss: () -> Unit, remove: () -
 }
 
 @Composable
-fun CreateResourceDialog(onDismiss: () -> Unit, openConsole: () -> Unit) {
+fun CreateResourceDialog(
+    onDismiss: () -> Unit,
+    native: Set<ResourceKind>,
+    openNative: (ResourceKind) -> Unit,
+    openConsole: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("创建云资源") },
         text = {
             FormBody {
-                Text("R2 存储桶、D1 数据库和 KV 命名空间可前往「资源」页，选择对应类型后创建；是否可操作取决于当前账号权限。Workers 部署请打开 Cloudflare 控制台，完成后回到 App 刷新列表。")
-                ResourceKind.entries.forEach {
-                    Text("• ${it.name} · ${it.label}", style = MaterialTheme.typography.bodyMedium)
-                }
+                listOf(ResourceKind.R2 to "R2 存储桶", ResourceKind.KV to "KV 命名空间", ResourceKind.D1 to "D1 数据库")
+                    .forEach { (kind, label) ->
+                        if (kind in native) CompactListRow(label,
+                            modifier = Modifier.testTag("resource-create-${kind.name}"),
+                            onClick = { openNative(kind) }, wrapTitle = true)
+                    }
+                CompactListRow("Workers", subtitle = "在 Cloudflare 控制台创建", onClick = openConsole, showDivider = false)
             }
         },
-        confirmButton = { TextButton(onClick = openConsole) { Text("打开控制台") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
     )
 }
